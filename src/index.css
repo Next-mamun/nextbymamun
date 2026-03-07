@@ -1,0 +1,56 @@
+@import "tailwindcss";
+
+:root {
+  --primary: #1A2933;
+  --primary-light: #2c4a5c;
+  --glass-bg: rgba(255, 255, 255, 0.3);
+  --glass-border: rgba(255, 255, 255, 0.4);
+  --glass-shadow: 0 8px 32px 0 rgba(31, 38, 135, 0.37);
+}
+
+.dark {
+  --bg-color: #000000;
+  --text-color: #ffffff;
+  --glass-bg: rgba(26, 41, 51, 0.5);
+  --glass-border: rgba(255, 255, 255, 0.1);
+}
+
+body {
+  background-color: var(--bg-color, #f0f2f5);
+  color: var(--text-color, #1e293b);
+  transition: background-color 0.2s ease-in-out, color 0.2s ease-in-out;
+}
+
+.dark body {
+  background-color: #000000;
+  color: #ffffff;
+}
+
+.glass-card {
+  background: var(--glass-bg);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border-radius: 20px;
+  border: 1px solid var(--glass-border);
+  box-shadow: var(--glass-shadow);
+}
+
+.story-ring {
+  background: linear-gradient(45deg, #f09433 0%, #e6683c 25%, #dc2743 50%, #cc2366 75%, #bc1888 100%);
+  padding: 3px;
+  border-radius: 50%;
+}
+
+.story-ring-viewed {
+  background: #ccc;
+  padding: 3px;
+  border-radius: 50%;
+}
+
+.scrollbar-hide::-webkit-scrollbar {
+  display: none;
+}
+.scrollbar-hide {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}

@@ -1,0 +1,8 @@
+{
+  "name": "Next Media",
+  "description": "A feature-rich social media platform inspired by Facebook, featuring real-time chat, AI-powered post enhancement, friend systems, and multimedia sharing. Built with React, Supabase, and Gemini API.",
+  "requestFramePermissions": [
+    "camera",
+    "microphone"
+  ]
+}
