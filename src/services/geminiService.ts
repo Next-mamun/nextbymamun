@@ -2,9 +2,19 @@
 import { GoogleGenAI, Type } from "@google/genai";
 
 // Fix: Always use a named parameter and access the key directly from process.env.API_KEY.
-const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+const getAiClient = () => {
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) {
+    console.warn("Gemini API Key is missing. AI features will be disabled.");
+    return null;
+  }
+  return new GoogleGenAI({ apiKey });
+};
+
+const ai = getAiClient();
 
 export const enhancePostText = async (text: string): Promise<string> => {
+  if (!ai) return text;
   try {
     const response = await ai.models.generateContent({
       model: "gemini-3-flash-preview",
@@ -19,6 +29,7 @@ export const enhancePostText = async (text: string): Promise<string> => {
 };
 
 export const generateImage = async (prompt: string): Promise<string | null> => {
+  if (!ai) return null;
   try {
     const response = await ai.models.generateContent({
       model: 'gemini-2.5-flash-image',
@@ -49,6 +60,7 @@ export const generateImage = async (prompt: string): Promise<string | null> => {
 };
 
 export const generateBio = async (username: string): Promise<string> => {
+  if (!ai) return "Just joined Next Media!";
   try {
     const response = await ai.models.generateContent({
       model: "gemini-3-flash-preview",
