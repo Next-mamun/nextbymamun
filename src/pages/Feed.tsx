@@ -4,6 +4,8 @@ import { Image, Video, ThumbsUp, MessageSquare, Share2, Send, Trash2, X, CheckCi
 import { VerifiedBadge } from '@/components/VerifiedBadge';
 import ZoomableImage from '@/components/ZoomableImage';
 import ProfilePhoto from '@/components/ProfilePhoto';
+import VideoPlayer from '@/components/VideoPlayer';
+import EmbedPlayer from '@/components/EmbedPlayer';
 import { useAuth } from '@/App';
 import { supabase } from '../lib/supabase';
 import { Link } from 'react-router-dom';
@@ -500,20 +502,11 @@ const PostCard: React.FC<{ post: any, onUpdate: () => void, onDelete: () => void
       {post.media_url && (
         <div className="bg-black flex items-center justify-center">
           {post.media_url.includes('/embed/') || post.media_url.includes('plugins/video.php') ? (
-            <div className="w-full aspect-video">
-              <iframe 
-                src={post.media_url} 
-                className="w-full h-full" 
-                allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" 
-                allowFullScreen
-                sandbox="allow-scripts allow-same-origin allow-presentation allow-forms"
-                title="video-embed"
-              />
-            </div>
+            <EmbedPlayer src={post.media_url} />
           ) : post.media_type === 'image' ? (
             <ZoomableImage src={post.media_url} className="w-full max-h-[600px] object-contain" referrerPolicy="no-referrer" />
           ) : (
-            <video src={post.media_url} controls playsInline className="w-full max-h-[600px]" />
+            <VideoPlayer src={post.media_url} className="w-full max-h-[600px]" />
           )}
         </div>
       )}
