@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "prebuild": "npx -y sharp-cli -i public/logo.svg -o public/pwa-192x192.png resize 192 192 && npx -y sharp-cli -i public/logo.svg -o public/pwa-512x512.png resize 512 512 && npx -y sharp-cli -i public/logo.svg -o public/maskable-icon-512x512.png resize 512 512 && npx -y sharp-cli -i public/logo.svg -o public/apple-touch-icon.png resize 180 180",
     "build": "vite build",
     "lint": "tsc",
     "preview": "vite preview"
