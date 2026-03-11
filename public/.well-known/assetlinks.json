@@ -1,9 +1,12 @@
-[{
-      "relation": ["delegate_permission/common.handle_all_urls"],
-      "target": {
-        "namespace": "android_app",
-        "package_name": "next.isbest",
-        "sha256_cert_fingerprints": ["1D:91:73:2C:7B:78:D6:DE:9E:16:6B:28:47:64:1B:B0:37:5F:1C:1E:EA:9B:22:B6:E2:2B:B9:94:22:50:2B:CD"]
-      }
-    }]
-
+[
+  {
+    "relation": ["delegate_permission/common.handle_all_urls"],
+    "target": {
+      "namespace": "android_app",
+      "package_name": "next.isbest",
+      "sha256_cert_fingerprints": [
+        "1D:91:73:2C:7B:78:D6:DE:9E:16:6B:28:47:64:1B:B0:37:5F:1C:1E:EA:9B:22:B6:E2:2B:B9:94:22:50:2B:CD"
+      ]
+    }
+  }
+]
