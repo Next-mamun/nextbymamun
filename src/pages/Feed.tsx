@@ -73,7 +73,10 @@ const Feed: React.FC = () => {
 
     const sub = supabase
       .channel('feed_complex')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'posts' }, () => {
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'posts' }, () => {
+        fetchEverything(1, false);
+      })
+      .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'posts' }, () => {
         fetchEverything(1, false);
       })
       .subscribe();

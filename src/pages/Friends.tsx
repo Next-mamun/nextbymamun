@@ -27,7 +27,7 @@ const Friends: React.FC = () => {
 
     // Subscribe to profile updates (new users joining)
     const profileSub = supabase.channel('profile_updates')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'profiles' }, () => fetchFriendsData(true))
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'profiles' }, () => fetchFriendsData(true))
       .subscribe();
 
     return () => { 

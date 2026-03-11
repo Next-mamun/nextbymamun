@@ -21,15 +21,17 @@ const Register: React.FC = () => {
 
   const handleGoogleLogin = async () => {
     try {
+      setLoading(true);
       const { error } = await supabase.auth.signInWithOAuth({
         provider: 'google',
         options: {
-          redirectTo: `${window.location.origin}/#/`,
+          redirectTo: window.location.origin,
         },
       });
       if (error) throw error;
     } catch (error: any) {
       setError(error.message);
+      setLoading(false);
     }
   };
 

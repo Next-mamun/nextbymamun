@@ -1,6 +1,6 @@
 
 import React, { useState, useEffect, createContext, useContext } from 'react';
-import { HashRouter, Routes, Route, Navigate } from 'react-router-dom';
+import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import Navbar from '@/components/Navbar';
 import Sidebar from '@/components/Sidebar';
 import BottomNav from '@/components/BottomNav';
@@ -138,7 +138,7 @@ const App: React.FC = () => {
   return (
     <AuthContext.Provider value={{ currentUser, setCurrentUser, logout }}>
       <ThemeContext.Provider value={{ darkMode, toggleDarkMode }}>
-        <HashRouter>
+        <BrowserRouter>
           <div className="min-h-screen bg-[#f0f2f5] dark:bg-[#000000] flex flex-col transition-colors duration-300">
             <div className={`flex flex-1 pb-16 max-w-[1920px] mx-auto w-full ${currentUser ? 'pt-14' : ''}`}>
               {currentUser && <Navbar />}
@@ -159,7 +159,7 @@ const App: React.FC = () => {
             </div>
             {currentUser && <div className="z-[100] relative"><BottomNav /></div>}
           </div>
-        </HashRouter>
+        </BrowserRouter>
       </ThemeContext.Provider>
     </AuthContext.Provider>
   );

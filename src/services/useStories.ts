@@ -25,12 +25,11 @@ export const useStories = () => {
 
     const subscription = supabase
       .channel('public:stories')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'stories' }, (payload) => {
-        if (payload.eventType === 'INSERT') {
-          setStories(current => [payload.new as Story, ...current]);
-        } else if (payload.eventType === 'DELETE') {
-          setStories(current => current.filter(s => s.id !== (payload.old as Story).id));
-        }
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'stories' }, (payload) => {
+        setStories(current => [payload.new as Story, ...current]);
+      })
+      .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'stories' }, (payload) => {
+        setStories(current => current.filter(s => s.id !== (payload.old as Story).id));
       })
       .subscribe();
 

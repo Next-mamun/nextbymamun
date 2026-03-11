@@ -29,7 +29,10 @@ const Reels: React.FC = () => {
   useEffect(() => {
     fetchReels();
     const channel = supabase.channel('reels_realtime_changes')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'reels' }, (payload) => {
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'reels' }, (payload) => {
+        fetchReels();
+      })
+      .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'reels' }, (payload) => {
         fetchReels();
       })
       .subscribe();
@@ -79,14 +82,15 @@ const Reels: React.FC = () => {
   // --- Upload Logic ---
   const getYoutubeId = (url: string | null | undefined) => {
     if (!url) return null;
-    const regExp = /^.*(youtu.be\/|v\/|u\/\w\/|embed\/|watch\?v=|&v=)([^#&?]*).*/;
+    const regExp = /^.*(youtu.be\/|v\/|u\/\w\/|embed\/|watch\?v=|&v=|shorts\/)([^#&?]*).*/;
     const match = url.match(regExp);
     return (match && match[2].length === 11) ? match[2] : null;
   };
 
   const getFacebookEmbedUrl = (url: string | null | undefined) => {
     if (!url) return null;
-    if (url.includes('facebook.com') || url.includes('fb.watch')) {
+    if (url.match(/(?:https?:\/\/)?(?:www\.|m\.|web\.)?(?:facebook\.com|fb\.watch)/i)) {
+      if (url.includes('plugins/video.php')) return url;
       return `https://www.facebook.com/plugins/video.php?href=${encodeURIComponent(url)}&show_text=0&width=560`;
     }
     return null;
@@ -95,8 +99,8 @@ const Reels: React.FC = () => {
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
-      if (file.size > 50 * 1024 * 1024) {
-        alert('File is too large. Please select a video under 50MB.');
+      if (file.size > 10 * 1024 * 1024) {
+        alert('File is too large. Please select a video under 10MB.');
         return;
       }
       const reader = new FileReader();
@@ -122,7 +126,7 @@ const Reels: React.FC = () => {
 
     let targetLink = ytLink;
     if (!targetLink && !localFile) {
-      const urlMatch = caption.match(/https?:\/\/(www\.)?(youtube\.com|youtu\.be|facebook\.com|fb\.watch)\/[^\s]+/);
+      const urlMatch = caption.match(/https?:\/\/(?:www\.|m\.|web\.)?(?:youtube\.com|youtu\.be|facebook\.com|fb\.watch)\/[^\s]+/i);
       if (urlMatch) targetLink = urlMatch[0];
     }
 
@@ -156,7 +160,23 @@ const Reels: React.FC = () => {
     const { error } = await supabase.from('reels').insert([payload]);
     
     if (error) {
-      alert('Failed to share reel: ' + error.message);
+      console.warn('Full insert failed, trying fallback...', error);
+      // Fallback if source_type 'facebook' violates a CHECK constraint
+      if (payload.source_type === 'facebook') {
+         payload.source_type = 'youtube'; // Hack to bypass CHECK constraint if it exists
+         const { error: fallbackError } = await supabase.from('reels').insert([payload]);
+         if (fallbackError) {
+           alert('Failed to share reel: ' + fallbackError.message);
+           setIsUploading(false);
+           setUploadProgress(0);
+           return;
+         }
+      } else {
+         alert('Failed to share reel: ' + error.message);
+         setIsUploading(false);
+         setUploadProgress(0);
+         return;
+      }
     }
 
     setUploadProgress(100);
@@ -260,7 +280,7 @@ const Reels: React.FC = () => {
                       </div>
                       <div>
                         <p className="font-bold text-gray-700 dark:text-gray-300">Upload Video</p>
-                        <p className="text-xs text-gray-400 mt-1">MP4, MOV (Max 50MB)</p>
+                        <p className="text-xs text-gray-400 mt-1">MP4, MOV (Max 10MB)</p>
                       </div>
                   </div>
                 )}
@@ -302,7 +322,7 @@ const Reels: React.FC = () => {
 
               <button 
                 onClick={handleCreateReel}
-                disabled={isUploading || (!localFile && !ytLink && !caption.match(/https?:\/\/(www\.)?(youtube\.com|youtu\.be|facebook\.com|fb\.watch)\/[^\s]+/))}
+                disabled={isUploading || (!localFile && !ytLink && !caption.match(/https?:\/\/(?:www\.|m\.|web\.)?(?:youtube\.com|youtu\.be|facebook\.com|fb\.watch)\/[^\s]+/i))}
                 className="w-full bg-[#1877F2] text-white py-3.5 rounded-xl font-bold shadow-lg hover:brightness-110 disabled:opacity-50 disabled:shadow-none transition-all"
               >
                 {isUploading ? 'Sharing...' : 'Share Reel'}
@@ -337,8 +357,15 @@ const ReelItem: React.FC<{ reel: Reel, isActive: boolean, onDelete: () => void }
       // Increment view count
       if (!hasViewed.current) {
         const incrementView = async () => {
-          await supabase.rpc('increment_reel_views', { reel_id: reel.id });
-          setViews(prev => prev + 1);
+          try {
+            const { data } = await supabase.from('reels').select('views').eq('id', reel.id).single();
+            if (data) {
+              await supabase.from('reels').update({ views: (data.views || 0) + 1 }).eq('id', reel.id);
+              setViews(prev => prev + 1);
+            }
+          } catch (err) {
+            console.error('Error updating views:', err);
+          }
           hasViewed.current = true;
         };
         incrementView();
@@ -392,7 +419,7 @@ const ReelItem: React.FC<{ reel: Reel, isActive: boolean, onDelete: () => void }
         {reel.source_type === 'youtube' || reel.source_type === 'facebook' ? (
           isActive ? (
             <iframe 
-              src={reel.source_type === 'youtube' ? `${reel.video_url}?autoplay=1&mute=0&controls=0&modestbranding=1&loop=1&playlist=${reel.youtube_id}&rel=0&iv_load_policy=3&disablekb=1` : reel.video_url}
+              src={reel.video_url.includes('facebook.com') ? reel.video_url : `${reel.video_url}?autoplay=1&mute=0&controls=0&modestbranding=1&loop=1&playlist=${reel.youtube_id}&rel=0&iv_load_policy=3&disablekb=1`}
               className="w-full h-full object-cover pointer-events-none"
               frameBorder="0"
               allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"

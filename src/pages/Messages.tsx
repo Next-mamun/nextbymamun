@@ -155,9 +155,18 @@ const Messages: React.FC = () => {
 
       const msgSub = supabase.channel(`msgs_${selectedChat.id}`)
         .on('postgres_changes', { event: '*', schema: 'public', table: 'messages' }, (payload) => {
+          const msg = (payload.new || payload.old) as any;
+          if (!msg) return;
+          
+          const involvesCurrentChat = 
+            (msg.sender_id === currentUser?.id && msg.receiver_id === selectedChat.id) ||
+            (msg.sender_id === selectedChat.id && msg.receiver_id === currentUser?.id);
+
+          if (!involvesCurrentChat) return;
+
           // If a new message arrives while chat is open, mark it as read
-          if (payload.eventType === 'INSERT' && payload.new.receiver_id === currentUser?.id && payload.new.sender_id === selectedChat.id) {
-            supabase.from('messages').update({ is_read: true }).eq('id', payload.new.id);
+          if (payload.eventType === 'INSERT' && msg.receiver_id === currentUser?.id && msg.sender_id === selectedChat.id) {
+            supabase.from('messages').update({ is_read: true }).eq('id', msg.id);
           }
           fetchMessages();
         })
