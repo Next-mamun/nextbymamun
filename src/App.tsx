@@ -14,6 +14,7 @@ import Settings from '@/pages/Settings';
 import CreatePost from '@/pages/CreatePost';
 import Notifications from '@/pages/Notifications';
 import { UserProfile as User } from '@/types';
+import { supabase } from '@/lib/supabase';
 
 interface AuthContextType {
   currentUser: User | null;
@@ -42,6 +43,7 @@ const App: React.FC = () => {
     const saved = localStorage.getItem('next_media_user');
     return saved ? JSON.parse(saved) : null;
   });
+  const [loadingAuth, setLoadingAuth] = useState(true);
 
   const [darkMode, setDarkMode] = useState(() => {
     return localStorage.getItem('next_media_theme') === 'dark';
@@ -59,7 +61,8 @@ const App: React.FC = () => {
 
   const toggleDarkMode = () => setDarkMode(!darkMode);
 
-  const logout = () => {
+  const logout = async () => {
+    await supabase.auth.signOut();
     localStorage.removeItem('next_media_user');
     setCurrentUser(null);
   };
@@ -69,6 +72,68 @@ const App: React.FC = () => {
       localStorage.setItem('next_media_user', JSON.stringify(currentUser));
     }
   }, [currentUser]);
+
+  useEffect(() => {
+    // Check active session
+    const fetchSession = async () => {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (session?.user) {
+        fetchUserProfile(session.user.id);
+      } else {
+        setLoadingAuth(false);
+      }
+    };
+
+    fetchSession();
+
+    // Listen for auth changes (like OAuth redirect)
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(
+      async (event, session) => {
+        if (event === 'SIGNED_IN' && session?.user) {
+          fetchUserProfile(session.user.id);
+        } else if (event === 'SIGNED_OUT') {
+          setCurrentUser(null);
+          localStorage.removeItem('next_media_user');
+        }
+      }
+    );
+
+    return () => {
+      subscription.unsubscribe();
+    };
+  }, []);
+
+  const fetchUserProfile = async (userId: string) => {
+    try {
+      // Add a small delay for the trigger to finish creating the profile
+      await new Promise(resolve => setTimeout(resolve, 1000));
+      
+      const { data, error } = await supabase
+        .from('profiles')
+        .select('*')
+        .eq('id', userId)
+        .single();
+        
+      if (data) {
+        setCurrentUser(data);
+        localStorage.setItem('next_media_user', JSON.stringify(data));
+      } else if (error) {
+        console.error("Error fetching profile:", error);
+      }
+    } catch (err) {
+      console.error("Failed to fetch user profile:", err);
+    } finally {
+      setLoadingAuth(false);
+    }
+  };
+
+  if (loadingAuth) {
+    return (
+      <div className="min-h-screen bg-[#f0f2f5] dark:bg-[#000000] flex items-center justify-center">
+        <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-[#1877F2]"></div>
+      </div>
+    );
+  }
 
   return (
     <AuthContext.Provider value={{ currentUser, setCurrentUser, logout }}>
