@@ -12,12 +12,13 @@ const Login: React.FC = () => {
   const [showPinField, setShowPinField] = useState(false);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+  const [isGoogleLoading, setIsGoogleLoading] = useState(false);
   const { setCurrentUser } = useAuth();
   const navigate = useNavigate();
 
   const handleGoogleLogin = async () => {
     try {
-      setLoading(true);
+      setIsGoogleLoading(true);
       const { error } = await supabase.auth.signInWithOAuth({
         provider: 'google',
         options: {
@@ -27,7 +28,7 @@ const Login: React.FC = () => {
       if (error) throw error;
     } catch (error: any) {
       setError(error.message);
-      setLoading(false);
+      setIsGoogleLoading(false);
     }
   };
 
@@ -120,9 +121,10 @@ const Login: React.FC = () => {
 
           <button 
             type="submit"
-            disabled={loading}
-            className="bg-[#1877F2] text-white py-4 rounded-xl text-xl font-bold hover:bg-blue-600 shadow-lg hover:shadow-blue-500/20 transition-all disabled:opacity-50 active:scale-[0.98]"
+            disabled={loading || isGoogleLoading}
+            className="bg-[#1877F2] text-white py-4 rounded-xl text-xl font-bold hover:bg-blue-600 shadow-lg hover:shadow-blue-500/20 transition-all disabled:opacity-50 active:scale-[0.98] flex items-center justify-center gap-2"
           >
+            {loading && <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin"></div>}
             {loading ? 'Authenticating...' : 'Log In'}
           </button>
           
@@ -143,10 +145,15 @@ const Login: React.FC = () => {
           <button 
             type="button"
             onClick={handleGoogleLogin}
-            className="w-full bg-white text-gray-900 py-3.5 rounded-xl font-bold flex items-center justify-center gap-3 hover:bg-gray-100 transition-all shadow-sm active:scale-[0.98]"
+            disabled={loading || isGoogleLoading}
+            className="w-full bg-white text-gray-900 py-3.5 rounded-xl font-bold flex items-center justify-center gap-3 hover:bg-gray-100 transition-all shadow-sm active:scale-[0.98] disabled:opacity-50"
           >
-            <img src="https://www.svgrepo.com/show/475656/google-color.svg" className="w-6 h-6" alt="Google" />
-            Continue with Google
+            {isGoogleLoading ? (
+              <div className="w-6 h-6 border-2 border-gray-900 border-t-transparent rounded-full animate-spin"></div>
+            ) : (
+              <img src="https://www.svgrepo.com/show/475656/google-color.svg" className="w-6 h-6" alt="Google" />
+            )}
+            {isGoogleLoading ? 'Connecting...' : 'Continue with Google'}
           </button>
 
           <div className="h-px bg-white/10 my-2" />

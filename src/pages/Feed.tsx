@@ -462,7 +462,13 @@ const PostCard: React.FC<{ post: any, onUpdate: () => void, onDelete: () => void
   const { currentUser } = useAuth();
   const [comment, setComment] = useState('');
   const [showComments, setShowComments] = useState(false);
-  const isLiked = post.likes?.some((l: any) => l.user_id === currentUser?.id);
+  const [localComments, setLocalComments] = useState<any[]>(post.comments || []);
+  
+  // Optimistic UI state
+  const initialIsLiked = post.likes?.some((l: any) => l.user_id === currentUser?.id);
+  const [isLiked, setIsLiked] = useState(initialIsLiked);
+  const [likesCount, setLikesCount] = useState(post.likes?.length || 0);
+  
   const cardRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -471,22 +477,66 @@ const PostCard: React.FC<{ post: any, onUpdate: () => void, onDelete: () => void
     }
   }, []);
 
+  // Sync local state if post prop changes from server
+  useEffect(() => {
+    setIsLiked(post.likes?.some((l: any) => l.user_id === currentUser?.id));
+    setLikesCount(post.likes?.length || 0);
+    setLocalComments(post.comments || []);
+  }, [post.likes, post.comments]);
+
   const handleLike = async () => {
-    if (isLiked) await supabase.from('likes').delete().match({ post_id: post.id, user_id: currentUser?.id });
-    else await supabase.from('likes').insert([{ post_id: post.id, user_id: currentUser?.id }]);
-    onUpdate();
+    // Optimistic update
+    const newIsLiked = !isLiked;
+    setIsLiked(newIsLiked);
+    setLikesCount(prev => newIsLiked ? prev + 1 : prev - 1);
+
+    try {
+      if (isLiked) {
+        await supabase.from('likes').delete().match({ post_id: post.id, user_id: currentUser?.id });
+      } else {
+        await supabase.from('likes').insert([{ post_id: post.id, user_id: currentUser?.id }]);
+      }
+      // We don't necessarily need to call onUpdate() here if we trust the optimistic update,
+      // but calling it in the background keeps data fresh.
+      onUpdate();
+    } catch (error) {
+      // Revert on failure
+      setIsLiked(isLiked);
+      setLikesCount(post.likes?.length || 0);
+      console.error("Failed to toggle like", error);
+    }
   };
 
   const handleComment = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!comment.trim()) return;
-    await supabase.from('comments').insert([{ post_id: post.id, user_id: currentUser?.id, content: comment }]);
+    
+    // Optimistic comment
+    const newComment = {
+      id: `temp-${Date.now()}`,
+      post_id: post.id,
+      user_id: currentUser?.id,
+      content: comment,
+      created_at: new Date().toISOString(),
+      profiles: currentUser
+    };
+    
+    setLocalComments(prev => [...prev, newComment]);
+    const commentText = comment;
     setComment('');
-    onUpdate();
+
+    try {
+      await supabase.from('comments').insert([{ post_id: post.id, user_id: currentUser?.id, content: commentText }]);
+      onUpdate();
+    } catch (error) {
+      // Revert on error
+      setLocalComments(post.comments || []);
+      console.error("Failed to post comment", error);
+    }
   };
 
   return (
-    <div ref={cardRef} data-post-id={post.id} className="bg-white dark:bg-black rounded-xl shadow-sm border border-gray-200 dark:border-gray-800 overflow-hidden transition-all">
+    <div ref={cardRef} data-post-id={post.id} style={{ contentVisibility: 'auto', containIntrinsicSize: '0 500px' }} className="bg-white dark:bg-black rounded-xl shadow-sm border border-gray-200 dark:border-gray-800 overflow-hidden transition-all">
       <div className="p-4 flex justify-between items-center">
         <Link to={`/profile/${post.profiles?.username || 'unknown'}`} className="flex gap-3 hover:opacity-80 transition-opacity">
           <ProfilePhoto src={post.profiles?.avatar_url || ''} alt="profile" size="small" />
@@ -516,10 +566,10 @@ const PostCard: React.FC<{ post: any, onUpdate: () => void, onDelete: () => void
       <div className="px-4 py-1">
         <div className="flex justify-between text-[13px] text-gray-500 dark:text-gray-400 py-2 font-bold">
           <div className="flex items-center gap-3">
-            <div className="flex items-center gap-1.5"><ThumbsUp size={12} className="text-white bg-[#1877F2] p-0.5 rounded-full" /> {post.likes?.length || 0} Likes</div>
+            <div className="flex items-center gap-1.5"><ThumbsUp size={12} className="text-white bg-[#1877F2] p-0.5 rounded-full" /> {likesCount} Likes</div>
             <div className="flex items-center gap-1.5"><Eye size={14} className="text-gray-400" /> {post.views || 0} Views</div>
           </div>
-          <button onClick={() => setShowComments(!showComments)} className="hover:underline">{post.comments?.length || 0} comments</button>
+          <button onClick={() => setShowComments(!showComments)} className="hover:underline">{localComments.length} comments</button>
         </div>
         <div className="flex border-t border-gray-100 dark:border-gray-800 py-1 gap-1">
           <button onClick={handleLike} className={`flex-1 flex items-center justify-center gap-2 py-2 font-bold transition-colors rounded-lg hover:bg-gray-50 dark:hover:bg-gray-900 ${isLiked ? 'text-[#1877F2]' : 'text-gray-600 dark:text-gray-400'}`}><ThumbsUp size={20} /> Like</button>
@@ -530,21 +580,21 @@ const PostCard: React.FC<{ post: any, onUpdate: () => void, onDelete: () => void
       {showComments && (
         <div className="px-4 pb-4 bg-gray-50 dark:bg-gray-900 border-t border-gray-100 dark:border-gray-800">
           <div className="max-h-60 overflow-y-auto py-2 space-y-3 scrollbar-hide">
-            {post.comments?.map((c: any) => (
+            {localComments.map((c: any) => (
               <div key={c.id} className="flex gap-2">
-                <Link to={`/profile/${c.profiles.username}`}>
-                  <ProfilePhoto src={c.profiles.avatar_url} alt="commenter" size="small" />
+                <Link to={`/profile/${c.profiles?.username || 'unknown'}`}>
+                  <ProfilePhoto src={c.profiles?.avatar_url || ''} alt="commenter" size="small" />
                 </Link>
                 <div className="bg-white dark:bg-black px-3 py-2 rounded-2xl shadow-sm border border-gray-100 dark:border-gray-800 flex-1">
-                  <Link to={`/profile/${c.profiles.username}`} className="font-bold text-[13px] text-gray-900 dark:text-white hover:underline flex items-center gap-1">
-                    {c.profiles.display_name}
-                    {c.profiles.is_verified && <VerifiedBadge size={12} />}
+                  <Link to={`/profile/${c.profiles?.username || 'unknown'}`} className="font-bold text-[13px] text-gray-900 dark:text-white hover:underline flex items-center gap-1">
+                    {c.profiles?.display_name || 'User'}
+                    {c.profiles?.is_verified && <VerifiedBadge size={12} />}
                   </Link>
                   <p className="text-[14px] text-gray-800 dark:text-gray-200">{c.content}</p>
                 </div>
               </div>
             ))}
-            {(!post.comments || post.comments.length === 0) && (
+            {localComments.length === 0 && (
               <p className="text-center text-gray-500 text-sm py-2">No comments yet. Be the first!</p>
             )}
           </div>

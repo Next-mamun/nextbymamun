@@ -134,14 +134,27 @@ const App: React.FC = () => {
 
   const fetchUserProfile = async (userId: string) => {
     try {
-      // Add a small delay for the trigger to finish creating the profile
-      await new Promise(resolve => setTimeout(resolve, 1000));
+      // Poll for the profile since the database trigger might take a few milliseconds
+      let data = null;
+      let error = null;
+      let attempts = 0;
       
-      const { data, error } = await supabase
-        .from('profiles')
-        .select('*')
-        .eq('id', userId)
-        .single();
+      while (attempts < 5) {
+        const result = await supabase
+          .from('profiles')
+          .select('*')
+          .eq('id', userId)
+          .single();
+          
+        data = result.data;
+        error = result.error;
+        
+        if (data) break;
+        
+        // Wait 200ms before retrying
+        await new Promise(resolve => setTimeout(resolve, 200));
+        attempts++;
+      }
         
       if (data) {
         setCurrentUser(data);

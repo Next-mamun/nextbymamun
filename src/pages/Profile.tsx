@@ -325,7 +325,7 @@ const Profile: React.FC = () => {
                 <p>No posts published by {profile.display_name} yet.</p>
               </div>
             ) : userPosts.map(post => (
-              <div key={post.id} data-post-id={post.id} className="bg-white dark:bg-black rounded-xl shadow-sm border border-gray-100 dark:border-gray-800 overflow-hidden">
+              <div key={post.id} data-post-id={post.id} style={{ contentVisibility: 'auto', containIntrinsicSize: '0 500px' }} className="bg-white dark:bg-black rounded-xl shadow-sm border border-gray-100 dark:border-gray-800 overflow-hidden">
                 <div className="p-4 flex justify-between items-center">
                   <div className="flex gap-3">
                     <img src={profile.avatar_url} className="w-10 h-10 rounded-full object-cover shadow-sm border dark:border-gray-700" />

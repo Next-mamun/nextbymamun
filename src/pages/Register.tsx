@@ -16,12 +16,13 @@ const Register: React.FC = () => {
   });
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+  const [isGoogleLoading, setIsGoogleLoading] = useState(false);
   const { setCurrentUser } = useAuth();
   const navigate = useNavigate();
 
   const handleGoogleLogin = async () => {
     try {
-      setLoading(true);
+      setIsGoogleLoading(true);
       const { error } = await supabase.auth.signInWithOAuth({
         provider: 'google',
         options: {
@@ -31,7 +32,7 @@ const Register: React.FC = () => {
       if (error) throw error;
     } catch (error: any) {
       setError(error.message);
-      setLoading(false);
+      setIsGoogleLoading(false);
     }
   };
 
@@ -146,9 +147,10 @@ const Register: React.FC = () => {
 
           <button 
             type="submit"
-            disabled={loading}
-            className="bg-[#1877F2] text-white py-4 rounded-xl font-bold text-xl mt-2 hover:bg-blue-600 shadow-lg hover:shadow-blue-500/20 disabled:opacity-50 transition-all active:scale-[0.98]"
+            disabled={loading || isGoogleLoading}
+            className="bg-[#1877F2] text-white py-4 rounded-xl font-bold text-xl mt-2 hover:bg-blue-600 shadow-lg hover:shadow-blue-500/20 disabled:opacity-50 transition-all active:scale-[0.98] flex items-center justify-center gap-2"
           >
+            {loading && <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin"></div>}
             {loading ? 'Creating Account...' : 'Sign Up'}
           </button>
 
@@ -161,10 +163,15 @@ const Register: React.FC = () => {
           <button 
             type="button"
             onClick={handleGoogleLogin}
-            className="w-full bg-white text-gray-900 py-3.5 rounded-xl font-bold flex items-center justify-center gap-3 hover:bg-gray-100 transition-all shadow-sm active:scale-[0.98]"
+            disabled={loading || isGoogleLoading}
+            className="w-full bg-white text-gray-900 py-3.5 rounded-xl font-bold flex items-center justify-center gap-3 hover:bg-gray-100 transition-all shadow-sm active:scale-[0.98] disabled:opacity-50"
           >
-            <img src="https://www.svgrepo.com/show/475656/google-color.svg" className="w-6 h-6" alt="Google" />
-            Sign up with Google
+            {isGoogleLoading ? (
+              <div className="w-6 h-6 border-2 border-gray-900 border-t-transparent rounded-full animate-spin"></div>
+            ) : (
+              <img src="https://www.svgrepo.com/show/475656/google-color.svg" className="w-6 h-6" alt="Google" />
+            )}
+            {isGoogleLoading ? 'Connecting...' : 'Sign up with Google'}
           </button>
 
           <Link to="/login" className="text-gray-400 text-center mt-4 text-sm hover:text-white font-bold transition-colors">
