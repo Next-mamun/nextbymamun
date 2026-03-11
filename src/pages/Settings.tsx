@@ -48,7 +48,7 @@ const Row: React.FC<{ icon?: React.ReactNode, title: string, description?: strin
 
 const Settings: React.FC = () => {
   const { currentUser } = useAuth();
-  const { darkMode, toggleDarkMode } = useTheme();
+  const { darkMode, toggleDarkMode, desktopMode, toggleDesktopMode } = useTheme();
   const [activeTab, setActiveTab] = useState('account');
   const [searchQuery, setSearchQuery] = useState('');
   const [profile, setProfile] = useState<any>(null);
@@ -62,6 +62,74 @@ const Settings: React.FC = () => {
   const fetchProfile = async () => {
     const { data } = await supabase.from('profiles').select('*').eq('id', currentUser?.id).single();
     if (data) setProfile(data);
+  };
+
+  const [editingField, setEditingField] = useState<string | null>(null);
+  const [editValue, setEditValue] = useState('');
+  const [isSaving, setIsSaving] = useState(false);
+
+  const handleEdit = (field: string, currentValue: string) => {
+    setEditingField(field);
+    setEditValue(currentValue);
+  };
+
+  const handleSave = async () => {
+    if (!editingField || !currentUser) return;
+    setIsSaving(true);
+    
+    try {
+      if (editingField === 'password') {
+        const { error } = await supabase.auth.updateUser({ password: editValue });
+        if (error) throw error;
+        alert('Password updated successfully!');
+      } else {
+        const updates = { [editingField]: editValue };
+        const { error } = await supabase.from('profiles').update(updates).eq('id', currentUser.id);
+        if (error) throw error;
+        
+        // Update local profile state
+        setProfile(prev => ({ ...prev, ...updates }));
+        
+        // Update currentUser in localStorage (partial update)
+        const savedUser = JSON.parse(localStorage.getItem('next_media_user') || '{}');
+        localStorage.setItem('next_media_user', JSON.stringify({ ...savedUser, ...updates }));
+        
+        // Note: A full page reload or context update might be needed for the navbar to reflect changes immediately,
+        // but for now this updates the settings view.
+      }
+    } catch (error: any) {
+      alert(error.message || 'An error occurred');
+    } finally {
+      setIsSaving(false);
+      setEditingField(null);
+    }
+  };
+
+  const renderAction = (field: string, currentValue: string, isPassword = false) => {
+    if (editingField === field) {
+      return (
+        <div className="flex items-center gap-2">
+          <input 
+            type={isPassword ? "password" : "text"} 
+            value={editValue} 
+            onChange={e => setEditValue(e.target.value)}
+            className="border border-gray-300 dark:border-gray-600 rounded px-2 py-1 text-sm dark:bg-gray-800 dark:text-white"
+            autoFocus
+          />
+          <button onClick={handleSave} disabled={isSaving} className="text-blue-500 hover:text-blue-600 font-bold text-sm">
+            {isSaving ? 'Saving...' : 'Save'}
+          </button>
+          <button onClick={() => setEditingField(null)} className="text-gray-500 hover:text-gray-600 font-bold text-sm">
+            Cancel
+          </button>
+        </div>
+      );
+    }
+    return (
+      <button onClick={() => handleEdit(field, isPassword ? '' : currentValue)} className="text-blue-500 hover:text-blue-600 font-bold text-sm">
+        Edit
+      </button>
+    );
   };
 
   const settingsTabs = [
@@ -133,7 +201,7 @@ const Settings: React.FC = () => {
               <p className="text-gray-500 dark:text-gray-400 font-medium mb-8">Customize how the app looks and feels.</p>
 
               <Section title="Appearance">
-                <div className="p-4">
+                <div className="p-4 border-b border-gray-100 dark:border-gray-700">
                   <p className="font-bold text-gray-900 dark:text-white mb-3">Theme</p>
                   <div className="grid grid-cols-2 gap-3">
                     <button 
@@ -152,6 +220,25 @@ const Settings: React.FC = () => {
                     </button>
                   </div>
                 </div>
+                <div className="p-4">
+                  <p className="font-bold text-gray-900 dark:text-white mb-3">Viewport Mode</p>
+                  <div className="grid grid-cols-2 gap-3">
+                    <button 
+                      onClick={() => desktopMode && toggleDesktopMode()}
+                      className={`flex flex-col items-center gap-2 p-4 border-2 rounded-xl font-bold transition-colors ${!desktopMode ? 'border-blue-500 bg-blue-50 text-blue-600' : 'border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 text-gray-600 dark:text-gray-400'}`}
+                    >
+                      <Smartphone size={24} /> 
+                      <span>Mobile Mode</span>
+                    </button>
+                    <button 
+                      onClick={() => !desktopMode && toggleDesktopMode()}
+                      className={`flex flex-col items-center gap-2 p-4 border-2 rounded-xl font-bold transition-colors ${desktopMode ? 'border-blue-500 bg-gray-800 text-white' : 'border-gray-200 bg-white text-gray-600'}`}
+                    >
+                      <Monitor size={24} /> 
+                      <span>Desktop Mode</span>
+                    </button>
+                  </div>
+                </div>
               </Section>
             </div>
           )}
@@ -163,12 +250,12 @@ const Settings: React.FC = () => {
               <p className="text-gray-500 dark:text-gray-400 font-medium mb-8">Manage your account details.</p>
               
               <Section title="Profile Information">
-                <Row icon={<User size={20}/>} title="Display Name" description={currentUser?.display_name} action={<div/>} />
-                <Row icon={<Smartphone size={20}/>} title="Username" description={`@${currentUser?.username}`} action={<div/>} border={false} />
+                <Row icon={<User size={20}/>} title="Display Name" description={profile?.display_name || currentUser?.display_name} action={renderAction('display_name', profile?.display_name || currentUser?.display_name || '')} />
+                <Row icon={<Smartphone size={20}/>} title="Username" description={`@${profile?.username || currentUser?.username}`} action={renderAction('username', profile?.username || currentUser?.username || '')} border={false} />
               </Section>
 
               <Section title="Security">
-                <Row icon={<Lock size={20}/>} title="Password" description="Change your password" action={<div/>} border={false} />
+                <Row icon={<Lock size={20}/>} title="Password" description="Change your password" action={renderAction('password', '', true)} border={false} />
               </Section>
             </div>
           )}

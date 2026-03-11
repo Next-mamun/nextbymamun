@@ -87,14 +87,32 @@ const Navbar: React.FC = () => {
       .eq('status', 'pending');
     
     if (data) {
-      setNotifications(data.map(req => ({
+      const seenIds = JSON.parse(localStorage.getItem('seen_notifications') || '[]');
+      const newNotifications = data.map(req => ({
         id: req.id,
         type: 'friend_request',
         text: `${req.profiles.display_name} sent you a friend request.`,
         avatar: req.profiles.avatar_url,
         link: '/friends',
-        created_at: req.created_at
-      })));
+        created_at: req.created_at,
+        is_seen: seenIds.includes(req.id)
+      }));
+      setNotifications(newNotifications);
+    }
+  };
+
+  const handleNotificationsClick = () => {
+    const opening = !showNotifications;
+    setShowNotifications(opening);
+    setShowDropdown(false);
+    
+    if (opening && notifications.length > 0) {
+      const seenIds = JSON.parse(localStorage.getItem('seen_notifications') || '[]');
+      const newSeenIds = Array.from(new Set([...seenIds, ...notifications.map(n => n.id)]));
+      localStorage.setItem('seen_notifications', JSON.stringify(newSeenIds));
+      
+      // Update local state to remove the red badge immediately
+      setNotifications(prev => prev.map(n => ({ ...n, is_seen: true })));
     }
   };
 
@@ -119,13 +137,13 @@ const Navbar: React.FC = () => {
         </button>
 
         <button 
-          onClick={() => { setShowNotifications(!showNotifications); setShowDropdown(false); }}
+          onClick={handleNotificationsClick}
           className={`p-2 rounded-full hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors relative ${showNotifications ? 'text-[#1A2933] dark:text-blue-400 bg-blue-50 dark:bg-gray-800' : 'text-gray-600 dark:text-gray-300'}`}
         >
           <Bell size={24} fill={showNotifications ? "currentColor" : "none"} />
-          {notifications.length > 0 && (
+          {notifications.filter(n => !n.is_seen).length > 0 && (
             <span className="absolute top-1.5 right-1.5 bg-red-500 text-white text-[10px] rounded-full w-4 h-4 flex items-center justify-center font-bold border-2 border-white dark:border-black">
-              {notifications.length}
+              {notifications.filter(n => !n.is_seen).length}
             </span>
           )}
         </button>

@@ -25,10 +25,17 @@ interface AuthContextType {
 interface ThemeContextType {
   darkMode: boolean;
   toggleDarkMode: () => void;
+  desktopMode: boolean;
+  toggleDesktopMode: () => void;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
-export const ThemeContext = createContext<ThemeContextType>({ darkMode: false, toggleDarkMode: () => {} });
+export const ThemeContext = createContext<ThemeContextType>({ 
+  darkMode: false, 
+  toggleDarkMode: () => {},
+  desktopMode: false,
+  toggleDesktopMode: () => {}
+});
 
 export const useAuth = () => {
   const context = useContext(AuthContext);
@@ -49,6 +56,10 @@ const App: React.FC = () => {
     return localStorage.getItem('next_media_theme') === 'dark';
   });
 
+  const [desktopMode, setDesktopMode] = useState(() => {
+    return localStorage.getItem('next_media_desktop') === 'true';
+  });
+
   useEffect(() => {
     if (darkMode) {
       document.documentElement.classList.add('dark');
@@ -59,7 +70,25 @@ const App: React.FC = () => {
     }
   }, [darkMode]);
 
+  useEffect(() => {
+    let viewportMeta = document.querySelector('meta[name="viewport"]');
+    if (!viewportMeta) {
+      viewportMeta = document.createElement('meta');
+      viewportMeta.setAttribute('name', 'viewport');
+      document.head.appendChild(viewportMeta);
+    }
+    
+    if (desktopMode) {
+      viewportMeta.setAttribute('content', 'width=1024');
+      localStorage.setItem('next_media_desktop', 'true');
+    } else {
+      viewportMeta.setAttribute('content', 'width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no');
+      localStorage.setItem('next_media_desktop', 'false');
+    }
+  }, [desktopMode]);
+
   const toggleDarkMode = () => setDarkMode(!darkMode);
+  const toggleDesktopMode = () => setDesktopMode(!desktopMode);
 
   const logout = async () => {
     await supabase.auth.signOut();
@@ -137,7 +166,7 @@ const App: React.FC = () => {
 
   return (
     <AuthContext.Provider value={{ currentUser, setCurrentUser, logout }}>
-      <ThemeContext.Provider value={{ darkMode, toggleDarkMode }}>
+      <ThemeContext.Provider value={{ darkMode, toggleDarkMode, desktopMode, toggleDesktopMode }}>
         <BrowserRouter>
           <div className="min-h-screen bg-[#f0f2f5] dark:bg-[#000000] flex flex-col transition-colors duration-300">
             <div className={`flex flex-1 pb-16 max-w-[1920px] mx-auto w-full ${currentUser ? 'pt-14' : ''}`}>
