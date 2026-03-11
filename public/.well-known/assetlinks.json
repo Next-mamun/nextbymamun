@@ -1,0 +1,12 @@
+[
+  {
+    "relation": ["delegate_permission/common.handle_all_urls"],
+    "target": {
+      "namespace": "android_app",
+      "package_name": "next.isbest",
+      "sha256_cert_fingerprints": [
+        "60:7F:D1:DD:EB:C9:E1:F5:9D:52:62:11:22:4C:69:7F:B9:E8:49:3D:0A:59:B0:E5:00:98:E4:59:E7:F5:86:E7"
+      ]
+    }
+  }
+]
