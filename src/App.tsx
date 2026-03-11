@@ -13,6 +13,7 @@ import Profile from '@/pages/Profile';
 import Settings from '@/pages/Settings';
 import CreatePost from '@/pages/CreatePost';
 import Notifications from '@/pages/Notifications';
+import NextoRobot from '@/components/NextoRobot';
 import { UserProfile as User } from '@/types';
 import { supabase } from '@/lib/supabase';
 
@@ -27,6 +28,8 @@ interface ThemeContextType {
   toggleDarkMode: () => void;
   desktopMode: boolean;
   toggleDesktopMode: () => void;
+  nextoEnabled: boolean;
+  toggleNexto: () => void;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -34,7 +37,9 @@ export const ThemeContext = createContext<ThemeContextType>({
   darkMode: false, 
   toggleDarkMode: () => {},
   desktopMode: false,
-  toggleDesktopMode: () => {}
+  toggleDesktopMode: () => {},
+  nextoEnabled: true,
+  toggleNexto: () => {}
 });
 
 export const useAuth = () => {
@@ -58,6 +63,11 @@ const App: React.FC = () => {
 
   const [desktopMode, setDesktopMode] = useState(() => {
     return localStorage.getItem('next_media_desktop') === 'true';
+  });
+
+  const [nextoEnabled, setNextoEnabled] = useState(() => {
+    const saved = localStorage.getItem('next_media_nexto');
+    return saved === null ? true : saved === 'true';
   });
 
   useEffect(() => {
@@ -89,6 +99,11 @@ const App: React.FC = () => {
 
   const toggleDarkMode = () => setDarkMode(!darkMode);
   const toggleDesktopMode = () => setDesktopMode(!desktopMode);
+  const toggleNexto = () => {
+    const newVal = !nextoEnabled;
+    setNextoEnabled(newVal);
+    localStorage.setItem('next_media_nexto', String(newVal));
+  };
 
   const logout = async () => {
     await supabase.auth.signOut();
@@ -179,7 +194,7 @@ const App: React.FC = () => {
 
   return (
     <AuthContext.Provider value={{ currentUser, setCurrentUser, logout }}>
-      <ThemeContext.Provider value={{ darkMode, toggleDarkMode, desktopMode, toggleDesktopMode }}>
+      <ThemeContext.Provider value={{ darkMode, toggleDarkMode, desktopMode, toggleDesktopMode, nextoEnabled, toggleNexto }}>
         <BrowserRouter>
           <div className="min-h-screen bg-[#f0f2f5] dark:bg-[#000000] flex flex-col transition-colors duration-300">
             <div className={`flex flex-1 pb-16 max-w-[1920px] mx-auto w-full ${currentUser ? 'pt-14' : ''}`}>
@@ -200,6 +215,7 @@ const App: React.FC = () => {
               </main>
             </div>
             {currentUser && <div className="z-[100] relative"><BottomNav /></div>}
+            {nextoEnabled && <NextoRobot />}
           </div>
         </BrowserRouter>
       </ThemeContext.Provider>

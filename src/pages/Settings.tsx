@@ -48,7 +48,7 @@ const Row: React.FC<{ icon?: React.ReactNode, title: string, description?: strin
 
 const Settings: React.FC = () => {
   const { currentUser } = useAuth();
-  const { darkMode, toggleDarkMode, desktopMode, toggleDesktopMode } = useTheme();
+  const { darkMode, toggleDarkMode, desktopMode, toggleDesktopMode, nextoEnabled, toggleNexto } = useTheme();
   const [activeTab, setActiveTab] = useState('account');
   const [searchQuery, setSearchQuery] = useState('');
   const [profile, setProfile] = useState<any>(null);
@@ -133,7 +133,7 @@ const Settings: React.FC = () => {
   };
 
   const settingsTabs = [
-    { id: 'display', icon: <Monitor size={20} />, label: 'Display & Accessibility', keywords: ['dark mode', 'light mode', 'font', 'size'] },
+    { id: 'display', icon: <Monitor size={20} />, label: 'Display & Accessibility', keywords: ['dark mode', 'light mode', 'font', 'size', 'nexto', 'robot'] },
     { id: 'account', icon: <User size={20} />, label: 'Account Center', keywords: ['password', 'security', 'logout'] },
   ];
 
@@ -145,6 +145,22 @@ const Settings: React.FC = () => {
       tab.keywords.some(kw => kw.includes(query))
     );
   }, [searchQuery]);
+
+  const nextoRobotSvg = (
+    <svg viewBox="0 0 1024 1024" width="40" height="40" xmlns="http://www.w3.org/2000/svg">
+      <defs>
+        <linearGradient id="bodyG" x1="0%" y1="0%" x2="100%" y2="100%">
+          <stop offset="0%" stop-color="#5ee0fd"/>
+          <stop offset="100%" stop-color="#258be7"/>
+        </linearGradient>
+      </defs>
+      <ellipse cx="512" cy="320" rx="220" ry="200" fill="url(#bodyG)"/>
+      <ellipse cx="440" cy="260" rx="35" ry="35" fill="#000"/>
+      <ellipse cx="585" cy="260" rx="35" ry="35" fill="#000"/>
+      <path d="M450,330 Q512,380 575,330" fill="#d21c2c"/>
+      <ellipse cx="512" cy="600" rx="230" ry="280" fill="url(#bodyG)"/>
+    </svg>
+  );
 
   useEffect(() => {
     if (searchQuery && filteredTabs.length > 0 && !filteredTabs.find(t => t.id === activeTab)) {
@@ -220,7 +236,7 @@ const Settings: React.FC = () => {
                     </button>
                   </div>
                 </div>
-                <div className="p-4">
+                <div className="p-4 border-b border-gray-100 dark:border-gray-700">
                   <p className="font-bold text-gray-900 dark:text-white mb-3">Viewport Mode</p>
                   <div className="grid grid-cols-2 gap-3">
                     <button 
@@ -239,6 +255,13 @@ const Settings: React.FC = () => {
                     </button>
                   </div>
                 </div>
+                <Row 
+                  icon={nextoRobotSvg} 
+                  title="Nexto" 
+                  description="Enable the floating robot assistant overlay." 
+                  action={<Toggle checked={nextoEnabled} onChange={toggleNexto} />} 
+                  border={false}
+                />
               </Section>
             </div>
           )}
