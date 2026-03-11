@@ -30,6 +30,8 @@ interface ThemeContextType {
   toggleDesktopMode: () => void;
   nextoEnabled: boolean;
   toggleNexto: () => void;
+  robotSize: number;
+  setRobotSize: (size: number) => void;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -39,7 +41,9 @@ export const ThemeContext = createContext<ThemeContextType>({
   desktopMode: false,
   toggleDesktopMode: () => {},
   nextoEnabled: true,
-  toggleNexto: () => {}
+  toggleNexto: () => {},
+  robotSize: 80,
+  setRobotSize: () => {}
 });
 
 export const useAuth = () => {
@@ -69,6 +73,16 @@ const App: React.FC = () => {
     const saved = localStorage.getItem('next_media_nexto');
     return saved === null ? true : saved === 'true';
   });
+
+  const [robotSize, setRobotSizeState] = useState(() => {
+    const saved = localStorage.getItem('next_media_robot_size');
+    return saved ? parseInt(saved, 10) : 80;
+  });
+
+  const setRobotSize = (size: number) => {
+    setRobotSizeState(size);
+    localStorage.setItem('next_media_robot_size', String(size));
+  };
 
   useEffect(() => {
     if (darkMode) {
@@ -194,7 +208,12 @@ const App: React.FC = () => {
 
   return (
     <AuthContext.Provider value={{ currentUser, setCurrentUser, logout }}>
-      <ThemeContext.Provider value={{ darkMode, toggleDarkMode, desktopMode, toggleDesktopMode, nextoEnabled, toggleNexto }}>
+      <ThemeContext.Provider value={{ 
+        darkMode, toggleDarkMode, 
+        desktopMode, toggleDesktopMode, 
+        nextoEnabled, toggleNexto,
+        robotSize, setRobotSize
+      }}>
         <BrowserRouter>
           <div className="min-h-screen bg-[#f0f2f5] dark:bg-[#000000] flex flex-col transition-colors duration-300">
             <div className={`flex flex-1 pb-16 max-w-[1920px] mx-auto w-full ${currentUser ? 'pt-14' : ''}`}>

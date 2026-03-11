@@ -48,8 +48,8 @@ const Row: React.FC<{ icon?: React.ReactNode, title: string, description?: strin
 
 const Settings: React.FC = () => {
   const { currentUser } = useAuth();
-  const { darkMode, toggleDarkMode, desktopMode, toggleDesktopMode, nextoEnabled, toggleNexto } = useTheme();
-  const [activeTab, setActiveTab] = useState('account');
+  const { darkMode, toggleDarkMode, desktopMode, toggleDesktopMode, nextoEnabled, toggleNexto, robotSize, setRobotSize } = useTheme();
+  const [activeTab, setActiveTab] = useState('display');
   const [searchQuery, setSearchQuery] = useState('');
   const [profile, setProfile] = useState<any>(null);
 
@@ -260,8 +260,38 @@ const Settings: React.FC = () => {
                   title="Nexto" 
                   description="Enable the floating robot assistant overlay." 
                   action={<Toggle checked={nextoEnabled} onChange={toggleNexto} />} 
-                  border={false}
+                  border={nextoEnabled}
                 />
+                {nextoEnabled && (
+                  <div className="p-4 bg-gray-50/50 dark:bg-gray-900/50">
+                    <div className="flex items-center justify-between mb-2">
+                      <p className="font-bold text-gray-900 dark:text-white text-sm">Robot Size</p>
+                      <span className="text-xs font-black text-blue-500 bg-blue-50 dark:bg-blue-900/30 px-2 py-1 rounded-full">{robotSize}px</span>
+                    </div>
+                    <div className="flex items-center gap-4">
+                      <button 
+                        onClick={() => setRobotSize(Math.max(40, robotSize - 5))}
+                        className="p-2 hover:bg-gray-200 dark:hover:bg-gray-700 rounded-lg text-gray-500 transition-colors"
+                      >
+                        <Volume2 size={18} className="rotate-180" />
+                      </button>
+                      <input 
+                        type="range" 
+                        min="40" 
+                        max="150" 
+                        value={robotSize} 
+                        onChange={(e) => setRobotSize(parseInt(e.target.value, 10))}
+                        className="flex-1 h-1.5 bg-gray-200 dark:bg-gray-700 rounded-lg appearance-none cursor-pointer accent-blue-500"
+                      />
+                      <button 
+                        onClick={() => setRobotSize(Math.min(150, robotSize + 5))}
+                        className="p-2 hover:bg-gray-200 dark:hover:bg-gray-700 rounded-lg text-gray-500 transition-colors"
+                      >
+                        <Volume2 size={18} />
+                      </button>
+                    </div>
+                  </div>
+                )}
               </Section>
             </div>
           )}
