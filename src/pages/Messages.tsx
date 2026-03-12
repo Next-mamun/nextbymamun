@@ -7,22 +7,137 @@ import { useAuth } from '@/App';
 import { supabase } from '../lib/supabase';
 import { VerifiedBadge } from '@/components/VerifiedBadge';
 import ZoomableImage from '@/components/ZoomableImage';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 
 const Messages: React.FC = () => {
   const { currentUser } = useAuth();
   const navigate = useNavigate();
-  const [contacts, setContacts] = useState<any[]>([]);
+  const queryClient = useQueryClient();
   const [selectedChat, setSelectedChat] = useState<any>(null);
-  const [messages, setMessages] = useState<any[]>([]);
   const [messageText, setMessageText] = useState('');
   const [onlineUsers, setOnlineUsers] = useState<Set<string>>(new Set());
-  const [isBlocked, setIsBlocked] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [showEmojiPicker, setShowEmojiPicker] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
-  const [uploadProgress, setUploadProgress] = useState(0);
   const scrollRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const { data: contacts = [] } = useQuery({
+    queryKey: ['contacts'],
+    queryFn: async () => {
+      const { data } = await supabase.from('profiles').select('*').neq('id', currentUser?.id);
+      return data || [];
+    },
+    enabled: !!currentUser,
+    staleTime: 1000 * 60 * 5,
+  });
+
+  const { data: messages = [] } = useQuery({
+    queryKey: ['messages', selectedChat?.id],
+    queryFn: async () => {
+      if (!selectedChat) return [];
+      const { data } = await supabase
+        .from('messages')
+        .select('*')
+        .or(`and(sender_id.eq.${currentUser?.id},receiver_id.eq.${selectedChat.id}),and(sender_id.eq.${selectedChat.id},receiver_id.eq.${currentUser?.id})`)
+        .order('created_at', { ascending: true });
+      return data || [];
+    },
+    enabled: !!selectedChat,
+    staleTime: 0, // Messages should be fresh
+  });
+
+  const { data: unreadCounts = {} } = useQuery({
+    queryKey: ['unreadCounts'],
+    queryFn: async () => {
+      const { data } = await supabase
+        .from('messages')
+        .select('sender_id')
+        .eq('receiver_id', currentUser?.id)
+        .eq('is_read', false);
+      
+      const counts: { [key: string]: number } = {};
+      if (data) {
+        data.forEach((msg: any) => {
+          counts[msg.sender_id] = (counts[msg.sender_id] || 0) + 1;
+        });
+      }
+      return counts;
+    },
+    enabled: !!currentUser,
+  });
+
+  const { data: isBlocked = false } = useQuery({
+    queryKey: ['blockStatus', selectedChat?.id],
+    queryFn: async () => {
+      if (!selectedChat) return false;
+      const { data } = await supabase.from('friendships')
+        .select('*')
+        .or(`and(sender_id.eq.${currentUser?.id},receiver_id.eq.${selectedChat.id}),and(sender_id.eq.${selectedChat.id},receiver_id.eq.${currentUser?.id})`)
+        .eq('status', 'blocked')
+        .single();
+      return !!data;
+    },
+    enabled: !!selectedChat,
+  });
+
+  useEffect(() => {
+    if (!currentUser) return;
+
+    const channel = supabase.channel('online-users', {
+      config: {
+        presence: {
+          key: currentUser?.id,
+        },
+      },
+    });
+
+    channel.on('presence', { event: 'sync' }, () => {
+      const newState = channel.presenceState();
+      const online = new Set(Object.keys(newState));
+      setOnlineUsers(online);
+    }).subscribe(async (status) => {
+      if (status === 'SUBSCRIBED') {
+        await channel.track({ online_at: new Date().toISOString(), user_id: currentUser?.id });
+      }
+    });
+
+    const globalMsgSub = supabase.channel('global_messages')
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages', filter: `receiver_id=eq.${currentUser.id}` }, () => {
+        queryClient.invalidateQueries({ queryKey: ['unreadCounts'] });
+        queryClient.invalidateQueries({ queryKey: ['messages'] });
+      })
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+      supabase.removeChannel(globalMsgSub);
+    };
+  }, [currentUser?.id, queryClient]);
+
+  useEffect(() => {
+    if (selectedChat) {
+      const markAsRead = async () => {
+        await supabase
+          .from('messages')
+          .update({ is_read: true })
+          .eq('receiver_id', currentUser?.id)
+          .eq('sender_id', selectedChat.id)
+          .eq('is_read', false);
+        
+        queryClient.invalidateQueries({ queryKey: ['unreadCounts'] });
+      };
+      markAsRead();
+
+      const msgSub = supabase.channel(`msgs_${selectedChat.id}`)
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'messages' }, () => {
+          queryClient.invalidateQueries({ queryKey: ['messages', selectedChat.id] });
+        })
+        .subscribe();
+
+      return () => { supabase.removeChannel(msgSub); };
+    }
+  }, [selectedChat, currentUser?.id, queryClient]);
 
   const handleEmojiClick = (emojiData: any) => {
     setMessageText(prev => prev + emojiData.emoji);
@@ -52,152 +167,25 @@ const Messages: React.FC = () => {
         created_at: new Date().toISOString()
       };
 
-      // Optimistic Update
-      setMessages(prev => [...prev, { ...newMessage, id: 'temp-' + Date.now() }]);
-      
       const { error: insertError } = await supabase.from('messages').insert([newMessage]);
       
       if (insertError) {
-        console.warn('Full message insert failed, trying basic insert...', insertError);
-        // Fallback if columns are missing
-        const { error: fallbackError } = await supabase.from('messages').insert([{
+        await supabase.from('messages').insert([{
           sender_id: currentUser!.id,
           receiver_id: selectedChat.id,
           content: '[Media Attachment]',
           created_at: new Date().toISOString()
         }]);
-        if (fallbackError) alert('Failed to send file. Please ensure "media_url" column exists in "messages" table.');
-        fetchMessages();
       }
+      queryClient.invalidateQueries({ queryKey: ['messages', selectedChat.id] });
       setIsUploading(false);
     };
     reader.readAsDataURL(file);
   };
 
-  const [unreadCounts, setUnreadCounts] = useState<{ [key: string]: number }>({});
-
-  useEffect(() => {
-    if (!currentUser) return;
-    
-    fetchContacts();
-    fetchUnreadCounts();
-
-    // Subscribe to online users presence
-    const channel = supabase.channel('online-users', {
-      config: {
-        presence: {
-          key: currentUser?.id,
-        },
-      },
-    });
-
-    channel.on('presence', { event: 'sync' }, () => {
-      const newState = channel.presenceState();
-      const online = new Set(Object.keys(newState));
-      setOnlineUsers(online);
-    }).subscribe(async (status) => {
-      if (status === 'SUBSCRIBED') {
-        await channel.track({ online_at: new Date().toISOString(), user_id: currentUser?.id });
-      }
-    });
-
-    // Global message subscription for unread counts
-    const globalMsgSub = supabase.channel('global_messages')
-      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages', filter: `receiver_id=eq.${currentUser.id}` }, (payload) => {
-        if (selectedChat?.id !== payload.new.sender_id) {
-          setUnreadCounts(prev => ({
-            ...prev,
-            [payload.new.sender_id]: (prev[payload.new.sender_id] || 0) + 1
-          }));
-        }
-      })
-      .subscribe();
-
-    return () => {
-      supabase.removeChannel(channel);
-      supabase.removeChannel(globalMsgSub);
-    };
-  }, [currentUser?.id, selectedChat?.id]);
-
-  const fetchUnreadCounts = async () => {
-    const { data } = await supabase
-      .from('messages')
-      .select('sender_id')
-      .eq('receiver_id', currentUser?.id)
-      .eq('is_read', false);
-    
-    if (data) {
-      const counts: { [key: string]: number } = {};
-      data.forEach((msg: any) => {
-        counts[msg.sender_id] = (counts[msg.sender_id] || 0) + 1;
-      });
-      setUnreadCounts(counts);
-    }
-  };
-
-  useEffect(() => {
-    if (selectedChat) {
-      fetchMessages();
-      checkBlockStatus();
-      
-      // Mark incoming messages as read when opening chat
-      const markAsRead = async () => {
-        await supabase
-          .from('messages')
-          .update({ is_read: true })
-          .eq('receiver_id', currentUser?.id)
-          .eq('sender_id', selectedChat.id)
-          .eq('is_read', false);
-        
-        setUnreadCounts(prev => ({ ...prev, [selectedChat.id]: 0 }));
-      };
-      markAsRead();
-
-      const msgSub = supabase.channel(`msgs_${selectedChat.id}`)
-        .on('postgres_changes', { event: '*', schema: 'public', table: 'messages' }, (payload) => {
-          const msg = (payload.new || payload.old) as any;
-          if (!msg) return;
-          
-          const involvesCurrentChat = 
-            (msg.sender_id === currentUser?.id && msg.receiver_id === selectedChat.id) ||
-            (msg.sender_id === selectedChat.id && msg.receiver_id === currentUser?.id);
-
-          if (!involvesCurrentChat) return;
-
-          // If a new message arrives while chat is open, mark it as read
-          if (payload.eventType === 'INSERT' && msg.receiver_id === currentUser?.id && msg.sender_id === selectedChat.id) {
-            supabase.from('messages').update({ is_read: true }).eq('id', msg.id);
-          }
-          fetchMessages();
-        })
-        .subscribe();
-
-      const friendSub = supabase.channel(`friendship_${selectedChat.id}`)
-        .on('postgres_changes', { event: '*', schema: 'public', table: 'friendships' }, () => {
-             checkBlockStatus();
-        })
-        .subscribe();
-
-      return () => { 
-          supabase.removeChannel(msgSub); 
-          supabase.removeChannel(friendSub);
-      };
-    }
-  }, [selectedChat]);
-
-  const checkBlockStatus = async () => {
-    const { data } = await supabase.from('friendships')
-      .select('*')
-      .or(`and(sender_id.eq.${currentUser?.id},receiver_id.eq.${selectedChat.id}),and(sender_id.eq.${selectedChat.id},receiver_id.eq.${currentUser?.id})`)
-      .eq('status', 'blocked')
-      .single();
-    setIsBlocked(!!data);
-  };
-
   const handleBlockUser = async () => {
     if (!selectedChat) return;
     if (confirm(`Are you sure you want to block ${selectedChat.display_name}?`)) {
-        // Check if friendship exists
         const { data } = await supabase.from('friendships')
             .select('*')
             .or(`and(sender_id.eq.${currentUser?.id},receiver_id.eq.${selectedChat.id}),and(sender_id.eq.${selectedChat.id},receiver_id.eq.${currentUser?.id})`)
@@ -208,24 +196,8 @@ const Messages: React.FC = () => {
         } else {
             await supabase.from('friendships').insert([{ sender_id: currentUser?.id, receiver_id: selectedChat.id, status: 'blocked' }]);
         }
-        setIsBlocked(true);
+        queryClient.invalidateQueries({ queryKey: ['blockStatus', selectedChat.id] });
     }
-  };
-
-  const fetchContacts = async () => {
-    // Fetch all users to chat with (In a real app, only friends)
-    const { data } = await supabase.from('profiles').select('*').neq('id', currentUser?.id);
-    if (data) setContacts(data);
-  };
-
-  const fetchMessages = async () => {
-    if (!selectedChat) return;
-    const { data } = await supabase
-      .from('messages')
-      .select('*')
-      .or(`and(sender_id.eq.${currentUser?.id},receiver_id.eq.${selectedChat.id}),and(sender_id.eq.${selectedChat.id},receiver_id.eq.${currentUser?.id})`)
-      .order('created_at', { ascending: true });
-    if (data) setMessages(data);
   };
 
   useEffect(() => { scrollRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages]);
@@ -241,23 +213,18 @@ const Messages: React.FC = () => {
        created_at: new Date().toISOString()
     };
     
-    // Optimistic Update
-    setMessages(prev => [...prev, { ...newMessage, id: 'temp-' + Date.now() }]);
     setMessageText('');
-
     const { error } = await supabase.from('messages').insert([newMessage]);
-    if (error) fetchMessages(); // Rollback if error
+    if (!error) {
+      queryClient.invalidateQueries({ queryKey: ['messages', selectedChat.id] });
+    }
   };
 
   const deleteMessage = async (id: string) => {
     if (!confirm('Delete this message for everyone?')) return;
-    
-    // Instant deletion UI update (Optimistic)
-    setMessages(prev => prev.filter(m => m.id !== id));
     const { error } = await supabase.from('messages').delete().eq('id', id);
-    if (error) {
-      alert('Failed to delete message.');
-      fetchMessages();
+    if (!error) {
+      queryClient.invalidateQueries({ queryKey: ['messages', selectedChat.id] });
     }
   };
 

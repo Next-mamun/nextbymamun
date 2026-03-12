@@ -16,6 +16,7 @@ import Notifications from '@/pages/Notifications';
 import NextoRobot from '@/components/NextoRobot';
 import { UserProfile as User } from '@/types';
 import { supabase } from '@/lib/supabase';
+import { useWakeLock } from '@/hooks/useWakeLock';
 
 interface AuthContextType {
   currentUser: User | null;
@@ -55,6 +56,7 @@ export const useAuth = () => {
 export const useTheme = () => useContext(ThemeContext);
 
 const App: React.FC = () => {
+  useWakeLock();
   const [currentUser, setCurrentUser] = useState<User | null>(() => {
     const saved = localStorage.getItem('next_media_user');
     return saved ? JSON.parse(saved) : null;

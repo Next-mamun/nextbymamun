@@ -1,49 +1,52 @@
-import React, { useState, useEffect } from 'react';
+import React, { useEffect } from 'react';
 import { Bell, Heart, MessageSquare, UserPlus, Eye, MessageCircle, Check } from 'lucide-react';
 import { useAuth } from '@/App';
 import { supabase } from '../lib/supabase';
 import { useNavigate } from 'react-router-dom';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 
 const Notifications: React.FC = () => {
   const { currentUser } = useAuth();
   const navigate = useNavigate();
-  const [notifications, setNotifications] = useState<any[]>([]);
-  const [loading, setLoading] = useState(true);
+  const queryClient = useQueryClient();
+
+  const { data: notifications = [], isLoading: loading } = useQuery({
+    queryKey: ['notifications', currentUser?.id],
+    queryFn: async () => {
+      if (!currentUser) return [];
+      const { data } = await supabase
+        .from('notifications')
+        .select('*, sender:sender_id(*)')
+        .eq('user_id', currentUser?.id)
+        .order('created_at', { ascending: false })
+        .limit(50);
+      return data || [];
+    },
+    enabled: !!currentUser,
+    staleTime: 1000 * 60, // 1 minute
+  });
 
   useEffect(() => {
     if (!currentUser) return;
-    fetchNotifications();
 
     const sub = supabase
       .channel('public:notifications')
-      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'notifications', filter: `user_id=eq.${currentUser.id}` }, (payload) => {
-        fetchNotifications();
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'notifications', filter: `user_id=eq.${currentUser.id}` }, () => {
+        queryClient.invalidateQueries({ queryKey: ['notifications', currentUser.id] });
       })
       .subscribe();
 
     return () => { supabase.removeChannel(sub); };
-  }, [currentUser]);
-
-  const fetchNotifications = async () => {
-    const { data } = await supabase
-      .from('notifications')
-      .select('*, sender:sender_id(*)')
-      .eq('user_id', currentUser?.id)
-      .order('created_at', { ascending: false })
-      .limit(50);
-    
-    setNotifications(data || []);
-    setLoading(false);
-  };
+  }, [currentUser, queryClient]);
 
   const markAsRead = async (id: string) => {
     await supabase.from('notifications').update({ is_read: true }).eq('id', id);
-    setNotifications(prev => prev.map(n => n.id === id ? { ...n, is_read: true } : n));
+    queryClient.invalidateQueries({ queryKey: ['notifications', currentUser?.id] });
   };
 
   const markAllAsRead = async () => {
     await supabase.from('notifications').update({ is_read: true }).eq('user_id', currentUser?.id);
-    setNotifications(prev => prev.map(n => ({ ...n, is_read: true })));
+    queryClient.invalidateQueries({ queryKey: ['notifications', currentUser?.id] });
   };
 
   const getIcon = (type: string) => {

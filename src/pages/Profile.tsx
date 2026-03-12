@@ -7,18 +7,15 @@ import { supabase } from '../lib/supabase';
 import { VerifiedBadge } from '@/components/VerifiedBadge';
 import ZoomableImage from '@/components/ZoomableImage';
 import { Link } from 'react-router-dom';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 
 const Profile: React.FC = () => {
   const { username } = useParams();
   const { currentUser, setCurrentUser } = useAuth();
   const navigate = useNavigate();
-  const [profile, setProfile] = useState<any>(null);
-  const [userPosts, setUserPosts] = useState<any[]>([]);
+  const queryClient = useQueryClient();
   const [isEditing, setIsEditing] = useState(false);
   const [editData, setEditData] = useState({ display_name: '', bio: '', avatar_url: '', cover_url: '' });
-  const [friendStatus, setFriendStatus] = useState<'none' | 'pending' | 'accepted'>('none');
-  const [friendsCount, setFriendsCount] = useState(0);
-  const [loading, setLoading] = useState(true);
   const [isUploading, setIsUploading] = useState(false);
   const [showPhotoModal, setShowPhotoModal] = useState(false);
   const [feedback, setFeedback] = useState<{ type: 'success' | 'error', msg: string } | null>(null);
@@ -29,24 +26,74 @@ const Profile: React.FC = () => {
 
   const isOwnProfile = currentUser?.username === username;
 
-  useEffect(() => {
-    fetchProfile();
-    
-    // Real-time subscription for post updates (views, likes, comments)
-    const channel = supabase
-      .channel('public:posts')
-      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'posts' }, (payload) => {
-        setUserPosts(prev => prev.map(post => post.id === payload.new.id ? { ...post, ...payload.new } : post));
-      })
-      .subscribe();
-
-    return () => {
-      supabase.removeChannel(channel);
-    };
-  }, [username]);
+  const { data: profile, isLoading: profileLoading } = useQuery({
+    queryKey: ['profile', username],
+    queryFn: async () => {
+      let { data } = await supabase.from('profiles').select('*').ilike('username', username || '').single();
+      
+      if (!data && username && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(username)) {
+         const { data: byId } = await supabase.from('profiles').select('*').eq('id', username).single();
+         data = byId;
+      }
+      return data;
+    },
+    staleTime: 1000 * 60 * 5,
+  });
 
   useEffect(() => {
-    if (loading) return;
+    if (profile) {
+      setEditData({ 
+        display_name: profile.display_name, 
+        bio: profile.bio || '', 
+        avatar_url: profile.avatar_url,
+        cover_url: profile.cover_url || ''
+      });
+    }
+  }, [profile]);
+
+  const { data: userPosts = [], isLoading: postsLoading } = useQuery({
+    queryKey: ['userPosts', profile?.id],
+    queryFn: async () => {
+      if (!profile?.id) return [];
+      const { data } = await supabase
+        .from('posts')
+        .select('*, profiles:user_id(*), comments(*, profiles:user_id(*)), likes(*)')
+        .eq('user_id', profile.id)
+        .order('created_at', { ascending: false });
+      return data || [];
+    },
+    enabled: !!profile?.id,
+    staleTime: 1000 * 60 * 2,
+  });
+
+  const { data: friendStatus = 'none' } = useQuery({
+    queryKey: ['friendStatus', currentUser?.id, profile?.id],
+    queryFn: async () => {
+      if (!profile?.id || isOwnProfile) return 'none';
+      const { data } = await supabase.from('friendships')
+        .select('*')
+        .or(`and(sender_id.eq.${currentUser?.id},receiver_id.eq.${profile.id}),and(sender_id.eq.${profile.id},receiver_id.eq.${currentUser?.id})`)
+        .single();
+      return data?.status || 'none';
+    },
+    enabled: !!profile?.id && !isOwnProfile,
+  });
+
+  const { data: friendsCount = 0 } = useQuery({
+    queryKey: ['friendsCount', profile?.id],
+    queryFn: async () => {
+      if (!profile?.id) return 0;
+      const { count } = await supabase.from('friendships')
+        .select('*', { count: 'exact', head: true })
+        .eq('status', 'accepted')
+        .or(`sender_id.eq.${profile.id},receiver_id.eq.${profile.id}`);
+      return count || 0;
+    },
+    enabled: !!profile?.id,
+  });
+
+  useEffect(() => {
+    if (profileLoading || postsLoading) return;
 
     const obs = new IntersectionObserver((entries) => {
       entries.forEach((entry) => {
@@ -62,53 +109,23 @@ const Profile: React.FC = () => {
 
     observer.current = obs;
 
-    // Observe elements
     setTimeout(() => {
       const elements = document.querySelectorAll('[data-post-id]');
       elements.forEach(el => obs.observe(el));
     }, 100);
 
     return () => obs.disconnect();
-  }, [loading, userPosts.length]); // Only re-run if loading changes or number of posts changes
+  }, [profileLoading, postsLoading, userPosts.length]);
 
   const incrementViewCount = async (postId: string) => {
-    // Optimistic update
-    setUserPosts(prev => prev.map(p => p.id === postId ? { ...p, views: (p.views || 0) + 1 } : p));
-
     try {
       const { data } = await supabase.from('posts').select('views').eq('id', postId).single();
       if (data) {
         await supabase.from('posts').update({ views: (data.views || 0) + 1 }).eq('id', postId);
+        queryClient.invalidateQueries({ queryKey: ['userPosts', profile?.id] });
       }
     } catch (err) {
       console.error('Error updating views:', err);
-    }
-  };
-
-  const fetchProfile = async () => {
-    setLoading(true);
-    // Try to find by username (case-insensitive)
-    let { data } = await supabase.from('profiles').select('*').ilike('username', username || '').single();
-    
-    // If not found by username, and the param looks like a UUID, try to find by ID
-    if (!data && username && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(username)) {
-       const { data: byId } = await supabase.from('profiles').select('*').eq('id', username).single();
-       data = byId;
-    }
-
-    if (data) {
-      setProfile(data);
-      setEditData({ 
-        display_name: data.display_name, 
-        bio: data.bio || '', 
-        avatar_url: data.avatar_url,
-        cover_url: data.cover_url || ''
-      });
-      fetchUserPosts(data.id);
-      checkFriendStatus(data.id);
-      fetchFriendsCount(data.id);
-    } else {
-      setLoading(false);
     }
   };
 
@@ -121,13 +138,12 @@ const Profile: React.FC = () => {
         const base64 = reader.result as string;
         setEditData(prev => ({ ...prev, avatar_url: base64 }));
         
-        // Instant update if not in edit mode
         if (!isEditing) {
           const updateObj = { avatar_url: base64 };
           const { data, error } = await supabase.from('profiles').update(updateObj).eq('id', currentUser?.id).select().single();
           if (!error) {
-            setProfile(data);
             setCurrentUser(data);
+            queryClient.invalidateQueries({ queryKey: ['profile', username] });
           }
         }
         setIsUploading(false);
@@ -136,39 +152,11 @@ const Profile: React.FC = () => {
     }
   };
 
-  const fetchFriendsCount = async (userId: string) => {
-    const { count } = await supabase.from('friendships')
-      .select('*', { count: 'exact', head: true })
-      .eq('status', 'accepted')
-      .or(`sender_id.eq.${userId},receiver_id.eq.${userId}`);
-    setFriendsCount(count || 0);
-  };
-
-  const fetchUserPosts = async (userId: string) => {
-    const { data } = await supabase
-      .from('posts')
-      .select('*, profiles:user_id(*), comments(*, profiles:user_id(*)), likes(*)')
-      .eq('user_id', userId)
-      .order('created_at', { ascending: false });
-    if (data) setUserPosts(data);
-    setLoading(false);
-  };
-
-  const checkFriendStatus = async (targetId: string) => {
-    if (isOwnProfile) return;
-    const { data } = await supabase.from('friendships')
-      .select('*')
-      .or(`and(sender_id.eq.${currentUser?.id},receiver_id.eq.${targetId}),and(sender_id.eq.${targetId},receiver_id.eq.${currentUser?.id})`)
-      .single();
-    if (data) setFriendStatus(data.status);
-    else setFriendStatus('none');
-  };
-
   const handleSendRequest = async () => {
     if (friendStatus !== 'none') return;
     const { error } = await supabase.from('friendships').insert([{ sender_id: currentUser?.id, receiver_id: profile.id }]);
     if (!error) {
-      setFriendStatus('pending');
+      queryClient.invalidateQueries({ queryKey: ['friendStatus', currentUser?.id, profile?.id] });
       setFeedback({ type: 'success', msg: 'Friend request sent successfully!' });
       setTimeout(() => setFeedback(null), 3000);
     } else {
@@ -181,17 +169,17 @@ const Profile: React.FC = () => {
     setIsUploading(true);
     const { data, error } = await supabase.from('profiles').update(editData).eq('id', currentUser?.id).select().single();
     if (!error) { 
-      setProfile(data); 
       setCurrentUser(data); 
       setIsEditing(false); 
+      queryClient.invalidateQueries({ queryKey: ['profile', username] });
     }
     setIsUploading(false);
   };
 
   const deletePost = async (id: string) => {
     if (!confirm('Delete this post?')) return;
-    setUserPosts(prev => prev.filter(p => p.id !== id));
     await supabase.from('posts').delete().eq('id', id);
+    queryClient.invalidateQueries({ queryKey: ['userPosts', profile?.id] });
   };
 
   const getYoutubeId = (url: string | null | undefined) => {
@@ -221,7 +209,7 @@ const Profile: React.FC = () => {
     return null;
   };
 
-  if (loading) return <div className="flex flex-col items-center justify-center p-40 gap-4"><div className="w-10 h-10 border-4 border-[#1877F2] border-t-transparent rounded-full animate-spin"></div><p className="font-bold text-gray-500">Loading profile data...</p></div>;
+  if (profileLoading) return <div className="flex flex-col items-center justify-center p-40 gap-4"><div className="w-10 h-10 border-4 border-[#1877F2] border-t-transparent rounded-full animate-spin"></div><p className="font-bold text-gray-500">Loading profile data...</p></div>;
   if (!profile) return <div className="p-20 text-center text-gray-500 font-bold">Profile not found.</div>;
 
   return (

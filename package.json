@@ -13,6 +13,7 @@
     "@google/genai": "^1.42.0",
     "@supabase/supabase-js": "^2.97.0",
     "@tailwindcss/vite": "^4.2.1",
+    "@tanstack/react-query": "^5.90.21",
     "emoji-picker-react": "^4.18.0",
     "lucide-react": "^0.575.0",
     "motion": "^12.35.2",

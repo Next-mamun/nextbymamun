@@ -22,8 +22,8 @@ const NextoRobot: React.FC = () => {
     >
       <defs>
         <linearGradient id="bodyG" x1="0%" y1="0%" x2="100%" y2="100%">
-          <stop offset="0%" stop-color="#5ee0fd"/>
-          <stop offset="100%" stop-color="#258be7"/>
+          <stop offset="0%" stopColor="#5ee0fd"/>
+          <stop offset="100%" stopColor="#258be7"/>
         </linearGradient>
         <style>
           {`
@@ -46,7 +46,7 @@ const NextoRobot: React.FC = () => {
 
       {/* CHEST */}
       <rect x="400" y="540" width="220" height="120" rx="20" fill="#0c1b2c"/>
-      <text x="425" y="615" font-size="48" fill="#ffffff" font-family="Arial">▶ Next</text>
+      <text x="425" y="615" fontSize="48" fill="#ffffff" fontFamily="Arial">▶ Next</text>
 
       {/* HEAD */}
       <ellipse cx="512" cy="320" rx="220" ry="200" fill="url(#bodyG)"/>
@@ -63,10 +63,10 @@ const NextoRobot: React.FC = () => {
       <circle cx="650" cy="310" r="30" fill="#ff7ea8" opacity=".8"/>
 
       {/* ANTENNAS */}
-      <line x1="400" y1="170" x2="360" y2="100" stroke="#4ba3f5" stroke-width="20"/>
+      <line x1="400" y1="170" x2="360" y2="100" stroke="#4ba3f5" strokeWidth="20"/>
       <circle cx="360" cy="100" r="20" fill="#4ba3f5"/>
 
-      <line x1="620" y1="170" x2="660" y2="100" stroke="#4ba3f5" stroke-width="20"/>
+      <line x1="620" y1="170" x2="660" y2="100" stroke="#4ba3f5" strokeWidth="20"/>
       <circle cx="660" cy="100" r="20" fill="#4ba3f5"/>
 
       {/* SHADOW */}

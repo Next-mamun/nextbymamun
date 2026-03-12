@@ -5,49 +5,20 @@ import { useAuth } from '@/App';
 import { supabase } from '../lib/supabase';
 import { useNavigate } from 'react-router-dom';
 import { VerifiedBadge } from '@/components/VerifiedBadge';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 
 const Friends: React.FC = () => {
   const { currentUser } = useAuth();
   const navigate = useNavigate();
-  const [requests, setRequests] = useState<any[]>([]);
-  const [friends, setFriends] = useState<any[]>([]);
-  const [discovery, setDiscovery] = useState<any[]>([]);
-  const [blockedUsers, setBlockedUsers] = useState<any[]>([]);
-  const [loading, setLoading] = useState(true);
+  const queryClient = useQueryClient();
   const [searchQuery, setSearchQuery] = useState('');
   const [activeTab, setActiveTab] = useState<'friends' | 'requests' | 'discover' | 'blocked'>('discover');
 
-  useEffect(() => {
-    fetchFriendsData();
-    
-    // Subscribe to friendship updates (requests, accepts, blocks)
-    const friendshipSub = supabase.channel('friendship_updates')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'friendships' }, () => fetchFriendsData(true))
-      .subscribe();
+  const { data: friendsData, isLoading: loading } = useQuery({
+    queryKey: ['friends', searchQuery],
+    queryFn: async () => {
+      if (!currentUser?.id) return { requests: [], friends: [], discovery: [], blockedUsers: [] };
 
-    // Subscribe to profile updates (new users joining)
-    const profileSub = supabase.channel('profile_updates')
-      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'profiles' }, () => fetchFriendsData(true))
-      .subscribe();
-
-    return () => { 
-      supabase.removeChannel(friendshipSub); 
-      supabase.removeChannel(profileSub);
-    };
-  }, [currentUser]);
-
-  useEffect(() => {
-    const timeoutId = setTimeout(() => {
-      fetchFriendsData(true); // Search should be silent or show a different loading state, but silent is better than full screen spinner
-    }, 300);
-    return () => clearTimeout(timeoutId);
-  }, [searchQuery]);
-
-  const fetchFriendsData = async (silent = false) => {
-    if (!currentUser?.id) return;
-    if (!silent) setLoading(true);
-
-    try {
       // 1. Fetch relationships
       const { data: allRel, error: relError } = await supabase
         .from('friendships')
@@ -130,17 +101,34 @@ const Friends: React.FC = () => {
         });
       };
 
-      setRequests(filterList(reqs));
-      setFriends(filterList(frs));
-      setBlockedUsers(filterList(blks));
-      setDiscovery(filterList(disc));
+      return {
+        requests: filterList(reqs),
+        friends: filterList(frs),
+        blockedUsers: filterList(blks),
+        discovery: filterList(disc)
+      };
+    },
+    staleTime: 1000 * 60 * 2, // 2 minutes
+  });
 
-    } catch (err) {
-      console.error("Error in fetchFriendsData:", err);
-    } finally {
-      setLoading(false);
-    }
-  };
+  const { requests = [], friends = [], discovery = [], blockedUsers = [] } = friendsData || {};
+
+  useEffect(() => {
+    // Subscribe to friendship updates (requests, accepts, blocks)
+    const friendshipSub = supabase.channel('friendship_updates')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'friendships' }, () => queryClient.invalidateQueries({ queryKey: ['friends'] }))
+      .subscribe();
+
+    // Subscribe to profile updates (new users joining)
+    const profileSub = supabase.channel('profile_updates')
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'profiles' }, () => queryClient.invalidateQueries({ queryKey: ['friends'] }))
+      .subscribe();
+
+    return () => { 
+      supabase.removeChannel(friendshipSub); 
+      supabase.removeChannel(profileSub);
+    };
+  }, [queryClient]);
 
   const handleStatus = async (id: string, status: 'accepted' | 'delete' | 'blocked') => {
     if (status === 'delete') {
@@ -148,34 +136,29 @@ const Friends: React.FC = () => {
     } else {
         await supabase.from('friendships').update({ status }).eq('id', id);
     }
-    fetchFriendsData(true);
+    queryClient.invalidateQueries({ queryKey: ['friends'] });
   };
 
   const sendRequest = async (targetId: string) => {
-    // Check if a relationship already exists (e.g., they blocked me, or I blocked them and forgot)
-    // For now, just try insert.
     const { error } = await supabase.from('friendships').insert([{ sender_id: currentUser?.id, receiver_id: targetId, status: 'pending' }]);
     if (error) {
         console.error("Error sending request:", error);
-        // If error (e.g. duplicate), maybe check if we need to update?
     }
-    fetchFriendsData(true);
+    queryClient.invalidateQueries({ queryKey: ['friends'] });
   };
 
   const blockUser = async (targetId: string, friendshipId?: string) => {
     if (friendshipId) {
-        // Update existing relationship to blocked
         await supabase.from('friendships').update({ status: 'blocked', sender_id: currentUser?.id, receiver_id: targetId }).eq('id', friendshipId);
     } else {
-        // Create new blocked relationship
         await supabase.from('friendships').insert([{ sender_id: currentUser?.id, receiver_id: targetId, status: 'blocked' }]);
     }
-    fetchFriendsData(true);
+    queryClient.invalidateQueries({ queryKey: ['friends'] });
   };
 
   const unblockUser = async (friendshipId: string) => {
       await supabase.from('friendships').delete().eq('id', friendshipId);
-      fetchFriendsData(true);
+      queryClient.invalidateQueries({ queryKey: ['friends'] });
   }
 
   return (

@@ -1,6 +1,6 @@
 
 import React, { useState, useEffect, useRef } from 'react';
-import { Image, Video, ThumbsUp, MessageSquare, Share2, Send, Trash2, X, CheckCircle, Clapperboard, Link as LinkIcon, Search, Eye } from 'lucide-react';
+import { Image as LucideImage, Video, ThumbsUp, MessageSquare, Share2, Send, Trash2, X, CheckCircle, Clapperboard, Link as LinkIcon, Search, Eye, Camera, Pencil } from 'lucide-react';
 import { VerifiedBadge } from '@/components/VerifiedBadge';
 import ZoomableImage from '@/components/ZoomableImage';
 import ProfilePhoto from '@/components/ProfilePhoto';
@@ -9,26 +9,26 @@ import EmbedPlayer from '@/components/EmbedPlayer';
 import { useAuth } from '@/App';
 import { supabase } from '../lib/supabase';
 import { Link } from 'react-router-dom';
+import { useQuery, useInfiniteQuery, useQueryClient } from '@tanstack/react-query';
+import { CameraCapture, MediaEditor } from '@/components/MediaTools';
 
 const Feed: React.FC = () => {
   const { currentUser } = useAuth();
-  const [posts, setPosts] = useState<any[]>([]);
-  const [reels, setReels] = useState<any[]>([]);
+  const queryClient = useQueryClient();
   const [newPostContent, setNewPostContent] = useState('');
   const [selectedFile, setSelectedFile] = useState<string | null>(null);
   const [fileType, setFileType] = useState<'image' | 'video' | 'text'>('text');
-  const [loading, setLoading] = useState(true);
   
   const [isUploading, setIsUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
   const [uploadSuccess, setUploadSuccess] = useState(false);
-  const [page, setPage] = useState(1);
-  const [hasMore, setHasMore] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedCategory, setSelectedCategory] = useState('All');
   const [postCategory, setPostCategory] = useState('Entertainment');
   const [showCategoryInput, setShowCategoryInput] = useState(false);
   const [customCategory, setCustomCategory] = useState('');
+  const [showCamera, setShowCamera] = useState(false);
+  const [showEditor, setShowEditor] = useState(false);
   
   const categories = ['All', 'Entertainment', 'Learning', 'AI', 'Technology', 'Music', 'Gaming', 'News', 'Lifestyle', 'Sports', 'Art'];
   const POSTS_PER_PAGE = 10;
@@ -39,6 +39,52 @@ const Feed: React.FC = () => {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const viewedPostsRef = useRef<Set<string>>(new Set());
   const observer = useRef<IntersectionObserver | null>(null);
+
+  // Fetch Reels
+  const { data: reels = [] } = useQuery({
+    queryKey: ['reels'],
+    queryFn: async () => {
+      const { data } = await supabase
+        .from('reels')
+        .select('*, profiles:user_id(*), likes:reel_likes(*)')
+        .limit(5)
+        .order('created_at', { ascending: false });
+      return data || [];
+    },
+    staleTime: 1000 * 60 * 5, // 5 minutes
+  });
+
+  // Fetch Posts with Infinite Scroll
+  const {
+    data: postsData,
+    fetchNextPage,
+    hasNextPage,
+    isFetchingNextPage,
+    isLoading: postsLoading,
+    refetch: refetchPosts
+  } = useInfiniteQuery({
+    queryKey: ['posts', selectedCategory],
+    queryFn: async ({ pageParam = 0 }) => {
+      let query = supabase
+        .from('posts')
+        .select('*, profiles:user_id(*), comments(*, profiles:user_id(*)), likes(*)')
+        .order('created_at', { ascending: false });
+
+      if (selectedCategory !== 'All') {
+        query = query.eq('category', selectedCategory);
+      }
+
+      const { data } = await query.range(pageParam * POSTS_PER_PAGE, (pageParam + 1) * POSTS_PER_PAGE - 1);
+      return data || [];
+    },
+    initialPageParam: 0,
+    getNextPageParam: (lastPage, allPages) => {
+      return lastPage.length === POSTS_PER_PAGE ? allPages.length : undefined;
+    },
+    staleTime: 1000 * 60 * 2, // 2 minutes
+  });
+
+  const posts = postsData?.pages.flat() || [];
 
   useEffect(() => {
     const obs = new IntersectionObserver((entries) => {
@@ -69,53 +115,18 @@ const Feed: React.FC = () => {
   };
 
   useEffect(() => {
-    fetchEverything();
-
     const sub = supabase
       .channel('feed_complex')
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'posts' }, () => {
-        fetchEverything(1, false);
+        queryClient.invalidateQueries({ queryKey: ['posts'] });
       })
       .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'posts' }, () => {
-        fetchEverything(1, false);
+        queryClient.invalidateQueries({ queryKey: ['posts'] });
       })
       .subscribe();
 
     return () => { supabase.removeChannel(sub); };
-  }, [selectedCategory]);
-
-  const fetchEverything = async (currentPage = 1, append = false) => {
-    let query = supabase
-      .from('posts')
-      .select('*, profiles:user_id(*), comments(*, profiles:user_id(*)), likes(*)')
-      .order('created_at', { ascending: false });
-
-    if (selectedCategory !== 'All') {
-      query = query.eq('category', selectedCategory);
-    }
-
-    const { data: postsData } = await query.range((currentPage - 1) * POSTS_PER_PAGE, currentPage * POSTS_PER_PAGE - 1);
-    
-    if (postsData) {
-      if (append) {
-        setPosts(prev => [...prev, ...postsData]);
-      } else {
-        setPosts(postsData);
-      }
-      setHasMore(postsData.length === POSTS_PER_PAGE);
-    }
-
-    if (!append) {
-      const { data: reelsData } = await supabase
-        .from('reels')
-        .select('*, profiles:user_id(*), likes:reel_likes(*)')
-        .limit(5)
-        .order('created_at', { ascending: false });
-
-      if (reelsData) setReels(reelsData);
-    }
-    setLoading(false);
-  };
+  }, [queryClient]);
 
   const filteredPosts = posts.filter(p => 
     p.content?.toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -123,29 +134,44 @@ const Feed: React.FC = () => {
   );
 
   const loadMore = () => {
-    const nextPage = page + 1;
-    setPage(nextPage);
-    fetchEverything(nextPage, true);
+    if (hasNextPage && !isFetchingNextPage) {
+      fetchNextPage();
+    }
+  };
+
+  const downscaleTo360p = async (base64: string, type: 'image' | 'video'): Promise<string> => {
+    return new Promise((resolve) => {
+      if (type === 'image') {
+        const img = new Image();
+        img.src = base64;
+        img.onload = () => {
+          const canvas = document.createElement('canvas');
+          const targetHeight = 360;
+          const aspectRatio = img.width / img.height;
+          const targetWidth = Math.round(targetHeight * aspectRatio);
+          canvas.width = targetWidth;
+          canvas.height = targetHeight;
+          const ctx = canvas.getContext('2d');
+          ctx?.drawImage(img, 0, 0, targetWidth, targetHeight);
+          resolve(canvas.toDataURL('image/jpeg', 0.7));
+        };
+      } else {
+        resolve(base64);
+      }
+    });
   };
 
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
-      if (file.size > 50 * 1024 * 1024) {
-        alert('File is too large. Max 50MB.');
-        return;
-      }
       const reader = new FileReader();
-      reader.onprogress = (data) => {
-        if (data.lengthComputable) {
-          setUploadProgress(Math.round((data.loaded / data.total) * 100));
-        }
-      };
       reader.onloadstart = () => { setIsUploading(true); setUploadProgress(0); };
       reader.onloadend = async () => {
         const base64 = reader.result as string;
         const type = file.type.startsWith('video') ? 'video' : 'image';
-        setSelectedFile(base64);
+        
+        const downscaled = await downscaleTo360p(base64, type);
+        setSelectedFile(downscaled);
         setFileType(type);
         setIsUploading(false);
         setUploadProgress(0);
@@ -249,7 +275,7 @@ const Feed: React.FC = () => {
         setCustomCategory('');
         setUploadSuccess(true);
         setTimeout(() => setUploadSuccess(false), 3000);
-        fetchEverything(1, false);
+        queryClient.invalidateQueries({ queryKey: ['posts'] });
       }, 500);
     } catch (error: any) {
       console.error('Post creation error:', error);
@@ -322,9 +348,18 @@ const Feed: React.FC = () => {
               ) : (
                 <video src={selectedFile} className="h-full" />
               )}
-              <button onClick={() => setSelectedFile(null)} className="absolute top-2 right-2 bg-black/50 text-white p-1 rounded-full">
-                <X size={14} />
-              </button>
+              <div className="absolute top-2 right-2 flex gap-2">
+                <button 
+                  onClick={() => setShowEditor(true)}
+                  className="bg-black/50 text-white p-1.5 rounded-full hover:bg-black/70 transition-all"
+                  title="Edit Media"
+                >
+                  <Pencil size={14} />
+                </button>
+                <button onClick={() => setSelectedFile(null)} className="bg-black/50 text-white p-1.5 rounded-full hover:bg-black/70 transition-all">
+                  <X size={14} />
+                </button>
+              </div>
             </div>
           )}
           
@@ -352,7 +387,8 @@ const Feed: React.FC = () => {
         <div className="flex justify-between items-center border-t border-gray-100 dark:border-gray-800 px-4 py-2 bg-white dark:bg-black flex-wrap gap-2">
           <div className="flex gap-1 flex-wrap">
             <input type="file" ref={fileInputRef} hidden onChange={(e) => handleFileSelect(e)} accept="image/*,video/*" />
-            <button onClick={() => fileInputRef.current?.click()} className="flex items-center gap-2 px-3 py-2 hover:bg-gray-100 dark:hover:bg-gray-900 rounded-lg text-green-500 transition-colors"><Image size={22} /><span className="font-bold text-gray-700 dark:text-gray-300 text-sm">Photo/Video</span></button>
+            <button onClick={() => fileInputRef.current?.click()} className="flex items-center gap-2 px-3 py-2 hover:bg-gray-100 dark:hover:bg-gray-900 rounded-lg text-green-500 transition-colors"><LucideImage size={22} /><span className="font-bold text-gray-700 dark:text-gray-300 text-sm">Photo/Video</span></button>
+            <button onClick={() => setShowCamera(true)} className="flex items-center gap-2 px-3 py-2 hover:bg-gray-100 dark:hover:bg-gray-900 rounded-lg text-blue-500 transition-colors"><Camera size={22} /><span className="font-bold text-gray-700 dark:text-gray-300 text-sm">Camera</span></button>
             <button onClick={() => setShowYoutube(!showYoutube)} className="flex items-center gap-2 px-3 py-2 hover:bg-gray-100 dark:hover:bg-gray-900 rounded-lg text-[#1877F2] transition-colors"><LinkIcon size={22} /><span className="font-bold text-gray-700 dark:text-gray-300 text-sm">Embed Video</span></button>
             {(newPostContent.trim() || selectedFile || ytLink) && (
               <div className="relative group">
@@ -429,7 +465,7 @@ const Feed: React.FC = () => {
       )}
 
       {/* Combined Feed items */}
-      {loading && page === 1 ? (
+      {postsLoading && posts.length === 0 ? (
         <div className="flex flex-col items-center justify-center p-20 gap-4"><div className="w-8 h-8 border-4 border-[#1877F2] border-t-transparent rounded-full animate-spin"></div><p className="font-bold text-gray-500">Fast Loading...</p></div>
       ) : (
         <>
@@ -437,29 +473,53 @@ const Feed: React.FC = () => {
             <PostCard 
               key={post.id} 
               post={post} 
-              onUpdate={() => fetchEverything(1, false)} 
               onObserve={(el) => observer.current?.observe(el)}
-              onDelete={async () => { await supabase.from('posts').delete().eq('id', post.id); fetchEverything(1, false); }} 
             />
           ))}
-          {hasMore && (
-            <button onClick={loadMore} className="w-full py-3 bg-white dark:bg-black border dark:border-gray-800 rounded-xl font-bold text-gray-600 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-900 transition-colors shadow-sm">
-              Load More Posts
+          {hasNextPage && (
+            <button onClick={loadMore} disabled={isFetchingNextPage} className="w-full py-3 bg-white dark:bg-black border dark:border-gray-800 rounded-xl font-bold text-gray-600 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-900 transition-colors shadow-sm disabled:opacity-50">
+              {isFetchingNextPage ? 'Loading more...' : 'Load More Posts'}
             </button>
           )}
-          {!hasMore && posts.length > 0 && (
+          {!hasNextPage && posts.length > 0 && (
             <p className="text-center text-gray-400 font-bold py-4">You're all caught up!</p>
           )}
         </>
       )}
 
       {/* Story Viewer Modal Removed */}
+
+      {/* Camera & Editor Modals */}
+      {showCamera && (
+        <CameraCapture 
+          onCapture={async (url, type) => {
+            const downscaled = await downscaleTo360p(url, type);
+            setSelectedFile(downscaled);
+            setFileType(type);
+            setShowCamera(false);
+          }}
+          onCancel={() => setShowCamera(false)}
+        />
+      )}
+
+      {showEditor && selectedFile && (
+        <MediaEditor 
+          mediaUrl={selectedFile}
+          mediaType={fileType as 'image' | 'video'}
+          onSave={(processed) => {
+            setSelectedFile(processed);
+            setShowEditor(false);
+          }}
+          onCancel={() => setShowEditor(false)}
+        />
+      )}
     </div>
   );
 };
 
-const PostCard: React.FC<{ post: any, onUpdate: () => void, onDelete: () => void, onObserve: (el: HTMLElement) => void }> = ({ post, onUpdate, onDelete, onObserve }) => {
+const PostCard: React.FC<{ post: any, onObserve: (el: HTMLElement) => void }> = ({ post, onObserve }) => {
   const { currentUser } = useAuth();
+  const queryClient = useQueryClient();
   const [comment, setComment] = useState('');
   const [showComments, setShowComments] = useState(false);
   const [localComments, setLocalComments] = useState<any[]>(post.comments || []);
@@ -496,9 +556,7 @@ const PostCard: React.FC<{ post: any, onUpdate: () => void, onDelete: () => void
       } else {
         await supabase.from('likes').insert([{ post_id: post.id, user_id: currentUser?.id }]);
       }
-      // We don't necessarily need to call onUpdate() here if we trust the optimistic update,
-      // but calling it in the background keeps data fresh.
-      onUpdate();
+      queryClient.invalidateQueries({ queryKey: ['posts'] });
     } catch (error) {
       // Revert on failure
       setIsLiked(isLiked);
@@ -527,11 +585,18 @@ const PostCard: React.FC<{ post: any, onUpdate: () => void, onDelete: () => void
 
     try {
       await supabase.from('comments').insert([{ post_id: post.id, user_id: currentUser?.id, content: commentText }]);
-      onUpdate();
+      queryClient.invalidateQueries({ queryKey: ['posts'] });
     } catch (error) {
       // Revert on error
       setLocalComments(post.comments || []);
       console.error("Failed to post comment", error);
+    }
+  };
+
+  const handleDelete = async () => {
+    if (window.confirm('Are you sure you want to delete this post?')) {
+      await supabase.from('posts').delete().eq('id', post.id);
+      queryClient.invalidateQueries({ queryKey: ['posts'] });
     }
   };
 
@@ -549,7 +614,7 @@ const PostCard: React.FC<{ post: any, onUpdate: () => void, onDelete: () => void
             <p className="text-[12px] text-gray-500 dark:text-gray-400 font-medium">{new Date(post.created_at).toLocaleString()}</p>
           </div>
         </Link>
-        {post.user_id === currentUser?.id && <button onClick={onDelete} className="p-2 text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-full transition-colors"><Trash2 size={18} /></button>}
+        {post.user_id === currentUser?.id && <button onClick={handleDelete} className="p-2 text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-full transition-colors"><Trash2 size={18} /></button>}
       </div>
       <p className="px-4 pb-3 text-[15px] text-gray-800 dark:text-gray-200 leading-relaxed font-medium">{post.content}</p>
       {post.media_url && (
@@ -615,6 +680,7 @@ const PostCard: React.FC<{ post: any, onUpdate: () => void, onDelete: () => void
           </form>
         </div>
       )}
+      {/* Camera & Editor Modals */}
     </div>
   );
 };
