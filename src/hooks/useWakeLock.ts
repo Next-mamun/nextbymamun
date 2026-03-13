@@ -15,7 +15,11 @@ export const useWakeLock = () => {
         });
       }
     } catch (err: any) {
-      console.error(`${err.name}, ${err.message}`);
+      if (err.name === 'NotAllowedError') {
+        console.warn('Wake Lock request was denied:', err.message);
+      } else {
+        console.error(`${err.name}, ${err.message}`);
+      }
     }
   };
 

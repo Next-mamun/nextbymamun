@@ -101,11 +101,20 @@ const Friends: React.FC = () => {
         });
       };
 
+      const uniqueById = (list: any[]) => {
+        const map = new Map();
+        list.forEach(item => {
+          const id = item.id;
+          if (!map.has(id)) map.set(id, item);
+        });
+        return Array.from(map.values());
+      };
+
       return {
-        requests: filterList(reqs),
-        friends: filterList(frs),
-        blockedUsers: filterList(blks),
-        discovery: filterList(disc)
+        requests: uniqueById(filterList(reqs)),
+        friends: uniqueById(filterList(frs)),
+        blockedUsers: uniqueById(filterList(blks)),
+        discovery: uniqueById(filterList(disc))
       };
     },
     staleTime: 1000 * 60 * 2, // 2 minutes
@@ -143,6 +152,14 @@ const Friends: React.FC = () => {
     const { error } = await supabase.from('friendships').insert([{ sender_id: currentUser?.id, receiver_id: targetId, status: 'pending' }]);
     if (error) {
         console.error("Error sending request:", error);
+    }
+    queryClient.invalidateQueries({ queryKey: ['friends'] });
+  };
+
+  const cancelRequest = async (friendshipId: string) => {
+    const { error } = await supabase.from('friendships').delete().eq('id', friendshipId);
+    if (error) {
+        console.error("Error canceling request:", error);
     }
     queryClient.invalidateQueries({ queryKey: ['friends'] });
   };
@@ -233,9 +250,9 @@ const Friends: React.FC = () => {
                         </p>
                         <p className="text-xs text-gray-500 mb-4 font-medium italic">@{p.username}</p>
                         {p.is_pending ? (
-                            <div className="w-full bg-blue-50 dark:bg-blue-900/20 text-blue-600 dark:text-blue-400 py-2 rounded-xl font-bold flex items-center justify-center gap-2">
-                                <Check size={16}/> Request Sent
-                            </div>
+                            <button onClick={() => cancelRequest(p.friendship_id)} className="w-full bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-400 py-2 rounded-xl font-bold flex items-center justify-center gap-2 hover:bg-red-100 dark:hover:bg-red-900/40 transition-all">
+                                <X size={16}/> Cancel Request
+                            </button>
                         ) : (
                             <button onClick={() => sendRequest(p.id)} className="w-full bg-[#f0f2f5] dark:bg-gray-900 text-gray-800 dark:text-white py-2 rounded-xl font-bold flex items-center justify-center gap-2 hover:bg-blue-50 dark:hover:bg-blue-900/20 hover:text-blue-600 dark:hover:text-blue-400 transition-all">
                                 <UserPlus size={16}/> Add Friend

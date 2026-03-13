@@ -1,13 +1,15 @@
 
 import React, { useState, useEffect, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { Camera, Edit2, Plus, Save, X, MessageCircle, UserPlus, Check, Trash2, ThumbsUp, MessageSquare, Users, RefreshCw, Calendar, CheckCircle, Eye } from 'lucide-react';
+import { Camera, Edit2, Plus, Save, X, MessageCircle, UserPlus, Check, Users, RefreshCw, Calendar, CheckCircle } from 'lucide-react';
 import { useAuth } from '@/App';
 import { supabase } from '../lib/supabase';
 import { VerifiedBadge } from '@/components/VerifiedBadge';
 import ZoomableImage from '@/components/ZoomableImage';
 import { Link } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
+
+import PostCard from '@/components/PostCard';
 
 const Profile: React.FC = () => {
   const { username } = useParams();
@@ -63,21 +65,23 @@ const Profile: React.FC = () => {
       return data || [];
     },
     enabled: !!profile?.id,
-    staleTime: 1000 * 60 * 2,
+    staleTime: 1000 * 60 * 5, // 5 minutes
   });
 
-  const { data: friendStatus = 'none' } = useQuery({
-    queryKey: ['friendStatus', currentUser?.id, profile?.id],
+  const { data: friendship } = useQuery({
+    queryKey: ['friendship', currentUser?.id, profile?.id],
     queryFn: async () => {
-      if (!profile?.id || isOwnProfile) return 'none';
+      if (!profile?.id || isOwnProfile) return null;
       const { data } = await supabase.from('friendships')
         .select('*')
         .or(`and(sender_id.eq.${currentUser?.id},receiver_id.eq.${profile.id}),and(sender_id.eq.${profile.id},receiver_id.eq.${currentUser?.id})`)
         .single();
-      return data?.status || 'none';
+      return data;
     },
     enabled: !!profile?.id && !isOwnProfile,
   });
+
+  const friendStatus = friendship?.status || 'none';
 
   const { data: friendsCount = 0 } = useQuery({
     queryKey: ['friendsCount', profile?.id],
@@ -153,16 +157,24 @@ const Profile: React.FC = () => {
   };
 
   const handleSendRequest = async () => {
-    if (friendStatus !== 'none') return;
-    const { error } = await supabase.from('friendships').insert([{ sender_id: currentUser?.id, receiver_id: profile.id }]);
-    if (!error) {
-      queryClient.invalidateQueries({ queryKey: ['friendStatus', currentUser?.id, profile?.id] });
-      setFeedback({ type: 'success', msg: 'Friend request sent successfully!' });
-      setTimeout(() => setFeedback(null), 3000);
-    } else {
-      setFeedback({ type: 'error', msg: 'Failed to send friend request.' });
-      setTimeout(() => setFeedback(null), 3000);
+    if (!friendship) {
+        const { error } = await supabase.from('friendships').insert([{ sender_id: currentUser?.id, receiver_id: profile.id, status: 'pending' }]);
+        if (!error) {
+            queryClient.invalidateQueries({ queryKey: ['friendship', currentUser?.id, profile?.id] });
+            setFeedback({ type: 'success', msg: 'Friend request sent successfully!' });
+        } else {
+            setFeedback({ type: 'error', msg: 'Failed to send friend request.' });
+        }
+    } else if (friendship.status === 'pending') {
+        const { error } = await supabase.from('friendships').delete().eq('id', friendship.id);
+        if (!error) {
+            queryClient.invalidateQueries({ queryKey: ['friendship', currentUser?.id, profile?.id] });
+            setFeedback({ type: 'success', msg: 'Friend request cancelled.' });
+        } else {
+            setFeedback({ type: 'error', msg: 'Failed to cancel friend request.' });
+        }
     }
+    setTimeout(() => setFeedback(null), 3000);
   };
 
   const handleUpdate = async () => {
@@ -313,52 +325,11 @@ const Profile: React.FC = () => {
                 <p>No posts published by {profile.display_name} yet.</p>
               </div>
             ) : userPosts.map(post => (
-              <div key={post.id} data-post-id={post.id} style={{ contentVisibility: 'auto', containIntrinsicSize: '0 500px' }} className="bg-white dark:bg-black rounded-xl shadow-sm border border-gray-100 dark:border-gray-800 overflow-hidden">
-                <div className="p-4 flex justify-between items-center">
-                  <div className="flex gap-3">
-                    <img src={profile.avatar_url} className="w-10 h-10 rounded-full object-cover shadow-sm border dark:border-gray-700" />
-                    <div>
-                      <p className="font-bold text-gray-900 dark:text-white flex items-center gap-2">
-                        {profile.display_name}
-                        {profile.is_verified && <VerifiedBadge />}
-                        {post.category && <span className="text-[10px] bg-orange-50 dark:bg-orange-900/20 text-orange-600 dark:text-orange-400 px-2 py-0.5 rounded-full border border-orange-100 dark:border-orange-800">{post.category}</span>}
-                      </p>
-                      <p className="text-xs text-gray-500 dark:text-gray-400">{new Date(post.created_at).toLocaleString()}</p>
-                    </div>
-                  </div>
-                  {isOwnProfile && <button onClick={() => deletePost(post.id)} className="p-2 text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-full"><Trash2 size={18} /></button>}
-                </div>
-                {post.content && <p className="px-4 pb-3 text-gray-800 dark:text-gray-200 leading-relaxed font-medium">{post.content}</p>}
-                {post.media_url && (
-                  <div className="bg-black w-full">
-                    {post.media_url.includes('/embed/') || post.media_url.includes('plugins/video.php') ? (
-                      <div className="relative pt-[56.25%] w-full">
-                        <iframe 
-                          src={post.media_url.includes('youtube.com/embed') ? `${post.media_url}${post.media_url.includes('?') ? '&' : '?'}rel=0&modestbranding=1&iv_load_policy=3&controls=1&disablekb=1&autoplay=0` : post.media_url}
-                          className="absolute top-0 left-0 w-full h-full"
-                          frameBorder="0"
-                          allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
-                          allowFullScreen
-                          sandbox="allow-scripts allow-same-origin allow-presentation allow-forms"
-                          title="profile-post-embed"
-                        />
-                      </div>
-                    ) : post.media_type === 'image' ? (
-                      <ZoomableImage src={post.media_url} className="w-full max-h-[500px] object-contain" referrerPolicy="no-referrer" />
-                    ) : (
-                      <video src={post.media_url} controls className="w-full max-h-[500px]" />
-                    )}
-                  </div>
-                )}
-                <div className="px-4 py-2 border-t border-gray-100 dark:border-gray-800 flex justify-between items-center bg-gray-50 dark:bg-gray-900">
-                   <div className="flex items-center gap-4">
-                      <div className="flex items-center gap-1.5 text-gray-600 dark:text-gray-400 font-bold text-sm"><ThumbsUp size={16} /> {post.likes?.length || 0}</div>
-                      <div className="flex items-center gap-1.5 text-gray-600 dark:text-gray-400 font-bold text-sm"><MessageCircle size={16} /> {post.comments?.length || 0}</div>
-                      <div className="flex items-center gap-1.5 text-gray-600 dark:text-gray-400 font-bold text-sm"><Eye size={16} /> {post.views || 0} Views</div>
-                   </div>
-                   <button onClick={() => navigate('/')} className="text-[#1877F2] font-bold text-sm hover:underline">View in Feed</button>
-                </div>
-              </div>
+              <PostCard 
+                key={post.id} 
+                post={post} 
+                isProfileView={true} 
+              />
             ))}
           </div>
         </div>

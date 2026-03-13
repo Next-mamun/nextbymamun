@@ -89,10 +89,10 @@ const NextoRobot: React.FC = () => {
           setTimeout(() => setIsDragging(false), 100);
           document.body.style.overflow = ''; // Re-enable scrolling
         }}
-        initial={{ x: window.innerWidth - 100, y: window.innerHeight - 150 }}
-        className="fixed z-[9999] touch-none select-none"
+        className="fixed bottom-[10vmin] right-[5vmin] z-[9999] touch-none select-none"
         whileHover={{ scale: 1.1 }}
         whileTap={{ scale: 0.9 }}
+        whileDrag={{ scale: 1.2, cursor: 'grabbing' }}
         onClick={() => {
           if (!isDragging) {
             setShowWindow(true);

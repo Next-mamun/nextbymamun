@@ -16,6 +16,9 @@ const queryClient = new QueryClient({
   },
 });
 
+// Expose queryClient globally for real-time invalidation from App.tsx listeners
+(window as any).queryClient = queryClient;
+
 // Register service worker
 registerSW({
   onNeedRefresh() {

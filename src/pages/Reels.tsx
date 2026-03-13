@@ -48,9 +48,11 @@ const Reels: React.FC = () => {
         .order('created_at', { ascending: false });
       
       if (data) {
-        setReels(data as any);
-        if (data.length > 0 && !activeReelId) {
-          setActiveReelId(data[0].id);
+        // Filter duplicate reels by ID
+        const uniqueReels = Array.from(new Map(data.map((r: any) => [r.id, r])).values());
+        setReels(uniqueReels as any);
+        if (uniqueReels.length > 0 && !activeReelId) {
+          setActiveReelId(uniqueReels[0].id);
         }
       }
     } catch (err) {
@@ -166,13 +168,13 @@ const Reels: React.FC = () => {
          payload.source_type = 'youtube'; // Hack to bypass CHECK constraint if it exists
          const { error: fallbackError } = await supabase.from('reels').insert([payload]);
          if (fallbackError) {
-           alert('Failed to share reel: ' + fallbackError.message);
+           alert('Failed to share video: ' + fallbackError.message);
            setIsUploading(false);
            setUploadProgress(0);
            return;
          }
       } else {
-         alert('Failed to share reel: ' + error.message);
+         alert('Failed to share video: ' + error.message);
          setIsUploading(false);
          setUploadProgress(0);
          return;
@@ -194,32 +196,32 @@ const Reels: React.FC = () => {
   };
 
   const deleteReel = async (id: string) => {
-    if (!confirm('Delete this reel?')) return;
+    if (!confirm('Delete this video?')) return;
     await supabase.from('reels').delete().eq('id', id);
     fetchReels();
   };
 
-  if (loading) return <div className="h-screen flex items-center justify-center text-[#1877F2] font-black">Loading Reels...</div>;
+  if (loading) return <div className="h-screen flex items-center justify-center text-[#1877F2] font-black">Loading Videos...</div>;
 
   return (
-    <div className="h-[calc(100vh-56px)] overflow-y-scroll snap-y snap-mandatory bg-black scroll-smooth">
+    <div className="h-[90vmin] overflow-y-scroll snap-y snap-mandatory bg-black scroll-smooth">
       {/* Floating Actions */}
-      <div className="fixed top-20 right-4 z-50 flex flex-col gap-4">
+      <div className="fixed top-[10vmin] right-[2vmin] z-50 flex flex-col gap-[2vmin]">
         <button 
           onClick={() => setIsUploadModalOpen(true)}
-          className="bg-white p-3 rounded-full shadow-2xl hover:scale-110 transition-transform group relative"
+          className="bg-white p-[2vmin] rounded-full shadow-2xl hover:scale-110 transition-transform group relative"
         >
           <Plus size={24} className="text-[#1877F2]" />
-          <span className="absolute right-full mr-2 top-1/2 -translate-y-1/2 bg-black/80 text-white text-xs px-2 py-1 rounded opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap">Create Reel</span>
+          <span className="absolute right-full mr-[1vmin] top-1/2 -translate-y-1/2 bg-black/80 text-white text-[1vmin] px-[1vmin] py-[0.5vmin] rounded opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap">Create Video</span>
         </button>
       </div>
 
       {reels.length === 0 ? (
         <div className="h-full flex flex-col items-center justify-center text-white/50 px-10 text-center">
           <Video size={80} strokeWidth={1} className="mb-4 opacity-20" />
-          <p className="text-xl font-bold">No Reels Yet</p>
+          <p className="text-xl font-bold">No Videos Yet</p>
           <p className="text-sm">Be the first to share a moment on Next Media!</p>
-          <button onClick={() => setIsUploadModalOpen(true)} className="mt-6 bg-[#1877F2] text-white px-6 py-3 rounded-full font-bold hover:brightness-110">Create First Reel</button>
+          <button onClick={() => setIsUploadModalOpen(true)} className="mt-6 bg-[#1877F2] text-white px-6 py-3 rounded-full font-bold hover:brightness-110">Create First Video</button>
         </div>
       ) : reels.map((reel, index) => (
         <div 
@@ -241,7 +243,7 @@ const Reels: React.FC = () => {
         <div className="fixed inset-0 z-[100] bg-black/90 flex items-center justify-center p-4 backdrop-blur-sm animate-in fade-in duration-200">
           <div className="bg-white dark:bg-gray-900 rounded-3xl w-full max-w-md overflow-hidden shadow-2xl flex flex-col max-h-[90vh]">
             <div className="p-4 border-b border-gray-100 dark:border-gray-800 flex justify-between items-center bg-gray-50 dark:bg-gray-800">
-              <h2 className="font-black text-xl text-gray-900 dark:text-white">Create Reel</h2>
+              <h2 className="font-black text-xl text-gray-900 dark:text-white">Create Video</h2>
               <button onClick={() => setIsUploadModalOpen(false)} className="p-2 hover:bg-gray-200 dark:hover:bg-gray-700 rounded-full transition-colors"><X size={20} className="text-gray-600 dark:text-gray-300" /></button>
             </div>
             
@@ -325,7 +327,7 @@ const Reels: React.FC = () => {
                 disabled={isUploading || (!localFile && !ytLink && !caption.match(/https?:\/\/(?:www\.|m\.|web\.)?(?:youtube\.com|youtu\.be|facebook\.com|fb\.watch)\/[^\s]+/i))}
                 className="w-full bg-[#1877F2] text-white py-3.5 rounded-xl font-bold shadow-lg hover:brightness-110 disabled:opacity-50 disabled:shadow-none transition-all"
               >
-                {isUploading ? 'Sharing...' : 'Share Reel'}
+                {isUploading ? 'Sharing...' : 'Share Video'}
               </button>
             </div>
           </div>
@@ -533,7 +535,7 @@ const ReelItem: React.FC<{ reel: Reel, isActive: boolean, onDelete: () => void }
                   <MessageSquare size={40} />
                   <p>No comments yet</p>
                 </div>
-              ) : comments.map((c: any) => (
+              ) : Array.from(new Map(comments.map((c: any) => [c.id, c])).values()).map((c: any) => (
                 <div key={c.id} className="flex gap-3 text-white group">
                    <Link to={`/profile/${c.profiles.username}`}>
                      <ProfilePhoto src={c.profiles.avatar_url} alt="commenter" size="small" />

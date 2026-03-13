@@ -1,11 +1,14 @@
 import React, { useState, useMemo, useEffect } from 'react';
+import { requestNotificationPermission, showNotification } from '@/services/notificationService';
 import { 
   User, Lock, Bell, Shield, Globe, HelpCircle, Search, ChevronRight, 
   Monitor, Database, Briefcase, Smartphone, Key, UserX, EyeOff, 
-  MessageSquare, Volume2, Moon, Sun, Type, HardDrive, Download, 
-  BarChart3, DollarSign, AlertTriangle, FileText, RefreshCw, CheckCircle, Upload
+  MessageSquare, Minimize2, Maximize2, Moon, Sun, Type, HardDrive, Download, 
+  BarChart3, DollarSign, AlertTriangle, FileText, RefreshCw, CheckCircle, Upload, Bot, Trash2, UserMinus, BarChart, Users,
+  BellRing
 } from 'lucide-react';
 import { useAuth, useTheme } from '@/App';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 
 import { supabase } from '../lib/supabase';
 import { VerifiedBadge } from '@/components/VerifiedBadge';
@@ -29,6 +32,88 @@ const Section: React.FC<{ title: string, children: React.ReactNode }> = ({ title
     </div>
   </div>
 );
+
+const BlockedUsersSection: React.FC = () => {
+  const { currentUser } = useAuth();
+  const queryClient = useQueryClient();
+
+  const { data: blockedUsers = [], isLoading } = useQuery({
+    queryKey: ['blockedUsers'],
+    queryFn: async () => {
+      if (!currentUser) return [];
+      const { data: blockedFriendships } = await supabase
+        .from('friendships')
+        .select('receiver_id, profiles!friendships_receiver_id_fkey(*)')
+        .eq('sender_id', currentUser.id)
+        .eq('status', 'blocked');
+      
+      const profiles = blockedFriendships?.map((f: any) => f.profiles) || [];
+      // Filter out nulls and duplicates
+      return Array.from(new Map(profiles.filter(Boolean).map((p: any) => [p.id, p])).values());
+    },
+    enabled: !!currentUser,
+  });
+
+  const handleUnblock = async (userId: string) => {
+    if (!currentUser) return;
+    if (confirm('Are you sure you want to unblock this user?')) {
+      const { error } = await supabase
+        .from('friendships')
+        .delete()
+        .eq('sender_id', currentUser.id)
+        .eq('receiver_id', userId)
+        .eq('status', 'blocked');
+      
+      if (!error) {
+        queryClient.invalidateQueries({ queryKey: ['blockedUsers'] });
+        queryClient.invalidateQueries({ queryKey: ['blockStatus'] });
+        queryClient.invalidateQueries({ queryKey: ['isBlockedByMe'] });
+      }
+    }
+  };
+
+  return (
+    <Section title="Blocked Accounts">
+      {isLoading ? (
+        <div className="p-8 text-center">
+          <RefreshCw size={24} className="animate-spin mx-auto text-gray-400 mb-2" />
+          <p className="text-sm text-gray-500 font-bold">Loading blocked users...</p>
+        </div>
+      ) : blockedUsers.length === 0 ? (
+        <div className="p-8 text-center">
+          <div className="bg-gray-100 dark:bg-gray-700 w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-4">
+            <UserX size={32} className="text-gray-400" />
+          </div>
+          <p className="text-gray-900 dark:text-white font-bold">No blocked users</p>
+          <p className="text-sm text-gray-500 mt-1">Users you block will appear here.</p>
+        </div>
+      ) : (
+        <div className="divide-y divide-gray-100 dark:divide-gray-700">
+          {blockedUsers.map((user: any) => (
+            <div key={user.id} className="flex items-center justify-between p-4 hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors">
+              <div className="flex items-center gap-3">
+                <img src={user.avatar_url} className="w-10 h-10 rounded-full object-cover border border-gray-200 dark:border-gray-700" />
+                <div>
+                  <p className="font-bold text-gray-900 dark:text-white flex items-center gap-1">
+                    {user.display_name}
+                    {user.is_verified && <VerifiedBadge size={14} />}
+                  </p>
+                  <p className="text-xs text-gray-500 font-medium">@{user.username}</p>
+                </div>
+              </div>
+              <button 
+                onClick={() => handleUnblock(user.id)}
+                className="px-4 py-1.5 bg-gray-100 dark:bg-gray-700 hover:bg-red-50 dark:hover:bg-red-900/20 text-gray-700 dark:text-gray-300 hover:text-red-500 dark:hover:text-red-400 font-bold text-sm rounded-lg transition-all"
+              >
+                Unblock
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+    </Section>
+  );
+};
 
 // Reusable Row Component
 const Row: React.FC<{ icon?: React.ReactNode, title: string, description?: string, action: React.ReactNode, border?: boolean }> = ({ icon, title, description, action, border = true }) => (
@@ -134,6 +219,8 @@ const Settings: React.FC = () => {
 
   const settingsTabs = [
     { id: 'display', icon: <Monitor size={20} />, label: 'Display & Accessibility', keywords: ['dark mode', 'light mode', 'font', 'size', 'nexto', 'robot'] },
+    { id: 'privacy', icon: <Shield size={20} />, label: 'Privacy & Safety', keywords: ['blocked', 'privacy', 'security', 'visibility'] },
+    { id: 'notifications', icon: <Bell size={20} />, label: 'Notifications', keywords: ['alerts', 'push', 'messages', 'mentions'] },
     { id: 'account', icon: <User size={20} />, label: 'Account Center', keywords: ['password', 'security', 'logout'] },
   ];
 
@@ -273,7 +360,7 @@ const Settings: React.FC = () => {
                         onClick={() => setRobotSize(Math.max(40, robotSize - 5))}
                         className="p-2 hover:bg-gray-200 dark:hover:bg-gray-700 rounded-lg text-gray-500 transition-colors"
                       >
-                        <Volume2 size={18} className="rotate-180" />
+                        <Minimize2 size={18} />
                       </button>
                       <input 
                         type="range" 
@@ -287,11 +374,74 @@ const Settings: React.FC = () => {
                         onClick={() => setRobotSize(Math.min(150, robotSize + 5))}
                         className="p-2 hover:bg-gray-200 dark:hover:bg-gray-700 rounded-lg text-gray-500 transition-colors"
                       >
-                        <Volume2 size={18} />
+                        <Maximize2 size={18} />
                       </button>
                     </div>
                   </div>
                 )}
+              </Section>
+            </div>
+          )}
+
+          {/* Privacy & Safety Settings */}
+          {activeTab === 'privacy' && (
+            <div className="animate-in fade-in slide-in-from-bottom-4 duration-300">
+              <h2 className="text-3xl font-black mb-2 text-gray-900 dark:text-white">Privacy & Safety</h2>
+              <p className="text-gray-500 dark:text-gray-400 font-medium mb-8">Manage your privacy and blocked accounts.</p>
+
+              <BlockedUsersSection />
+            </div>
+          )}
+          {activeTab === 'notifications' && (
+            <div className="animate-in fade-in slide-in-from-bottom-4 duration-300">
+              <h2 className="text-3xl font-black mb-2 text-gray-900 dark:text-white">Notifications</h2>
+              <p className="text-gray-500 dark:text-gray-400 font-medium mb-8">Control how you receive alerts and updates.</p>
+
+              <Section title="Push Notifications">
+                <div className="p-6 flex flex-col items-center text-center">
+                  <div className={`p-4 rounded-full mb-4 ${Notification.permission === 'granted' ? 'bg-green-100 text-green-600' : 'bg-blue-100 text-blue-600'}`}>
+                    <BellRing size={48} />
+                  </div>
+                  <h3 className="text-xl font-bold mb-2">
+                    {Notification.permission === 'granted' ? 'Notifications Enabled' : 'Enable Push Notifications'}
+                  </h3>
+                  <p className="text-gray-500 dark:text-gray-400 text-sm mb-6 max-w-sm">
+                    {Notification.permission === 'granted' 
+                      ? 'You are all set! You will receive alerts for new messages and mentions even when the app is in the background.'
+                      : 'Stay updated with real-time alerts for messages and mentions. Click the button below to grant permission.'}
+                  </p>
+                  
+                  {Notification.permission !== 'granted' && (
+                    <button 
+                      onClick={async () => {
+                        const granted = await requestNotificationPermission();
+                        if (granted) {
+                          showNotification('Notifications Enabled!', { body: 'You will now receive alerts from Next Media.' });
+                          window.location.reload(); // Refresh to update UI state
+                        } else {
+                          alert('Notification permission was denied. Please enable it in your browser settings.');
+                        }
+                      }}
+                      className="px-8 py-3 bg-blue-600 text-white font-bold rounded-xl hover:bg-blue-700 transition-all shadow-lg shadow-blue-500/25"
+                    >
+                      Grant Permission
+                    </button>
+                  )}
+
+                  {Notification.permission === 'granted' && (
+                    <button 
+                      onClick={() => showNotification('Test Notification', { body: 'This is a test to verify notifications are working.' })}
+                      className="px-8 py-3 bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-white font-bold rounded-xl hover:bg-gray-200 dark:hover:bg-gray-700 transition-all"
+                    >
+                      Send Test Notification
+                    </button>
+                  )}
+                </div>
+              </Section>
+
+              <Section title="Notification Preferences">
+                <Row title="Message Alerts" description="Receive notifications for new private messages" action={<Toggle checked={true} onChange={() => {}} />} />
+                <Row title="Mentions" description="Get notified when someone mentions you in a post" action={<Toggle checked={true} onChange={() => {}} />} border={false} />
               </Section>
             </div>
           )}

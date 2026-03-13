@@ -25,11 +25,69 @@ const Messages: React.FC = () => {
   const { data: contacts = [] } = useQuery({
     queryKey: ['contacts'],
     queryFn: async () => {
-      const { data } = await supabase.from('profiles').select('*').neq('id', currentUser?.id);
-      return data || [];
+      if (!currentUser) return [];
+      
+      // Get all messages involving the current user, ordered by latest
+      const { data: messages } = await supabase
+        .from('messages')
+        .select('*')
+        .or(`sender_id.eq.${currentUser.id},receiver_id.eq.${currentUser.id}`)
+        .order('created_at', { ascending: false });
+      
+      if (!messages || messages.length === 0) return [];
+
+      // Extract unique partner IDs and keep track of the latest message
+      const partnerMap = new Map<string, any>();
+      messages.forEach(m => {
+        const partnerId = m.sender_id === currentUser.id ? m.receiver_id : m.sender_id;
+        if (!partnerMap.has(partnerId)) {
+          partnerMap.set(partnerId, m);
+        }
+      });
+      
+      if (partnerMap.size === 0) return [];
+
+      // Fetch profiles for those partners
+      const { data: profiles } = await supabase
+        .from('profiles')
+        .select('*')
+        .in('id', Array.from(partnerMap.keys()));
+      
+      if (!profiles) return [];
+
+      // Fetch block status for these partners
+      const { data: blocks } = await supabase
+        .from('friendships')
+        .select('*')
+        .eq('status', 'blocked')
+        .or(`sender_id.eq.${currentUser.id},receiver_id.eq.${currentUser.id}`);
+
+      // Combine profile with its latest message and block status
+      const uniqueProfiles = Array.from(new Map(profiles.map(p => [p.id, p])).values());
+      const contactsWithMessages = uniqueProfiles.map(profile => {
+        const block = blocks?.find(b => 
+          (b.sender_id === currentUser.id && b.receiver_id === profile.id) ||
+          (b.sender_id === profile.id && b.receiver_id === currentUser.id)
+        );
+        return {
+          ...profile,
+          lastMessage: partnerMap.get(profile.id),
+          blockStatus: block ? {
+            iBlockedThem: block.sender_id === currentUser.id,
+            theyBlockedMe: block.sender_id === profile.id
+          } : null
+        };
+      });
+
+      // Sort based on the latest message time
+      return contactsWithMessages.sort((a, b) => {
+        const timeA = new Date(a.lastMessage.created_at).getTime();
+        const timeB = new Date(b.lastMessage.created_at).getTime();
+        return timeB - timeA;
+      });
     },
     enabled: !!currentUser,
-    staleTime: 1000 * 60 * 5,
+    staleTime: 1000 * 60, // Refresh more often
   });
 
   const { data: messages = [] } = useQuery({
@@ -41,7 +99,10 @@ const Messages: React.FC = () => {
         .select('*')
         .or(`and(sender_id.eq.${currentUser?.id},receiver_id.eq.${selectedChat.id}),and(sender_id.eq.${selectedChat.id},receiver_id.eq.${currentUser?.id})`)
         .order('created_at', { ascending: true });
-      return data || [];
+      
+      if (!data) return [];
+      // Filter duplicate messages by ID
+      return Array.from(new Map(data.map(m => [m.id, m])).values());
     },
     enabled: !!selectedChat,
     staleTime: 0, // Messages should be fresh
@@ -65,20 +126,40 @@ const Messages: React.FC = () => {
       return counts;
     },
     enabled: !!currentUser,
+    refetchInterval: 5000, // Poll every 5s as fallback
   });
 
-  const { data: isBlocked = false } = useQuery({
+  const { data: blockData = null } = useQuery({
     queryKey: ['blockStatus', selectedChat?.id],
     queryFn: async () => {
-      if (!selectedChat) return false;
+      if (!selectedChat || !currentUser) return null;
       const { data } = await supabase.from('friendships')
         .select('*')
-        .or(`and(sender_id.eq.${currentUser?.id},receiver_id.eq.${selectedChat.id}),and(sender_id.eq.${selectedChat.id},receiver_id.eq.${currentUser?.id})`)
+        .or(`and(sender_id.eq.${currentUser.id},receiver_id.eq.${selectedChat.id}),and(sender_id.eq.${selectedChat.id},receiver_id.eq.${currentUser.id})`)
         .eq('status', 'blocked')
-        .single();
+        .maybeSingle();
+      return data;
+    },
+    enabled: !!selectedChat && !!currentUser,
+  });
+
+  const isBlocked = !!blockData;
+  const iBlockedThem = blockData?.sender_id === currentUser?.id;
+  const theyBlockedMe = blockData?.sender_id === selectedChat?.id;
+
+  const { data: isBlockedByMe = false } = useQuery({
+    queryKey: ['isBlockedByMe', selectedChat?.id],
+    queryFn: async () => {
+      if (!selectedChat || !currentUser) return false;
+      const { data } = await supabase.from('friendships')
+        .select('*')
+        .eq('sender_id', currentUser.id)
+        .eq('receiver_id', selectedChat.id)
+        .eq('status', 'blocked')
+        .maybeSingle();
       return !!data;
     },
-    enabled: !!selectedChat,
+    enabled: !!selectedChat && !!currentUser,
   });
 
   useEffect(() => {
@@ -106,6 +187,12 @@ const Messages: React.FC = () => {
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages', filter: `receiver_id=eq.${currentUser.id}` }, () => {
         queryClient.invalidateQueries({ queryKey: ['unreadCounts'] });
         queryClient.invalidateQueries({ queryKey: ['messages'] });
+        queryClient.invalidateQueries({ queryKey: ['contacts'] });
+      })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'friendships' }, () => {
+        queryClient.invalidateQueries({ queryKey: ['blockStatus'] });
+        queryClient.invalidateQueries({ queryKey: ['isBlockedByMe'] });
+        queryClient.invalidateQueries({ queryKey: ['contacts'] });
       })
       .subscribe();
 
@@ -185,18 +272,27 @@ const Messages: React.FC = () => {
 
   const handleBlockUser = async () => {
     if (!selectedChat) return;
-    if (confirm(`Are you sure you want to block ${selectedChat.display_name}?`)) {
-        const { data } = await supabase.from('friendships')
-            .select('*')
-            .or(`and(sender_id.eq.${currentUser?.id},receiver_id.eq.${selectedChat.id}),and(sender_id.eq.${selectedChat.id},receiver_id.eq.${currentUser?.id})`)
-            .single();
-        
-        if (data) {
-            await supabase.from('friendships').update({ status: 'blocked', sender_id: currentUser?.id, receiver_id: selectedChat.id }).eq('id', data.id);
-        } else {
-            await supabase.from('friendships').insert([{ sender_id: currentUser?.id, receiver_id: selectedChat.id, status: 'blocked' }]);
+    
+    const { data: existingBlock } = await supabase.from('friendships')
+        .select('*')
+        .or(`and(sender_id.eq.${currentUser?.id},receiver_id.eq.${selectedChat.id}),and(sender_id.eq.${selectedChat.id},receiver_id.eq.${currentUser?.id})`)
+        .eq('status', 'blocked')
+        .single();
+
+    if (existingBlock) {
+        if (confirm(`Are you sure you want to unblock ${selectedChat.display_name}?`)) {
+            await supabase.from('friendships').delete().eq('id', existingBlock.id);
+            queryClient.invalidateQueries({ queryKey: ['blockStatus', selectedChat.id] });
         }
-        queryClient.invalidateQueries({ queryKey: ['blockStatus', selectedChat.id] });
+    } else {
+        if (confirm(`Are you sure you want to block ${selectedChat.display_name}?`)) {
+            await supabase.from('friendships').insert([{ 
+                sender_id: currentUser?.id, 
+                receiver_id: selectedChat.id, 
+                status: 'blocked' 
+            }]);
+            queryClient.invalidateQueries({ queryKey: ['blockStatus', selectedChat.id] });
+        }
     }
   };
 
@@ -204,7 +300,7 @@ const Messages: React.FC = () => {
 
   const handleSendMessage = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!messageText.trim() || !selectedChat) return;
+    if (!messageText.trim() || !selectedChat || isBlocked) return;
     
     const newMessage: any = {
        sender_id: currentUser!.id,
@@ -217,6 +313,7 @@ const Messages: React.FC = () => {
     const { error } = await supabase.from('messages').insert([newMessage]);
     if (!error) {
       queryClient.invalidateQueries({ queryKey: ['messages', selectedChat.id] });
+      queryClient.invalidateQueries({ queryKey: ['contacts'] });
     }
   };
 
@@ -229,7 +326,7 @@ const Messages: React.FC = () => {
   };
 
   return (
-    <div className="flex h-[calc(100vh-80px)] bg-white dark:bg-black rounded-xl shadow-xl border border-gray-200 dark:border-gray-800 overflow-hidden max-w-[1200px] mx-auto">
+    <div className="flex h-full bg-white dark:bg-black rounded-xl shadow-xl border border-gray-200 dark:border-gray-800 overflow-hidden max-w-[1200px] mx-auto">
       {/* Contact Sidebar */}
       <div className={`${selectedChat ? 'hidden md:flex' : 'flex'} w-full md:w-[350px] border-r border-gray-100 dark:border-gray-800 flex flex-col bg-gray-50/50 dark:bg-black/50`}>
         <div className="p-4 border-b border-gray-100 dark:border-gray-800 bg-white dark:bg-black">
@@ -247,26 +344,55 @@ const Messages: React.FC = () => {
         <div className="flex-1 overflow-y-auto p-2 space-y-1">
           {filteredContacts.map(c => {
             const isOnline = onlineUsers.has(c.id);
+            const lastMsg = c.lastMessage;
+            const isUnread = unreadCounts[c.id] > 0;
+            
             return (
-              <div key={c.id} onClick={() => setSelectedChat(c)} className={`flex items-center gap-3 p-4 cursor-pointer rounded-2xl transition-all ${selectedChat?.id === c.id ? 'bg-[#e7f3ff] dark:bg-gray-800 text-[#1877F2] dark:text-blue-400 shadow-sm' : 'hover:bg-white dark:hover:bg-gray-900 text-gray-700 dark:text-gray-300 hover:shadow-sm'}`}>
-                <div className="relative">
-                  <img src={c.avatar_url} className="w-12 h-12 rounded-full object-cover border-2 border-white dark:border-gray-700 shadow-sm" />
-                  {isOnline && <div className="absolute bottom-0 right-0 w-3.5 h-3.5 bg-green-500 border-2 border-white dark:border-black rounded-full"></div>}
+              <div 
+                key={c.id} 
+                onClick={() => setSelectedChat(c)} 
+                className={`flex items-center gap-3 p-3 cursor-pointer rounded-2xl transition-all ${selectedChat?.id === c.id ? 'bg-[#e7f3ff] dark:bg-gray-800 text-[#1877F2] dark:text-blue-400 shadow-sm' : 'hover:bg-white dark:hover:bg-gray-900 text-gray-700 dark:text-gray-300 hover:shadow-sm'}`}
+              >
+                <div className="relative flex-shrink-0">
+                  <img src={c.avatar_url} className="w-14 h-14 rounded-full object-cover border-2 border-white dark:border-gray-700 shadow-sm" />
+                  {isOnline && <div className="absolute bottom-0.5 right-0.5 w-4 h-4 bg-green-500 border-2 border-white dark:border-black rounded-full"></div>}
                 </div>
-                <div className="flex-1 overflow-hidden">
-                  <p className="font-bold truncate flex items-center gap-1">
-                    {c.display_name}
-                    {c.is_verified && <VerifiedBadge />}
-                  </p>
-                  <p className={`text-[11px] font-bold uppercase tracking-wide ${isOnline ? 'text-green-500' : 'text-gray-400'}`}>
+                <div className="flex-1 min-w-0">
+                  <div className="flex justify-between items-baseline mb-0.5">
+                    <p className="font-bold truncate flex items-center gap-1 text-[15px]">
+                      {c.display_name}
+                      {c.is_verified && <VerifiedBadge size={14} />}
+                    </p>
+                    {lastMsg && (
+                      <span className="text-[10px] text-gray-400 font-medium ml-2 flex-shrink-0">
+                        {new Date(lastMsg.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                      </span>
+                    )}
+                  </div>
+                  <div className="flex justify-between items-center gap-2">
+                    <p className={`text-sm truncate ${isUnread ? 'font-black text-gray-900 dark:text-white' : 'text-gray-500 dark:text-gray-400 font-medium'}`}>
+                      {c.blockStatus ? (
+                        <span className="text-red-500 flex items-center gap-1">
+                          <Ban size={12} />
+                          {c.blockStatus.iBlockedThem ? 'Blocked' : 'Blocked you'}
+                        </span>
+                      ) : (
+                        <>
+                          {lastMsg?.sender_id === currentUser?.id ? 'You: ' : ''}
+                          {lastMsg?.media_url ? (lastMsg.media_type === 'video' ? '🎥 Video' : '📷 Photo') : lastMsg?.content}
+                        </>
+                      )}
+                    </p>
+                    {isUnread && !c.blockStatus && (
+                      <div className="bg-[#1877F2] text-white text-[10px] font-black w-5 h-5 flex items-center justify-center rounded-full shadow-lg flex-shrink-0 animate-bounce">
+                        {unreadCounts[c.id] > 9 ? '9+' : unreadCounts[c.id]}
+                      </div>
+                    )}
+                  </div>
+                  <p className={`text-[10px] font-black uppercase tracking-widest mt-1 ${isOnline ? 'text-green-500' : 'text-gray-400'}`}>
                     {isOnline ? 'Active Now' : 'Offline'}
                   </p>
                 </div>
-                {unreadCounts[c.id] > 0 && (
-                  <div className="bg-[#1877F2] text-white text-[10px] font-bold w-5 h-5 flex items-center justify-center rounded-full shadow-sm animate-in zoom-in duration-200">
-                    {unreadCounts[c.id] > 9 ? '9+' : unreadCounts[c.id]}
-                  </div>
-                )}
               </div>
             );
           })}
@@ -293,54 +419,83 @@ const Messages: React.FC = () => {
                   </div>
                 </div>
               </div>
-              <button onClick={handleBlockUser} disabled={isBlocked} className={`p-2 rounded-full transition-all ${isBlocked ? 'bg-red-100 dark:bg-red-900/20 text-red-500 cursor-not-allowed' : 'hover:bg-red-50 dark:hover:bg-red-900/20 text-gray-400 hover:text-red-500'}`} title="Block User">
+              <button 
+                onClick={handleBlockUser} 
+                className={`p-2 rounded-full transition-all ${isBlockedByMe ? 'bg-red-500 text-white shadow-lg' : 'hover:bg-red-50 dark:hover:bg-red-900/20 text-gray-400 hover:text-red-500'}`} 
+                title={isBlockedByMe ? "Unblock User" : "Block User"}
+              >
                 <Ban size={20} />
               </button>
             </div>
             
             <div className="flex-1 p-6 overflow-y-auto bg-gray-50/30 dark:bg-gray-900/30 flex flex-col gap-3">
-              <div className="flex flex-col items-center my-10 animate-in fade-in zoom-in duration-300 cursor-pointer" onClick={() => navigate(`/profile/${selectedChat.username}`)}>
-                <img src={selectedChat.avatar_url} className="w-24 h-24 rounded-full mb-3 shadow-2xl border-4 border-white dark:border-black object-cover hover:scale-105 transition-transform" />
-                <h2 className="text-xl font-black text-gray-900 dark:text-white hover:underline flex items-center gap-2">
-                  {selectedChat.display_name}
-                  {selectedChat.is_verified && <VerifiedBadge size={20} />}
-                </h2>
-                <p className="text-gray-500 font-bold bg-white dark:bg-black px-3 py-1 rounded-full border border-gray-100 dark:border-gray-800 shadow-sm mt-2 text-xs">@{selectedChat.username}</p>
-                {isBlocked && <p className="mt-2 text-red-500 font-bold text-sm bg-red-50 dark:bg-red-900/20 px-3 py-1 rounded-full">You have blocked this user.</p>}
-              </div>
-
-              {messages.map(msg => (
-                <div key={msg.id} className={`flex ${msg.sender_id === currentUser?.id ? 'justify-end' : 'justify-start'} group relative animate-in fade-in slide-in-from-bottom-2 duration-300`}>
-                  {msg.sender_id === currentUser?.id && (
-                    <button onClick={() => deleteMessage(msg.id)} className="opacity-0 group-hover:opacity-100 mr-2 self-center text-red-300 hover:text-red-500 transition-all"><Trash2 size={16} /></button>
-                  )}
-                  <div className={`p-3.5 rounded-2xl max-w-[75%] shadow-sm text-[15px] font-medium leading-relaxed ${msg.sender_id === currentUser?.id ? 'bg-[#1877F2] text-white rounded-tr-none' : 'bg-white dark:bg-gray-800 border border-gray-100 dark:border-gray-700 text-gray-800 dark:text-gray-200 rounded-tl-none'}`}>
-                    {msg.media_url && (
-                      <div className="mb-2 rounded-lg overflow-hidden bg-black/5 dark:bg-white/5">
-                        {msg.media_type === 'image' ? (
-                          <ZoomableImage src={msg.media_url} className="max-w-full h-auto rounded-lg" referrerPolicy="no-referrer" />
-                        ) : (
-                          <video src={msg.media_url} controls className="max-w-full h-auto rounded-lg" />
-                        )}
-                      </div>
-                    )}
-                    {msg.content && <span>{msg.content}</span>}
-                    <div className={`flex items-center justify-end gap-1 mt-1 ${msg.sender_id === currentUser?.id ? 'text-blue-200' : 'text-gray-400'}`}>
-                      <p className="text-[10px] text-right opacity-80">
-                         {new Date(msg.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                      </p>
-                      {msg.sender_id === currentUser?.id && (
-                        msg.id.toString().startsWith('temp-') ? (
-                          <Check size={12} className="opacity-50 animate-pulse" />
-                        ) : (
-                          <CheckCheck size={12} className={msg.is_read ? "text-blue-400" : "text-blue-200 opacity-60"} />
-                        )
-                      )}
-                    </div>
+              {isBlocked ? (
+                <div className="flex-1 flex flex-col items-center justify-center text-center p-8">
+                  <div className="bg-red-100 dark:bg-red-900/20 p-6 rounded-full mb-4">
+                    <Ban size={48} className="text-red-500" />
                   </div>
+                  <h3 className="text-xl font-black text-gray-900 dark:text-white mb-2">
+                    {iBlockedThem ? 'You blocked this user' : 'You are blocked'}
+                  </h3>
+                  <p className="text-gray-500 dark:text-gray-400 max-w-xs">
+                    {iBlockedThem 
+                      ? 'You have blocked this user. You cannot send or receive messages until you unblock them.' 
+                      : 'This user has blocked you. You cannot send or receive messages in this conversation.'}
+                  </p>
+                  {iBlockedThem && (
+                    <button 
+                      onClick={handleBlockUser}
+                      className="mt-6 px-6 py-2 bg-red-500 text-white font-bold rounded-xl hover:bg-red-600 transition-all shadow-lg shadow-red-500/25"
+                    >
+                      Unblock to Chat
+                    </button>
+                  )}
                 </div>
-              ))}
-              <div ref={scrollRef} />
+              ) : (
+                <>
+                  <div className="flex flex-col items-center my-10 animate-in fade-in zoom-in duration-300 cursor-pointer" onClick={() => navigate(`/profile/${selectedChat.username}`)}>
+                    <img src={selectedChat.avatar_url} className="w-24 h-24 rounded-full mb-3 shadow-2xl border-4 border-white dark:border-black object-cover hover:scale-105 transition-transform" />
+                    <h2 className="text-xl font-black text-gray-900 dark:text-white hover:underline flex items-center gap-2">
+                      {selectedChat.display_name}
+                      {selectedChat.is_verified && <VerifiedBadge size={20} />}
+                    </h2>
+                    <p className="text-gray-500 font-bold bg-white dark:bg-black px-3 py-1 rounded-full border border-gray-100 dark:border-gray-800 shadow-sm mt-2 text-xs">@{selectedChat.username}</p>
+                  </div>
+
+                  {messages.map(msg => (
+                    <div key={msg.id} className={`flex ${msg.sender_id === currentUser?.id ? 'justify-end' : 'justify-start'} group relative animate-in fade-in slide-in-from-bottom-2 duration-300`}>
+                      {msg.sender_id === currentUser?.id && (
+                        <button onClick={() => deleteMessage(msg.id)} className="opacity-0 group-hover:opacity-100 mr-2 self-center text-red-300 hover:text-red-500 transition-all"><Trash2 size={16} /></button>
+                      )}
+                      <div className={`p-3.5 rounded-2xl max-w-[75%] shadow-sm text-[15px] font-medium leading-relaxed ${msg.sender_id === currentUser?.id ? 'bg-[#1877F2] text-white rounded-tr-none' : 'bg-white dark:bg-gray-800 border border-gray-100 dark:border-gray-700 text-gray-800 dark:text-gray-200 rounded-tl-none'}`}>
+                        {msg.media_url && (
+                          <div className="mb-2 rounded-lg overflow-hidden bg-black/5 dark:bg-white/5">
+                            {msg.media_type === 'image' ? (
+                              <ZoomableImage src={msg.media_url} className="max-w-full h-auto rounded-lg" referrerPolicy="no-referrer" />
+                            ) : (
+                              <video src={msg.media_url} controls className="max-w-full h-auto rounded-lg" />
+                            )}
+                          </div>
+                        )}
+                        {msg.content && <span>{msg.content}</span>}
+                        <div className={`flex items-center justify-end gap-1 mt-1 ${msg.sender_id === currentUser?.id ? 'text-blue-200' : 'text-gray-400'}`}>
+                          <p className="text-[10px] text-right opacity-80">
+                             {new Date(msg.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                          </p>
+                          {msg.sender_id === currentUser?.id && (
+                            msg.id.toString().startsWith('temp-') ? (
+                              <Check size={12} className="opacity-50 animate-pulse" />
+                            ) : (
+                              <CheckCheck size={12} className={msg.is_read ? "text-blue-400" : "text-blue-200 opacity-60"} />
+                            )
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                  <div ref={scrollRef} />
+                </>
+              )}
             </div>
             
             <form onSubmit={handleSendMessage} className="p-5 bg-white dark:bg-black border-t border-gray-100 dark:border-gray-800 flex items-center gap-3 relative">

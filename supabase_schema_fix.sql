@@ -133,7 +133,7 @@ CREATE POLICY "Users can update their own messages (mark read)" ON public.messag
 CREATE POLICY "Users can delete their own messages" ON public.messages FOR DELETE USING (auth.uid() = sender_id);
 
 -- Policies for Friendships
-CREATE POLICY "Friendships are viewable by everyone" ON public.friendships FOR SELECT USING (true);
+CREATE POLICY "Friendships are viewable by sender or receiver" ON public.friendships FOR SELECT USING (auth.uid() = sender_id OR auth.uid() = receiver_id);
 CREATE POLICY "Users can insert their own friendships" ON public.friendships FOR INSERT WITH CHECK (auth.uid() = sender_id);
 CREATE POLICY "Users can update their own friendships" ON public.friendships FOR UPDATE USING (auth.uid() = receiver_id OR auth.uid() = sender_id);
 CREATE POLICY "Users can delete their own friendships" ON public.friendships FOR DELETE USING (auth.uid() = sender_id OR auth.uid() = receiver_id);
@@ -161,7 +161,7 @@ CREATE POLICY "Users can insert their own stories" ON public.stories FOR INSERT 
 CREATE POLICY "Users can delete own stories" ON public.stories FOR DELETE USING (auth.uid() = user_id);
 
 -- Policies for Story Views
-CREATE POLICY "Story views are viewable by everyone" ON public.story_views FOR SELECT USING (true);
+CREATE POLICY "Story views are viewable by story owner or viewer" ON public.story_views FOR SELECT USING (auth.uid() = viewer_id OR auth.uid() IN (SELECT user_id FROM public.stories WHERE id = story_id));
 CREATE POLICY "Users can insert their own story views" ON public.story_views FOR INSERT WITH CHECK (auth.uid() = viewer_id);
 
 -- Policies for Comments

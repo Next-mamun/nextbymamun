@@ -6,33 +6,29 @@ import { useAuth } from '@/App';
 import { supabase } from '../lib/supabase';
 import { VerifiedBadge } from './VerifiedBadge';
 
+import { useQuery } from '@tanstack/react-query';
+
 const Navbar: React.FC = () => {
   const { currentUser, logout } = useAuth();
   const [showDropdown, setShowDropdown] = useState(false);
   const [showNotifications, setShowNotifications] = useState(false);
-  const [notifications, setNotifications] = useState<any[]>([]);
   const navigate = useNavigate();
   const location = useLocation();
 
-  const isActive = (path: string) => location.pathname === path;
-
-  useEffect(() => {
-    if (currentUser) {
-      fetchNotifications();
-    }
-  }, [currentUser]);
-
-  const fetchNotifications = async () => {
-    // Fetch pending friend requests as notifications
-    const { data } = await supabase
-      .from('friendships')
-      .select('*, profiles:sender_id(*)')
-      .eq('receiver_id', currentUser?.id)
-      .eq('status', 'pending');
-    
-    if (data) {
+  const { data: notifications = [] } = useQuery({
+    queryKey: ['notifications', currentUser?.id],
+    queryFn: async () => {
+      if (!currentUser?.id) return [];
+      const { data } = await supabase
+        .from('friendships')
+        .select('*, profiles:sender_id(*)')
+        .eq('receiver_id', currentUser.id)
+        .eq('status', 'pending');
+      
+      if (!data) return [];
+      
       const seenIds = JSON.parse(localStorage.getItem('seen_notifications') || '[]');
-      const newNotifications = data.map(req => ({
+      return data.map(req => ({
         id: req.id,
         type: 'friend_request',
         text: `${req.profiles.display_name} sent you a friend request.`,
@@ -41,9 +37,10 @@ const Navbar: React.FC = () => {
         created_at: req.created_at,
         is_seen: seenIds.includes(req.id)
       }));
-      setNotifications(newNotifications);
-    }
-  };
+    },
+    enabled: !!currentUser?.id,
+    refetchInterval: 1000 * 30, // Refetch every 30 seconds
+  });
 
   const handleNotificationsClick = () => {
     const opening = !showNotifications;
@@ -52,11 +49,8 @@ const Navbar: React.FC = () => {
     
     if (opening && notifications.length > 0) {
       const seenIds = JSON.parse(localStorage.getItem('seen_notifications') || '[]');
-      const newSeenIds = Array.from(new Set([...seenIds, ...notifications.map(n => n.id)]));
+      const newSeenIds = Array.from(new Set([...seenIds, ...notifications.map((n: any) => n.id)]));
       localStorage.setItem('seen_notifications', JSON.stringify(newSeenIds));
-      
-      // Update local state to remove the red badge immediately
-      setNotifications(prev => prev.map(n => ({ ...n, is_seen: true })));
     }
   };
 

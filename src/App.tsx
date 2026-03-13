@@ -1,22 +1,26 @@
 
-import React, { useState, useEffect, createContext, useContext } from 'react';
-import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
+import React, { useState, useEffect, createContext, useContext, Suspense, lazy } from 'react';
+import { BrowserRouter, Routes, Route, Navigate, useLocation } from 'react-router-dom';
 import Navbar from '@/components/Navbar';
 import Sidebar from '@/components/Sidebar';
 import BottomNav from '@/components/BottomNav';
-import Feed from '@/pages/Feed';
-import Login from '@/pages/Login';
-import Register from '@/pages/Register';
-import Messages from '@/pages/Messages';
-import Friends from '@/pages/Friends';
-import Profile from '@/pages/Profile';
-import Settings from '@/pages/Settings';
-import CreatePost from '@/pages/CreatePost';
-import Notifications from '@/pages/Notifications';
 import NextoRobot from '@/components/NextoRobot';
 import { UserProfile as User } from '@/types';
 import { supabase } from '@/lib/supabase';
 import { useWakeLock } from '@/hooks/useWakeLock';
+import { requestNotificationPermission, showNotification } from '@/services/notificationService';
+
+// Lazy load pages for better performance
+const Feed = lazy(() => import('@/pages/Feed'));
+const Login = lazy(() => import('@/pages/Login'));
+const Register = lazy(() => import('@/pages/Register'));
+const Messages = lazy(() => import('@/pages/Messages'));
+const Friends = lazy(() => import('@/pages/Friends'));
+const Profile = lazy(() => import('@/pages/Profile'));
+const Settings = lazy(() => import('@/pages/Settings'));
+const CreatePost = lazy(() => import('@/pages/CreatePost'));
+const Notifications = lazy(() => import('@/pages/Notifications'));
+const Reels = lazy(() => import('@/pages/Reels'));
 
 interface AuthContextType {
   currentUser: User | null;
@@ -54,6 +58,42 @@ export const useAuth = () => {
 };
 
 export const useTheme = () => useContext(ThemeContext);
+
+const AppLayout: React.FC = () => {
+  const { currentUser } = useAuth();
+  const location = useLocation();
+  const isMessages = location.pathname.startsWith('/messages');
+
+  return (
+    <div className="min-h-screen bg-[#f0f2f5] dark:bg-[#000000] flex flex-col transition-colors duration-300">
+      <div className={`flex flex-1 pb-16 max-w-[1920px] mx-auto w-full ${currentUser ? 'pt-14' : ''}`}>
+        {currentUser && !isMessages && <Navbar />}
+        {currentUser && <div className="hidden md:block"><Sidebar /></div>}
+        <main className={`flex-1 overflow-y-auto ${currentUser ? 'p-0 md:p-4' : ''}`}>
+          <Suspense fallback={
+            <div className="h-full flex items-center justify-center">
+              <div className="fast-spin rounded-full h-8 w-8 border-t-2 border-b-2 border-[#1877F2]"></div>
+            </div>
+          }>
+            <Routes>
+              <Route path="/" element={currentUser ? <Feed /> : <Navigate to="/login" />} />
+              <Route path="/login" element={!currentUser ? <Login /> : <Navigate to="/" />} />
+              <Route path="/register" element={!currentUser ? <Register /> : <Navigate to="/" />} />
+              <Route path="/messages" element={currentUser ? <Messages /> : <Navigate to="/login" />} />
+              <Route path="/friends" element={currentUser ? <Friends /> : <Navigate to="/login" />} />
+              <Route path="/notifications" element={currentUser ? <Notifications /> : <Navigate to="/login" />} />
+              <Route path="/profile/:username" element={currentUser ? <Profile /> : <Navigate to="/login" />} />
+              <Route path="/settings" element={currentUser ? <Settings /> : <Navigate to="/login" />} />
+              <Route path="/create-post" element={currentUser ? <CreatePost /> : <Navigate to="/login" />} />
+              <Route path="/reels" element={currentUser ? <Reels /> : <Navigate to="/login" />} />
+            </Routes>
+          </Suspense>
+        </main>
+      </div>
+      {currentUser && <div className="z-[100] relative"><BottomNav /></div>}
+    </div>
+  );
+};
 
 const App: React.FC = () => {
   useWakeLock();
@@ -130,6 +170,66 @@ const App: React.FC = () => {
   useEffect(() => {
     if (currentUser) {
       localStorage.setItem('next_media_user', JSON.stringify(currentUser));
+      requestNotificationPermission();
+
+      // Global Real-time Listeners for Notifications
+      const messageSub = supabase.channel('global_notifications')
+        .on('postgres_changes', { 
+          event: 'INSERT', 
+          schema: 'public', 
+          table: 'messages',
+          filter: `receiver_id=eq.${currentUser.id}`
+        }, async (payload) => {
+          // Invalidate unread counts globally
+          const queryClient = (window as any).queryClient;
+          if (queryClient) {
+            queryClient.invalidateQueries({ queryKey: ['totalUnread'] });
+            queryClient.invalidateQueries({ queryKey: ['unreadCounts'] });
+            queryClient.invalidateQueries({ queryKey: ['contacts'] });
+          }
+
+          // Don't show notification if already in messages with this sender
+          const isAtMessages = window.location.pathname.startsWith('/messages');
+          if (isAtMessages) return;
+
+          // Fetch sender info for better notification
+          const { data: sender } = await supabase
+            .from('profiles')
+            .select('display_name')
+            .eq('id', payload.new.sender_id)
+            .single();
+          
+          showNotification(`New message from ${sender?.display_name || 'Someone'}`, {
+            body: payload.new.content,
+            tag: 'message-' + payload.new.sender_id
+          });
+        })
+        .on('postgres_changes', {
+          event: 'INSERT',
+          schema: 'public',
+          table: 'posts'
+        }, async (payload) => {
+          const content = payload.new.content || '';
+          const mentionPattern = new RegExp(`@${currentUser.username}\\b`, 'i');
+          
+          if (mentionPattern.test(content)) {
+            const { data: author } = await supabase
+              .from('profiles')
+              .select('display_name')
+              .eq('id', payload.new.user_id)
+              .single();
+
+            showNotification(`${author?.display_name || 'Someone'} mentioned you`, {
+              body: content.substring(0, 100) + (content.length > 100 ? '...' : ''),
+              tag: 'mention-' + payload.new.id
+            });
+          }
+        })
+        .subscribe();
+
+      return () => {
+        supabase.removeChannel(messageSub);
+      };
     }
   }, [currentUser]);
 
@@ -170,7 +270,7 @@ const App: React.FC = () => {
       let error = null;
       let attempts = 0;
       
-      while (attempts < 5) {
+      while (attempts < 3) {
         const result = await supabase
           .from('profiles')
           .select('*')
@@ -182,8 +282,8 @@ const App: React.FC = () => {
         
         if (data) break;
         
-        // Wait 200ms before retrying
-        await new Promise(resolve => setTimeout(resolve, 200));
+        // Wait 100ms before retrying
+        await new Promise(resolve => setTimeout(resolve, 100));
         attempts++;
       }
         
@@ -203,7 +303,10 @@ const App: React.FC = () => {
   if (loadingAuth) {
     return (
       <div className="min-h-screen bg-[#f0f2f5] dark:bg-[#000000] flex items-center justify-center">
-        <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-[#1877F2]"></div>
+        <div className="flex flex-col items-center gap-4">
+          <div className="fast-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-[#1877F2]"></div>
+          <p className="text-gray-500 dark:text-gray-400 font-bold animate-pulse">Loading Next Media...</p>
+        </div>
       </div>
     );
   }
@@ -217,27 +320,8 @@ const App: React.FC = () => {
         robotSize, setRobotSize
       }}>
         <BrowserRouter>
-          <div className="min-h-screen bg-[#f0f2f5] dark:bg-[#000000] flex flex-col transition-colors duration-300">
-            <div className={`flex flex-1 pb-16 max-w-[1920px] mx-auto w-full ${currentUser ? 'pt-14' : ''}`}>
-              {currentUser && <Navbar />}
-              {currentUser && <div className="hidden md:block"><Sidebar /></div>}
-              <main className={`flex-1 overflow-y-auto ${currentUser ? 'p-0 md:p-4' : ''}`}>
-                <Routes>
-                  <Route path="/" element={currentUser ? <Feed /> : <Navigate to="/login" />} />
-                  <Route path="/login" element={!currentUser ? <Login /> : <Navigate to="/" />} />
-                  <Route path="/register" element={!currentUser ? <Register /> : <Navigate to="/" />} />
-                  <Route path="/messages" element={currentUser ? <Messages /> : <Navigate to="/login" />} />
-                  <Route path="/friends" element={currentUser ? <Friends /> : <Navigate to="/login" />} />
-                  <Route path="/notifications" element={currentUser ? <Notifications /> : <Navigate to="/login" />} />
-                  <Route path="/profile/:username" element={currentUser ? <Profile /> : <Navigate to="/login" />} />
-                  <Route path="/settings" element={currentUser ? <Settings /> : <Navigate to="/login" />} />
-                  <Route path="/create-post" element={currentUser ? <CreatePost /> : <Navigate to="/login" />} />
-                </Routes>
-              </main>
-            </div>
-            {currentUser && <div className="z-[100] relative"><BottomNav /></div>}
-            {nextoEnabled && <NextoRobot />}
-          </div>
+          <AppLayout />
+          {nextoEnabled && <NextoRobot />}
         </BrowserRouter>
       </ThemeContext.Provider>
     </AuthContext.Provider>

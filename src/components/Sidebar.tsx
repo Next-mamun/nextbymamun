@@ -5,12 +5,12 @@ import { Users, Bookmark, Flag, Calendar, Settings, ChevronDown, UserCircle, Tre
 import { useAuth } from '@/App';
 import { VerifiedBadge } from './VerifiedBadge';
 
-const SidebarItem: React.FC<{ icon: React.ReactNode, label: string | React.ReactNode, to: string }> = ({ icon, label, to }) => (
+const SidebarItem = React.memo<{ icon: React.ReactNode, label: string | React.ReactNode, to: string }>(({ icon, label, to }) => (
   <Link to={to} className="flex items-center gap-3 p-3 hover:bg-gray-200 dark:hover:bg-gray-800 rounded-lg transition-colors">
     <div className="text-[#1877F2]">{icon}</div>
     <span className="font-medium text-sm text-gray-700 dark:text-gray-300">{label}</span>
   </Link>
-);
+));
 
 const Sidebar: React.FC = () => {
   const { currentUser } = useAuth();
@@ -41,6 +41,7 @@ const Sidebar: React.FC = () => {
       <SidebarItem icon={<Bookmark size={24} />} label="Saved" to="/" />
       <SidebarItem icon={<Calendar size={24} />} label="Events" to="/" />
       <SidebarItem icon={<Settings size={24} />} label="Settings" to="/settings" />
+      <SidebarItem icon={<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="lucide lucide-clapperboard"><path d="M20.2 6 3 11l-.9-2.4c-.3-1.1.3-2.2 1.3-2.5l13.5-4c1.1-.3 2.2.3 2.5 1.3Z"/><path d="m6.2 5.3 3.1 3.9"/><path d="m12.4 3.4 3.1 4"/><path d="M3 11h18v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"/></svg>} label="Videos" to="/reels" />
       
       <button className="flex items-center gap-3 p-3 hover:bg-gray-200 dark:hover:bg-gray-800 rounded-lg transition-colors mb-4">
         <div className="bg-gray-200 dark:bg-gray-700 p-1.5 rounded-full"><ChevronDown size={18} className="text-gray-600 dark:text-gray-300" /></div>
@@ -75,4 +76,4 @@ const Sidebar: React.FC = () => {
   );
 };
 
-export default Sidebar;
+export default React.memo(Sidebar);
