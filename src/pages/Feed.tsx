@@ -13,6 +13,7 @@ import { useQuery, useInfiniteQuery, useQueryClient } from '@tanstack/react-quer
 import { CameraCapture, MediaEditor } from '@/components/MediaTools';
 
 import PostCard from '@/components/PostCard';
+import NativeAd from '@/components/NativeAd';
 
 const Feed: React.FC = () => {
   const { currentUser } = useAuth();
@@ -554,12 +555,16 @@ const Feed: React.FC = () => {
         <div className="flex flex-col items-center justify-center p-20 gap-4"><div className="w-8 h-8 border-4 border-[#1877F2] border-t-transparent rounded-full animate-spin"></div><p className="font-bold text-gray-500">Fast Loading...</p></div>
       ) : (
         <>
-          {filteredPosts.map(post => (
-            <PostCard 
-              key={post.id} 
-              post={post} 
-              onObserve={handleObserve}
-            />
+          {filteredPosts.map((post, index) => (
+            <React.Fragment key={post.id}>
+              <PostCard 
+                post={post} 
+                onObserve={handleObserve}
+              />
+              {(index + 1) % 5 === 0 && (
+                <NativeAd adUnitId="ca-app-pub-1044610166642937/2963261251" />
+              )}
+            </React.Fragment>
           ))}
           {hasNextPage && (
             <div ref={loadMoreRef} className="py-4 text-center font-bold text-gray-500">
