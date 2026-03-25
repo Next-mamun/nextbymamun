@@ -1,6 +1,6 @@
 
 import React, { useState, useEffect, useRef } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useLocation } from 'react-router-dom';
 import { Search, Trash2, Send, Smile, Paperclip, MessageSquare, ArrowLeft, Check, CheckCheck, Ban, RefreshCw, X } from 'lucide-react';
 import EmojiPicker, { Theme } from 'emoji-picker-react';
 import { useAuth } from '@/App';
@@ -12,6 +12,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 const Messages: React.FC = () => {
   const { currentUser } = useAuth();
   const navigate = useNavigate();
+  const location = useLocation();
   const queryClient = useQueryClient();
   const [selectedChat, setSelectedChat] = useState<any>(null);
   const [messageText, setMessageText] = useState('');
@@ -21,6 +22,18 @@ const Messages: React.FC = () => {
   const [isUploading, setIsUploading] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (location.state?.userId) {
+      const fetchUser = async () => {
+        const { data } = await supabase.from('profiles').select('*').eq('id', location.state.userId).single();
+        if (data) setSelectedChat(data);
+      };
+      fetchUser();
+      // Clear state so it doesn't re-select on refresh
+      navigate(location.pathname, { replace: true, state: {} });
+    }
+  }, [location.state, location.pathname, navigate]);
 
   const { data: contacts = [] } = useQuery({
     queryKey: ['contacts'],
@@ -312,6 +325,12 @@ const Messages: React.FC = () => {
     setMessageText('');
     const { error } = await supabase.from('messages').insert([newMessage]);
     if (!error) {
+      await supabase.from('notifications').insert([{
+        user_id: selectedChat.id,
+        sender_id: currentUser!.id,
+        type: 'message',
+        created_at: new Date().toISOString()
+      }]);
       queryClient.invalidateQueries({ queryKey: ['messages', selectedChat.id] });
       queryClient.invalidateQueries({ queryKey: ['contacts'] });
     }
