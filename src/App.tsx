@@ -8,7 +8,30 @@ import NextoRobot from '@/components/NextoRobot';
 import { UserProfile as User } from '@/types';
 import { supabase } from '@/lib/supabase';
 import { useWakeLock } from '@/hooks/useWakeLock';
-import { requestNotificationPermission, showNotification } from '@/services/notificationService';
+import { requestNotificationPermission } from '@/services/notificationService';
+import { toast } from 'sonner';
+
+// Handle dynamic import errors
+window.addEventListener('error', (e) => {
+  if (e.message && e.message.includes('Failed to fetch dynamically imported module')) {
+    window.location.reload();
+  }
+});
+
+// Cleanup huge base64 posts that crash the feed
+const cleanupHugePosts = async () => {
+  try {
+    const { error } = await supabase
+      .from('posts')
+      .delete()
+      .like('media_url', 'data:%');
+    if (error) console.error('Cleanup error:', error);
+    else console.log('Cleaned up base64 posts');
+  } catch (e) {
+    console.error(e);
+  }
+};
+cleanupHugePosts();
 
 // Lazy load pages for better performance
 const Feed = lazy(() => import('@/pages/Feed'));
@@ -22,42 +45,7 @@ const CreatePost = lazy(() => import('@/pages/CreatePost'));
 const Notifications = lazy(() => import('@/pages/Notifications'));
 const Reels = lazy(() => import('@/pages/Reels'));
 
-interface AuthContextType {
-  currentUser: User | null;
-  setCurrentUser: (user: User | null) => void;
-  logout: () => void;
-}
-
-interface ThemeContextType {
-  darkMode: boolean;
-  toggleDarkMode: () => void;
-  desktopMode: boolean;
-  toggleDesktopMode: () => void;
-  nextoEnabled: boolean;
-  toggleNexto: () => void;
-  robotSize: number;
-  setRobotSize: (size: number) => void;
-}
-
-const AuthContext = createContext<AuthContextType | undefined>(undefined);
-export const ThemeContext = createContext<ThemeContextType>({ 
-  darkMode: false, 
-  toggleDarkMode: () => {},
-  desktopMode: false,
-  toggleDesktopMode: () => {},
-  nextoEnabled: true,
-  toggleNexto: () => {},
-  robotSize: 80,
-  setRobotSize: () => {}
-});
-
-export const useAuth = () => {
-  const context = useContext(AuthContext);
-  if (!context) throw new Error("useAuth must be used within AuthProvider");
-  return context;
-};
-
-export const useTheme = () => useContext(ThemeContext);
+import { AuthContext, AuthContextType, ThemeContext, ThemeContextType, useAuth, useTheme } from '@/contexts/AuthContext';
 
 const AppLayout: React.FC = () => {
   const { currentUser } = useAuth();
@@ -175,7 +163,7 @@ const App: React.FC = () => {
       // Global Real-time Listeners for Notifications
       const messageSub = supabase.channel('global_notifications')
         .on('postgres_changes', { 
-          event: 'INSERT', 
+          event: '*', 
           schema: 'public', 
           table: 'messages',
           filter: `receiver_id=eq.${currentUser.id}`
@@ -186,11 +174,12 @@ const App: React.FC = () => {
             queryClient.invalidateQueries({ queryKey: ['totalUnread'] });
             queryClient.invalidateQueries({ queryKey: ['unreadCounts'] });
             queryClient.invalidateQueries({ queryKey: ['contacts'] });
+            queryClient.invalidateQueries({ queryKey: ['notifications', currentUser.id] });
           }
 
           // Don't show notification if already in messages with this sender
           const isAtMessages = window.location.pathname.startsWith('/messages');
-          if (isAtMessages) return;
+          if (isAtMessages || payload.eventType !== 'INSERT') return;
 
           // Fetch sender info for better notification
           const { data: sender } = await supabase
@@ -199,9 +188,53 @@ const App: React.FC = () => {
             .eq('id', payload.new.sender_id)
             .single();
           
-          showNotification(`New message from ${sender?.display_name || 'Someone'}`, {
-            body: payload.new.content,
-            tag: 'message-' + payload.new.sender_id
+          toast(`New message from ${sender?.display_name || 'Someone'}`, {
+            description: payload.new.content,
+            id: 'message-' + payload.new.sender_id
+          });
+        })
+        .on('postgres_changes', {
+          event: 'INSERT',
+          schema: 'public',
+          table: 'notifications',
+          filter: `user_id=eq.${currentUser.id}`
+        }, async (payload) => {
+          const queryClient = (window as any).queryClient;
+          if (queryClient) {
+            queryClient.invalidateQueries({ queryKey: ['notifications', currentUser.id] });
+          }
+
+          // Fetch sender info
+          const { data: sender } = await supabase
+            .from('profiles')
+            .select('display_name')
+            .eq('id', payload.new.sender_id)
+            .single();
+
+          let title = 'New Notification';
+          let body = '';
+
+          switch (payload.new.type) {
+            case 'like':
+              title = `${sender?.display_name || 'Someone'} liked your post`;
+              break;
+            case 'comment':
+              title = `${sender?.display_name || 'Someone'} commented on your post`;
+              break;
+            case 'friend_request':
+              title = `New friend request from ${sender?.display_name || 'Someone'}`;
+              break;
+            case 'friend_accept':
+              title = `${sender?.display_name || 'Someone'} accepted your friend request`;
+              break;
+            case 'mention':
+              title = `${sender?.display_name || 'Someone'} mentioned you`;
+              break;
+          }
+
+          toast(title, {
+            description: body,
+            id: 'notif-' + payload.new.id
           });
         })
         .on('postgres_changes', {
@@ -219,9 +252,9 @@ const App: React.FC = () => {
               .eq('id', payload.new.user_id)
               .single();
 
-            showNotification(`${author?.display_name || 'Someone'} mentioned you`, {
-              body: content.substring(0, 100) + (content.length > 100 ? '...' : ''),
-              tag: 'mention-' + payload.new.id
+            toast(`${author?.display_name || 'Someone'} mentioned you`, {
+              description: content.substring(0, 100) + (content.length > 100 ? '...' : ''),
+              id: 'mention-' + payload.new.id
             });
           }
         })
@@ -240,6 +273,12 @@ const App: React.FC = () => {
       if (session?.user) {
         fetchUserProfile(session.user.id);
       } else {
+        const saved = localStorage.getItem('next_media_user');
+        if (saved) {
+          setCurrentUser(JSON.parse(saved));
+        } else {
+          setCurrentUser(null);
+        }
         setLoadingAuth(false);
       }
     };
@@ -250,6 +289,11 @@ const App: React.FC = () => {
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
       async (event, session) => {
         if (event === 'SIGNED_IN' && session?.user) {
+          if (window.opener) {
+            window.opener.postMessage({ type: 'OAUTH_AUTH_SUCCESS' }, '*');
+            window.close();
+            return;
+          }
           fetchUserProfile(session.user.id);
         } else if (event === 'SIGNED_OUT') {
           setCurrentUser(null);
@@ -258,8 +302,19 @@ const App: React.FC = () => {
       }
     );
 
+    const handleMessage = async (event: MessageEvent) => {
+      if (event.data?.type === 'OAUTH_AUTH_SUCCESS') {
+        const { data: { session } } = await supabase.auth.getSession();
+        if (session?.user) {
+          fetchUserProfile(session.user.id);
+        }
+      }
+    };
+    window.addEventListener('message', handleMessage);
+
     return () => {
       subscription.unsubscribe();
+      window.removeEventListener('message', handleMessage);
     };
   }, []);
 
@@ -305,7 +360,7 @@ const App: React.FC = () => {
       <div className="min-h-screen bg-[#f0f2f5] dark:bg-[#000000] flex items-center justify-center">
         <div className="flex flex-col items-center gap-4">
           <div className="fast-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-[#1877F2]"></div>
-          <p className="text-gray-500 dark:text-gray-400 font-bold animate-pulse">Loading Next Media...</p>
+          <p className="text-gray-500 dark:text-gray-400 font-bold animate-pulse">Loading Next...</p>
         </div>
       </div>
     );

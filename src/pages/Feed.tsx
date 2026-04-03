@@ -6,25 +6,26 @@ import ZoomableImage from '@/components/ZoomableImage';
 import ProfilePhoto from '@/components/ProfilePhoto';
 import VideoPlayer from '@/components/VideoPlayer';
 import EmbedPlayer from '@/components/EmbedPlayer';
-import { useAuth } from '@/App';
+import { useAuth } from '@/contexts/AuthContext';
 import { supabase } from '../lib/supabase';
 import { Link } from 'react-router-dom';
 import { useQuery, useInfiniteQuery, useQueryClient } from '@tanstack/react-query';
 import { CameraCapture, MediaEditor } from '@/components/MediaTools';
 
 import PostCard from '@/components/PostCard';
-import NativeAd from '@/components/NativeAd';
+import AdsterraAd from '@/components/AdsterraAd';
+
+import { useUpload } from '@/contexts/UploadContext';
 
 const Feed: React.FC = () => {
   const { currentUser } = useAuth();
   const queryClient = useQueryClient();
+  const { addUpload, uploads } = useUpload();
   const [newPostContent, setNewPostContent] = useState('');
-  const [selectedFile, setSelectedFile] = useState<string | null>(null);
+  const [selectedFile, setSelectedFile] = useState<File | string | null>(null);
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [fileType, setFileType] = useState<'image' | 'video' | 'text'>('text');
   
-  const [isUploading, setIsUploading] = useState(false);
-  const [uploadProgress, setUploadProgress] = useState(0);
-  const [uploadSuccess, setUploadSuccess] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedCategory, setSelectedCategory] = useState('All');
   const [contentTypeFilter, setContentTypeFilter] = useState<'All' | 'Image' | 'Text' | 'Video'>('All');
@@ -37,6 +38,7 @@ const Feed: React.FC = () => {
   const [customCategory, setCustomCategory] = useState('');
   const [showCamera, setShowCamera] = useState(false);
   const [showEditor, setShowEditor] = useState(false);
+  const [isUploading, setIsUploading] = useState(false);
   
   const categories = ['All', 'Entertainment', 'Learning', 'AI', 'Technology', 'Music', 'Gaming', 'News', 'Lifestyle', 'Sports', 'Art'];
   const POSTS_PER_PAGE = 10;
@@ -54,7 +56,7 @@ const Feed: React.FC = () => {
     queryFn: async () => {
       const { data } = await supabase
         .from('reels')
-        .select('*, profiles:user_id(*), likes:reel_likes(*)')
+        .select('*, profiles(*), likes:reel_likes(*)')
         .limit(5)
         .order('created_at', { ascending: false });
       return data || [];
@@ -69,13 +71,14 @@ const Feed: React.FC = () => {
     hasNextPage,
     isFetchingNextPage,
     isLoading: postsLoading,
-    refetch: refetchPosts
+    refetch: refetchPosts,
+    error: postsError
   } = useInfiniteQuery({
     queryKey: ['posts', selectedCategory, contentTypeFilter],
     queryFn: async ({ pageParam = 0 }) => {
       let query = supabase
         .from('posts')
-        .select('*, profiles:user_id(*), comments(*, profiles:user_id(*)), likes(*)')
+        .select('*, profiles(*), comments(*, profiles(*)), likes(*)')
         .order('created_at', { ascending: false });
 
       if (selectedCategory !== 'All') {
@@ -87,14 +90,17 @@ const Feed: React.FC = () => {
         query = query.eq('media_type', type);
       }
 
-      const { data } = await query.range(pageParam * POSTS_PER_PAGE, (pageParam + 1) * POSTS_PER_PAGE - 1);
+      const { data, error } = await query.range(pageParam * POSTS_PER_PAGE, (pageParam + 1) * POSTS_PER_PAGE - 1);
+      if (error) {
+        console.error("Error fetching posts:", error);
+        throw error;
+      }
       return data || [];
     },
     initialPageParam: 0,
     getNextPageParam: (lastPage, allPages) => {
       return lastPage.length === POSTS_PER_PAGE ? allPages.length : undefined;
     },
-    staleTime: 1000 * 60 * 2, // 2 minutes
   });
 
   const posts = useMemo(() => 
@@ -150,8 +156,10 @@ const Feed: React.FC = () => {
 
   const filteredPosts = useMemo(() => {
     const baseFiltered = posts.filter(p => {
-      const matchesSearch = p.content?.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        p.profiles?.display_name?.toLowerCase().includes(searchQuery.toLowerCase());
+      const contentStr = p.content || '';
+      const nameStr = p.profiles?.display_name || '';
+      const matchesSearch = contentStr.toLowerCase().includes(searchQuery.toLowerCase()) ||
+        nameStr.toLowerCase().includes(searchQuery.toLowerCase());
       return matchesSearch;
     });
 
@@ -207,49 +215,13 @@ const Feed: React.FC = () => {
     }
   };
 
-  const downscaleTo360p = async (base64: string, type: 'image' | 'video'): Promise<string> => {
-    return new Promise((resolve) => {
-      if (type === 'image') {
-        const img = new Image();
-        img.src = base64;
-        img.onload = () => {
-          const canvas = document.createElement('canvas');
-          const targetHeight = 360;
-          const aspectRatio = img.width / img.height;
-          const targetWidth = Math.round(targetHeight * aspectRatio);
-          canvas.width = targetWidth;
-          canvas.height = targetHeight;
-          const ctx = canvas.getContext('2d');
-          ctx?.drawImage(img, 0, 0, targetWidth, targetHeight);
-          resolve(canvas.toDataURL('image/jpeg', 0.7));
-        };
-      } else if (type === 'video') {
-        // Video downscaling in browser is complex without ffmpeg.wasm
-        // We'll keep it as is for now but the UI will treat it as optimized
-        console.log("Video upload detected - optimization to 360p requested");
-        resolve(base64);
-      } else {
-        resolve(base64);
-      }
-    });
-  };
-
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
-      const reader = new FileReader();
-      reader.onloadstart = () => { setIsUploading(true); setUploadProgress(0); };
-      reader.onloadend = async () => {
-        const base64 = reader.result as string;
-        const type = file.type.startsWith('video') ? 'video' : 'image';
-        
-        const downscaled = await downscaleTo360p(base64, type);
-        setSelectedFile(downscaled);
-        setFileType(type);
-        setIsUploading(false);
-        setUploadProgress(0);
-      };
-      reader.readAsDataURL(file);
+      const type = file.type.startsWith('video') ? 'video' : 'image';
+      setSelectedFile(file);
+      setPreviewUrl(URL.createObjectURL(file));
+      setFileType(type);
     }
   };
 
@@ -286,8 +258,6 @@ const Feed: React.FC = () => {
 
   const handleCreatePost = async () => {
     if (!newPostContent.trim() && !selectedFile && !ytLink) return;
-    setIsUploading(true);
-    setUploadProgress(20);
     
     try {
       let mediaUrl = selectedFile;
@@ -310,50 +280,32 @@ const Feed: React.FC = () => {
         mType = 'video';
       }
 
-      const postData: any = {
-        user_id: currentUser!.id,
+      const category = showCategoryInput ? customCategory : postCategory;
+
+      setIsUploading(true);
+      addUpload(mediaUrl || '', 'post', {
+        userId: currentUser!.id,
         content: newPostContent,
-        media_url: mediaUrl,
-        media_type: mType,
-        views: 0
-      };
+        mediaType: mType,
+        category: category,
+        onSuccess: () => {
+          queryClient.invalidateQueries({ queryKey: ['posts'] });
+        }
+      });
 
-      // Try to add category if selected
-      if (showCategoryInput ? customCategory : postCategory) {
-        postData.category = showCategoryInput ? customCategory : postCategory;
-      }
+      setNewPostContent('');
+      setSelectedFile(null);
+      setPreviewUrl(null);
+      setYtLink('');
+      setShowYoutube(false);
+      setShowCategoryInput(false);
+      setCustomCategory('');
+      setIsUploading(false); // Reset immediately so they can post again
 
-      const { error: insertError } = await supabase.from('posts').insert([postData]);
-
-      if (insertError) {
-        console.warn('Full insert failed, trying basic insert...', insertError);
-        // Fallback to basic insert if columns are missing
-        const { error: fallbackError } = await supabase.from('posts').insert([{
-          user_id: currentUser!.id,
-          content: newPostContent,
-          media_url: mediaUrl,
-          media_type: mType
-        }]);
-        if (fallbackError) throw fallbackError;
-      }
-
-      setUploadProgress(100);
-      setTimeout(() => {
-        setIsUploading(false);
-        setNewPostContent('');
-        setSelectedFile(null);
-        setYtLink('');
-        setShowYoutube(false);
-        setShowCategoryInput(false);
-        setCustomCategory('');
-        setUploadSuccess(true);
-        setTimeout(() => setUploadSuccess(false), 3000);
-        queryClient.invalidateQueries({ queryKey: ['posts'] });
-      }, 500);
     } catch (error: any) {
-      console.error('Post creation error:', error);
-      alert('Failed to post: ' + (error.message || 'Unknown error. Please ensure database columns "category" and "views" exist.'));
       setIsUploading(false);
+      console.error('Post creation error:', error);
+      alert('Failed to post: ' + (error.message || 'Unknown error.'));
     }
   };
 
@@ -397,29 +349,6 @@ const Feed: React.FC = () => {
           </button>
         ))}
       </div>
-      {/* Upload Feedback Overlay */}
-      {(isUploading || uploadSuccess) && (
-        <div className="bg-white dark:bg-black border dark:border-gray-800 rounded-xl p-4 shadow-xl mb-2 animate-in slide-in-from-top-4 duration-300">
-          {isUploading ? (
-            <div className="space-y-2">
-              <div className="flex justify-between text-xs font-bold text-gray-500 dark:text-gray-400">
-                <span>Uploading to Next Media...</span>
-                <span>{uploadProgress}%</span>
-              </div>
-              <div className="w-full bg-gray-100 dark:bg-gray-800 h-2 rounded-full overflow-hidden">
-                <div 
-                  className="bg-[#1877F2] h-full transition-all duration-300 ease-out"
-                  style={{ width: `${uploadProgress}%` }}
-                />
-              </div>
-            </div>
-          ) : (
-            <div className="flex items-center gap-2 text-green-600 font-bold justify-center py-1">
-              <CheckCircle size={20} /> Content Shared Successfully!
-            </div>
-          )}
-        </div>
-      )}
 
       {/* Create Post Section */}
       <div className="bg-white dark:bg-black rounded-xl shadow-sm border border-gray-200 dark:border-gray-800 overflow-hidden">
@@ -427,12 +356,12 @@ const Feed: React.FC = () => {
           <div className="flex gap-2 mb-4 items-center">
             <textarea value={newPostContent} onChange={(e) => setNewPostContent(e.target.value)} placeholder="What's on your mind?" className="flex-1 bg-[#f0f2f5] dark:bg-gray-900 rounded-xl px-5 py-3 outline-none resize-none text-[15px] text-gray-800 dark:text-white placeholder-gray-400 font-medium" rows={2} />
           </div>
-          {selectedFile && (
+          {selectedFile && previewUrl && (
             <div className="relative mb-4 bg-black rounded-lg overflow-hidden max-h-48 flex justify-center border dark:border-gray-800">
               {fileType === 'image' ? (
-                <img src={selectedFile} className="h-full object-contain" referrerPolicy="no-referrer" />
+                <img src={previewUrl} className="h-full object-contain" referrerPolicy="no-referrer" />
               ) : (
-                <video src={selectedFile} className="h-full" />
+                <video src={previewUrl} className="h-full" />
               )}
               <div className="absolute top-2 right-2 flex gap-2">
                 <button 
@@ -442,7 +371,7 @@ const Feed: React.FC = () => {
                 >
                   <Pencil size={14} />
                 </button>
-                <button onClick={() => setSelectedFile(null)} className="bg-black/50 text-white p-1.5 rounded-full hover:bg-black/70 transition-all">
+                <button onClick={() => { setSelectedFile(null); setPreviewUrl(null); }} className="bg-black/50 text-white p-1.5 rounded-full hover:bg-black/70 transition-all">
                   <X size={14} />
                 </button>
               </div>
@@ -551,19 +480,44 @@ const Feed: React.FC = () => {
       )}
 
       {/* Combined Feed items */}
-      {postsLoading && posts.length === 0 ? (
+      {postsError ? (
+        <div className="flex flex-col items-center justify-center p-20 gap-4">
+          <p className="font-bold text-red-500">Error loading posts: {postsError.message}</p>
+          <button onClick={() => window.location.reload()} className="bg-[#1877F2] text-white px-4 py-2 rounded-lg font-bold">Retry</button>
+        </div>
+      ) : postsLoading && posts.length === 0 ? (
         <div className="flex flex-col items-center justify-center p-20 gap-4"><div className="w-8 h-8 border-4 border-[#1877F2] border-t-transparent rounded-full animate-spin"></div><p className="font-bold text-gray-500">Fast Loading...</p></div>
       ) : (
         <>
+          {/* Optimistic Uploads */}
+          {uploads.filter(u => u.type === 'post').map(upload => (
+            <div key={upload.id} className={`bg-white dark:bg-black rounded-xl shadow-sm border ${upload.status === 'error' ? 'border-red-500' : 'border-[#1877F2] animate-pulse'} p-4`}>
+              <div className="flex items-center gap-3 mb-3">
+                <ProfilePhoto src={currentUser?.avatar_url || ''} alt="me" size="medium" />
+                <div>
+                  <h4 className="font-bold text-gray-900 dark:text-white">{currentUser?.display_name}</h4>
+                  <p className={`text-xs font-bold ${upload.status === 'error' ? 'text-red-500' : 'text-[#1877F2]'}`}>
+                    {upload.status === 'error' ? 'Upload Failed. Please retry.' : `Uploading... ${Math.round(upload.progress)}%`}
+                  </p>
+                </div>
+              </div>
+              {upload.metadata?.content && <p className="text-gray-800 dark:text-gray-200 mb-3 text-sm">{upload.metadata.content}</p>}
+              <div className={`w-full bg-gray-200 rounded-full h-1.5 dark:bg-gray-800 mt-2 overflow-hidden ${upload.status === 'error' ? 'hidden' : ''}`}>
+                <div className="bg-[#1877F2] h-1.5 rounded-full transition-all duration-300" style={{ width: `${upload.progress}%` }}></div>
+              </div>
+            </div>
+          ))}
+
+          {/* Top Ad */}
+          {filteredPosts.length > 0 && <AdsterraAd />}
+
           {filteredPosts.map((post, index) => (
             <React.Fragment key={post.id}>
+              {index > 0 && index % 4 === 0 && <AdsterraAd />}
               <PostCard 
                 post={post} 
                 onObserve={handleObserve}
               />
-              {(index + 1) % 5 === 0 && (
-                <NativeAd adUnitId="ca-app-pub-1044610166642937/2963261251" />
-              )}
             </React.Fragment>
           ))}
           {hasNextPage && (
@@ -574,6 +528,12 @@ const Feed: React.FC = () => {
           {!hasNextPage && posts.length > 0 && (
             <p className="text-center text-gray-400 font-bold py-4">You're all caught up!</p>
           )}
+          {!postsLoading && posts.length === 0 && uploads.filter(u => u.type === 'post').length === 0 && (
+            <div className="text-center py-10">
+              <p className="text-gray-500 dark:text-gray-400 font-bold">No posts found.</p>
+              <p className="text-sm text-gray-400 mt-2">Be the first to create a post!</p>
+            </div>
+          )}
         </>
       )}
 
@@ -582,9 +542,8 @@ const Feed: React.FC = () => {
       {/* Camera & Editor Modals */}
       {showCamera && (
         <CameraCapture 
-          onCapture={async (url, type) => {
-            const downscaled = await downscaleTo360p(url, type);
-            setSelectedFile(downscaled);
+          onCapture={(url, type) => {
+            setSelectedFile(url);
             setFileType(type);
             setShowCamera(false);
           }}
@@ -592,12 +551,13 @@ const Feed: React.FC = () => {
         />
       )}
 
-      {showEditor && selectedFile && (
+      {showEditor && selectedFile && previewUrl && (
         <MediaEditor 
-          mediaUrl={selectedFile}
+          mediaUrl={previewUrl}
           mediaType={fileType as 'image' | 'video'}
           onSave={(processed) => {
             setSelectedFile(processed);
+            setPreviewUrl(processed);
             setShowEditor(false);
           }}
           onCancel={() => setShowEditor(false)}

@@ -1,7 +1,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { UserMinus, MessageSquare, Check, X, UserPlus, Search, Users, Ban, UserCheck } from 'lucide-react';
-import { useAuth } from '@/App';
+import { useAuth } from '@/contexts/AuthContext';
 import { supabase } from '../lib/supabase';
 import { useNavigate } from 'react-router-dom';
 import { VerifiedBadge } from '@/components/VerifiedBadge';
@@ -140,18 +140,87 @@ const Friends: React.FC = () => {
   }, [queryClient]);
 
   const handleStatus = async (id: string, status: 'accepted' | 'delete' | 'blocked') => {
-    if (status === 'delete') {
-        await supabase.from('friendships').delete().eq('id', id);
-    } else {
-        await supabase.from('friendships').update({ status }).eq('id', id);
+    // Optimistic Update
+    const previousData = queryClient.getQueryData(['friends', searchQuery]);
+    queryClient.setQueryData(['friends', searchQuery], (old: any) => {
+      if (!old) return old;
+      if (status === 'delete') {
+        return {
+          ...old,
+          requests: old.requests.filter((r: any) => r.friendship_id !== id),
+          friends: old.friends.filter((f: any) => f.friendship_id !== id)
+        };
+      }
+      if (status === 'accepted') {
+        const acceptedReq = old.requests.find((r: any) => r.friendship_id === id);
+        if (!acceptedReq) return old;
+        return {
+          ...old,
+          requests: old.requests.filter((r: any) => r.friendship_id !== id),
+          friends: [...old.friends, { ...acceptedReq, friendship_id: id }]
+        };
+      }
+      return old;
+    });
+
+    try {
+      if (status === 'delete') {
+          await supabase.from('friendships').delete().eq('id', id);
+      } else {
+          await supabase.from('friendships').update({ status }).eq('id', id);
+          
+          if (status === 'accepted') {
+            const { data: friendship } = await supabase.from('friendships').select('*').eq('id', id).single();
+            if (friendship) {
+              const otherId = friendship.sender_id === currentUser?.id ? friendship.receiver_id : friendship.sender_id;
+              await supabase.from('notifications').insert([{
+                user_id: otherId,
+                sender_id: currentUser?.id,
+                type: 'friend_accept',
+                is_read: false,
+                created_at: new Date().toISOString()
+              }]);
+              queryClient.invalidateQueries({ queryKey: ['notifications', otherId] });
+            }
+          }
+      }
+    } catch (err) {
+      console.error("Error updating status:", err);
+      queryClient.setQueryData(['friends', searchQuery], previousData);
     }
     queryClient.invalidateQueries({ queryKey: ['friends'] });
   };
 
   const sendRequest = async (targetId: string) => {
-    const { error } = await supabase.from('friendships').insert([{ sender_id: currentUser?.id, receiver_id: targetId, status: 'pending' }]);
-    if (error) {
-        console.error("Error sending request:", error);
+    // Optimistic Update
+    const previousData = queryClient.getQueryData(['friends', searchQuery]);
+    queryClient.setQueryData(['friends', searchQuery], (old: any) => {
+      if (!old) return old;
+      const targetUser = old.discovery.find((u: any) => u.id === targetId);
+      if (!targetUser) return old;
+      return {
+        ...old,
+        discovery: old.discovery.map((u: any) => u.id === targetId ? { ...u, is_pending: true, friendship_id: 'temp-' + Date.now() } : u)
+      };
+    });
+
+    try {
+      const { data, error } = await supabase.from('friendships').insert([{ sender_id: currentUser?.id, receiver_id: targetId, status: 'pending' }]).select().single();
+      if (!error) {
+        await supabase.from('notifications').insert([{
+          user_id: targetId,
+          sender_id: currentUser?.id,
+          type: 'friend_request',
+          is_read: false,
+          created_at: new Date().toISOString()
+        }]);
+        queryClient.invalidateQueries({ queryKey: ['notifications', targetId] });
+      } else {
+          throw error;
+      }
+    } catch (err) {
+      console.error("Error sending request:", err);
+      queryClient.setQueryData(['friends', searchQuery], previousData);
     }
     queryClient.invalidateQueries({ queryKey: ['friends'] });
   };

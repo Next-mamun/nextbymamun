@@ -1,5 +1,6 @@
 import React, { useState, useMemo, useEffect } from 'react';
-import { requestNotificationPermission, showNotification } from '@/services/notificationService';
+import { requestNotificationPermission } from '@/services/notificationService';
+import { toast } from 'sonner';
 import { 
   User, Lock, Bell, Shield, Globe, HelpCircle, Search, ChevronRight, 
   Monitor, Database, Briefcase, Smartphone, Key, UserX, EyeOff, 
@@ -7,7 +8,7 @@ import {
   BarChart3, DollarSign, AlertTriangle, FileText, RefreshCw, CheckCircle, Upload, Bot, Trash2, UserMinus, BarChart, Users,
   BellRing
 } from 'lucide-react';
-import { useAuth, useTheme } from '@/App';
+import { useAuth, useTheme } from '@/contexts/AuthContext';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 
 import { supabase } from '../lib/supabase';
@@ -134,9 +135,17 @@ const Row: React.FC<{ icon?: React.ReactNode, title: string, description?: strin
 const Settings: React.FC = () => {
   const { currentUser } = useAuth();
   const { darkMode, toggleDarkMode, desktopMode, toggleDesktopMode, nextoEnabled, toggleNexto, robotSize, setRobotSize } = useTheme();
+  const [textSize, setTextSize] = useState<'normal' | 'large' | 'extra-large'>('normal');
   const [activeTab, setActiveTab] = useState('display');
   const [searchQuery, setSearchQuery] = useState('');
   const [profile, setProfile] = useState<any>(null);
+
+  useEffect(() => {
+    document.documentElement.classList.remove('text-sm', 'text-base', 'text-lg');
+    if (textSize === 'normal') document.documentElement.classList.add('text-sm');
+    else if (textSize === 'large') document.documentElement.classList.add('text-base');
+    else if (textSize === 'extra-large') document.documentElement.classList.add('text-lg');
+  }, [textSize]);
 
   useEffect(() => {
     if (currentUser) {
@@ -305,6 +314,20 @@ const Settings: React.FC = () => {
 
               <Section title="Appearance">
                 <div className="p-4 border-b border-gray-100 dark:border-gray-700">
+                  <p className="font-bold text-gray-900 dark:text-white mb-3">Text Size</p>
+                  <div className="grid grid-cols-3 gap-3">
+                    {(['normal', 'large', 'extra-large'] as const).map(size => (
+                      <button 
+                        key={size}
+                        onClick={() => setTextSize(size)}
+                        className={`p-3 border-2 rounded-xl font-bold transition-colors ${textSize === size ? 'border-blue-500 bg-blue-50 text-blue-600' : 'border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 text-gray-600 dark:text-gray-400'}`}
+                      >
+                        {size.charAt(0).toUpperCase() + size.slice(1)}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <div className="p-4 border-b border-gray-100 dark:border-gray-700">
                   <p className="font-bold text-gray-900 dark:text-white mb-3">Theme</p>
                   <div className="grid grid-cols-2 gap-3">
                     <button 
@@ -416,7 +439,7 @@ const Settings: React.FC = () => {
                       onClick={async () => {
                         const granted = await requestNotificationPermission();
                         if (granted) {
-                          showNotification('Notifications Enabled!', { body: 'You will now receive alerts from Next Media.' });
+                          toast('Notifications Enabled!', { description: 'You will now receive alerts from Next Media.' });
                           window.location.reload(); // Refresh to update UI state
                         } else {
                           alert('Notification permission was denied. Please enable it in your browser settings.');
@@ -430,7 +453,7 @@ const Settings: React.FC = () => {
 
                   {Notification.permission === 'granted' && (
                     <button 
-                      onClick={() => showNotification('Test Notification', { body: 'This is a test to verify notifications are working.' })}
+                      onClick={() => toast('Test Notification', { description: 'This is a test to verify notifications are working.' })}
                       className="px-8 py-3 bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-white font-bold rounded-xl hover:bg-gray-200 dark:hover:bg-gray-700 transition-all"
                     >
                       Send Test Notification

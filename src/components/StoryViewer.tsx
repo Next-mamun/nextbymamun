@@ -3,7 +3,7 @@ import { X, ChevronLeft, ChevronRight } from 'lucide-react';
 import { Story, User } from '@/types';
 import { Link } from 'react-router-dom';
 import { supabase } from '../lib/supabase';
-import { useAuth } from '@/App';
+import { useAuth } from '@/contexts/AuthContext';
 import { Eye } from 'lucide-react';
 interface StoryViewerProps {
   stories: Story[];
@@ -37,7 +37,7 @@ const StoryViewer: React.FC<StoryViewerProps> = ({ stories, users, initialStoryI
       if (story.user_id === currentUser.id) {
         const { data, count } = await supabase
           .from('story_views')
-          .select('*, profiles:viewer_id(*)', { count: 'exact' })
+          .select('*, profiles(*)', { count: 'exact' })
           .eq('story_id', story.id);
         
         setViewCount(count || 0);

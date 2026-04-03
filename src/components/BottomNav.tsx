@@ -1,7 +1,7 @@
 import React from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import { Home, PlusSquare, MessageCircle, User, Users } from 'lucide-react';
-import { useAuth } from '@/App';
+import { useAuth } from '@/contexts/AuthContext';
 import { useQuery } from '@tanstack/react-query';
 import { supabase } from '../lib/supabase';
 
@@ -15,12 +15,15 @@ const BottomNav: React.FC = () => {
     queryKey: ['totalUnread'],
     queryFn: async () => {
       if (!currentUser) return 0;
-      const { count } = await supabase
+      const { data } = await supabase
         .from('messages')
-        .select('*', { count: 'exact', head: true })
+        .select('sender_id')
         .eq('receiver_id', currentUser.id)
-        .eq('is_read', false);
-      return count || 0;
+        .or('is_read.eq.false,is_read.is.null');
+      
+      if (!data) return 0;
+      const uniqueSenders = new Set(data.map(msg => msg.sender_id));
+      return uniqueSenders.size;
     },
     enabled: !!currentUser,
     refetchInterval: 10000, // Poll every 10s as a fallback

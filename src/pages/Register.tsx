@@ -2,7 +2,7 @@
 import React, { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { User, Lock, Shield, UserCircle, Key } from 'lucide-react';
-import { useAuth } from '@/App';
+import { useAuth } from '@/contexts/AuthContext';
 import { generateBio } from '../services/geminiService';
 import { supabase } from '../lib/supabase';
 
@@ -23,15 +23,20 @@ const Register: React.FC = () => {
   const handleGoogleLogin = async () => {
     try {
       setIsGoogleLoading(true);
-      const { error } = await supabase.auth.signInWithOAuth({
+      const { data, error } = await supabase.auth.signInWithOAuth({
         provider: 'google',
         options: {
           redirectTo: window.location.origin,
+          skipBrowserRedirect: true,
         },
       });
       if (error) throw error;
+      if (data?.url) {
+        window.open(data.url, 'oauth_popup', 'width=500,height=600');
+      }
     } catch (error: any) {
       setError(error.message);
+    } finally {
       setIsGoogleLoading(false);
     }
   };
@@ -85,9 +90,9 @@ const Register: React.FC = () => {
     <div className="flex flex-col items-center justify-center min-h-[90vh] p-4 bg-gradient-to-br from-gray-900 via-black to-gray-900">
       <div className="bg-white/10 p-6 sm:p-10 rounded-3xl shadow-2xl w-full max-w-[480px] border border-white/10 backdrop-blur-xl">
         <div className="mb-8 text-center">
-          <img src="https://i.postimg.cc/wxwt5tsk/retouch-2026030721254774.png" alt="Next Media" className="h-16 w-auto mx-auto mb-4 drop-shadow-lg" />
+          <img src="https://i.postimg.cc/wxwt5tsk/retouch-2026030721254774.png" alt="Next" className="h-16 w-auto mx-auto mb-4 drop-shadow-lg" />
           <h1 className="text-3xl font-black tracking-tight text-white">Create Account</h1>
-          <p className="text-gray-400 font-medium mt-2">Join the Next Media community today.</p>
+          <p className="text-gray-400 font-medium mt-2">Join the Next community today.</p>
         </div>
         
         <form onSubmit={handleRegister} className="flex flex-col gap-5">

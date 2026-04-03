@@ -4,12 +4,13 @@ import { ThumbsUp, MessageSquare, Trash2, Eye, Send, MessageCircle } from 'lucid
 import { Link, useNavigate } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
 import { supabase } from '@/lib/supabase';
-import { useAuth } from '@/App';
+import { useAuth } from '@/contexts/AuthContext';
 import { VerifiedBadge } from '@/components/VerifiedBadge';
 import ZoomableImage from '@/components/ZoomableImage';
 import ProfilePhoto from '@/components/ProfilePhoto';
 import VideoPlayer from '@/components/VideoPlayer';
 import EmbedPlayer from '@/components/EmbedPlayer';
+import { formatTime } from '@/lib/utils';
 
 interface PostCardProps {
   post: any;
@@ -57,6 +58,16 @@ const PostCard = React.memo(({ post, onObserve, isProfileView = false }: PostCar
         await supabase.from('likes').delete().match({ post_id: post.id, user_id: currentUser.id });
       } else {
         await supabase.from('likes').insert([{ post_id: post.id, user_id: currentUser.id }]);
+        if (post.user_id !== currentUser.id) {
+          await supabase.from('notifications').insert([{
+            user_id: post.user_id,
+            sender_id: currentUser.id,
+            type: 'like',
+            is_read: false,
+            created_at: new Date().toISOString()
+          }]);
+          queryClient.invalidateQueries({ queryKey: ['notifications', post.user_id] });
+        }
       }
       queryClient.invalidateQueries({ queryKey: ['posts'] });
       queryClient.invalidateQueries({ queryKey: ['userPosts'] });
@@ -88,6 +99,16 @@ const PostCard = React.memo(({ post, onObserve, isProfileView = false }: PostCar
 
     try {
       await supabase.from('comments').insert([{ post_id: post.id, user_id: currentUser.id, content: commentText }]);
+      if (post.user_id !== currentUser.id) {
+        await supabase.from('notifications').insert([{
+          user_id: post.user_id,
+          sender_id: currentUser.id,
+          type: 'comment',
+          is_read: false,
+          created_at: new Date().toISOString()
+        }]);
+        queryClient.invalidateQueries({ queryKey: ['notifications', post.user_id] });
+      }
       queryClient.invalidateQueries({ queryKey: ['posts'] });
       queryClient.invalidateQueries({ queryKey: ['userPosts'] });
     } catch (error) {
@@ -116,7 +137,7 @@ const PostCard = React.memo(({ post, onObserve, isProfileView = false }: PostCar
               {post.profiles?.is_verified && <VerifiedBadge />}
               {post.category && <span className="text-[10px] bg-orange-50 dark:bg-orange-900/20 text-orange-600 dark:text-orange-400 px-2 py-0.5 rounded-full border border-orange-100 dark:border-orange-800">{post.category}</span>}
             </p>
-            <p className="text-[12px] text-gray-500 dark:text-gray-400 font-medium">{new Date(post.created_at).toLocaleString()}</p>
+            <p className="text-[12px] text-gray-500 dark:text-gray-400 font-medium">{formatTime(post.created_at, { showYear: true })}</p>
           </div>
         </Link>
         {post.user_id === currentUser?.id && <button onClick={handleDelete} className="p-2 text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-full transition-colors"><Trash2 size={18} /></button>}

@@ -47,7 +47,7 @@ class ErrorBoundary extends React.Component<{ children: React.ReactNode }, { has
   }
 
   componentDidCatch(error: Error, errorInfo: React.ErrorInfo) {
-    console.error("Uncaught error:", error, errorInfo);
+    console.error("Uncaught error in ErrorBoundary:", error, errorInfo);
   }
 
   render() {
@@ -67,12 +67,18 @@ class ErrorBoundary extends React.Component<{ children: React.ReactNode }, { has
   }
 }
 
+import { UploadProvider } from './contexts/UploadContext';
+import { Toaster } from 'sonner';
+
 const root = ReactDOM.createRoot(rootElement);
 root.render(
   <React.StrictMode>
     <ErrorBoundary>
       <QueryClientProvider client={queryClient}>
-        <App />
+        <UploadProvider>
+          <Toaster position="top-center" richColors theme="system" />
+          <App />
+        </UploadProvider>
       </QueryClientProvider>
     </ErrorBoundary>
   </React.StrictMode>

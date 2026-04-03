@@ -2,18 +2,20 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { Camera, Edit2, Plus, Save, X, MessageCircle, UserPlus, Check, Users, RefreshCw, Calendar, CheckCircle } from 'lucide-react';
-import { useAuth } from '@/App';
+import { useAuth } from '@/contexts/AuthContext';
 import { supabase } from '../lib/supabase';
 import { VerifiedBadge } from '@/components/VerifiedBadge';
 import ZoomableImage from '@/components/ZoomableImage';
 import { Link } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useUpload } from '@/contexts/UploadContext';
 
 import PostCard from '@/components/PostCard';
 
 const Profile: React.FC = () => {
   const { username } = useParams();
   const { currentUser, setCurrentUser } = useAuth();
+  const { addUpload } = useUpload();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [isEditing, setIsEditing] = useState(false);
@@ -59,7 +61,7 @@ const Profile: React.FC = () => {
       if (!profile?.id) return [];
       const { data } = await supabase
         .from('posts')
-        .select('*, profiles:user_id(*), comments(*, profiles:user_id(*)), likes(*)')
+        .select('*, profiles(*), comments(*, profiles(*)), likes(*)')
         .eq('user_id', profile.id)
         .order('created_at', { ascending: false });
       return data || [];
@@ -136,23 +138,17 @@ const Profile: React.FC = () => {
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>, type: 'avatar') => {
     const file = e.target.files?.[0];
     if (file) {
-      setIsUploading(true);
-      const reader = new FileReader();
-      reader.onloadend = async () => {
-        const base64 = reader.result as string;
-        setEditData(prev => ({ ...prev, avatar_url: base64 }));
-        
-        if (!isEditing) {
-          const updateObj = { avatar_url: base64 };
-          const { data, error } = await supabase.from('profiles').update(updateObj).eq('id', currentUser?.id).select().single();
-          if (!error) {
+      addUpload(file, 'profile', {
+        userId: currentUser?.id,
+        payload: { avatar_url: '' }, // URL will be added by UploadContext
+        onSuccess: async () => {
+          const { data } = await supabase.from('profiles').select('*').eq('id', currentUser?.id).single();
+          if (data) {
             setCurrentUser(data);
             queryClient.invalidateQueries({ queryKey: ['profile', username] });
           }
         }
-        setIsUploading(false);
-      };
-      reader.readAsDataURL(file);
+      });
     }
   };
 
@@ -160,6 +156,12 @@ const Profile: React.FC = () => {
     if (!friendship) {
         const { error } = await supabase.from('friendships').insert([{ sender_id: currentUser?.id, receiver_id: profile.id, status: 'pending' }]);
         if (!error) {
+            await supabase.from('notifications').insert([{
+              user_id: profile.id,
+              sender_id: currentUser?.id,
+              type: 'friend_request',
+              created_at: new Date().toISOString()
+            }]);
             queryClient.invalidateQueries({ queryKey: ['friendship', currentUser?.id, profile?.id] });
             setFeedback({ type: 'success', msg: 'Friend request sent successfully!' });
         } else {
@@ -289,7 +291,7 @@ const Profile: React.FC = () => {
                   <button onClick={handleSendRequest} className={`${friendStatus === 'accepted' ? 'bg-gray-100 dark:bg-gray-800 text-gray-800 dark:text-white' : 'bg-[#1877F2] text-white'} px-6 py-2 rounded-lg font-bold flex items-center gap-2 shadow-md hover:brightness-110 transition-all`}>
                     {friendStatus === 'none' ? <><UserPlus size={18}/> Add Friend</> : <><Check size={18}/> {friendStatus.toUpperCase()}</>}
                   </button>
-                  <button onClick={() => navigate('/messages')} className="bg-gray-100 dark:bg-gray-800 text-gray-800 dark:text-white px-6 py-2 rounded-lg font-bold flex items-center gap-2 shadow-md hover:bg-gray-200 dark:hover:bg-gray-700 transition-all"><MessageCircle size={18}/> Message</button>
+                  <button onClick={() => navigate('/messages', { state: { userId: profile.id } })} className="bg-gray-100 dark:bg-gray-800 text-gray-800 dark:text-white px-6 py-2 rounded-lg font-bold flex items-center gap-2 shadow-md hover:bg-gray-200 dark:hover:bg-gray-700 transition-all"><MessageCircle size={18}/> Message</button>
                 </>
               )}
             </div>

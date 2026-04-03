@@ -1,7 +1,7 @@
 
 import React, { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { useAuth } from '@/App';
+import { useAuth } from '@/contexts/AuthContext';
 import { supabase } from '../lib/supabase';
 import { User, Lock, Key } from 'lucide-react';
 
@@ -19,15 +19,20 @@ const Login: React.FC = () => {
   const handleGoogleLogin = async () => {
     try {
       setIsGoogleLoading(true);
-      const { error } = await supabase.auth.signInWithOAuth({
+      const { data, error } = await supabase.auth.signInWithOAuth({
         provider: 'google',
         options: {
           redirectTo: window.location.origin,
+          skipBrowserRedirect: true,
         },
       });
       if (error) throw error;
+      if (data?.url) {
+        window.open(data.url, 'oauth_popup', 'width=500,height=600');
+      }
     } catch (error: any) {
       setError(error.message);
+    } finally {
       setIsGoogleLoading(false);
     }
   };

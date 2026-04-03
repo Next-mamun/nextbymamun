@@ -1,15 +1,18 @@
-
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { X, Maximize2, Minimize2, ExternalLink, RefreshCw } from 'lucide-react';
-import { useTheme } from '@/App';
+import { X, Maximize2, Minimize2, RefreshCw, Loader2 } from 'lucide-react';
+import { useTheme } from '@/contexts/AuthContext';
+import Draggable from 'react-draggable';
 
 const NextoRobot: React.FC = () => {
   const { robotSize } = useTheme();
   const [showWindow, setShowWindow] = useState(false);
-  const [isLoading, setIsLoading] = useState(true);
   const [isFullScreen, setIsFullScreen] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
+  const [isLoading, setIsLoading] = useState(true);
+  const nodeRef = useRef<HTMLDivElement>(null);
+
+  const targetUrl = 'https://nexto-done.vercel.app';
 
   const robotSvg = (
     <svg
@@ -77,30 +80,38 @@ const NextoRobot: React.FC = () => {
   return (
     <>
       {/* Draggable Robot */}
-      <motion.div
-        drag
-        dragMomentum={false}
-        onDragStart={() => {
+      <Draggable
+        nodeRef={nodeRef}
+        onStart={() => {
+          setIsDragging(false);
+          document.body.style.overflow = 'hidden';
+        }}
+        onDrag={() => {
           setIsDragging(true);
-          document.body.style.overflow = 'hidden'; // Prevent scrolling/refresh while dragging
         }}
-        onDragEnd={() => {
-          // Small delay to prevent immediate click after drag
+        onStop={() => {
           setTimeout(() => setIsDragging(false), 100);
-          document.body.style.overflow = ''; // Re-enable scrolling
-        }}
-        className="fixed bottom-[10vmin] right-[5vmin] z-[9999] touch-none select-none"
-        whileHover={{ scale: 1.1 }}
-        whileTap={{ scale: 0.9 }}
-        whileDrag={{ scale: 1.2, cursor: 'grabbing' }}
-        onClick={() => {
-          if (!isDragging) {
-            setShowWindow(true);
-          }
+          document.body.style.overflow = '';
         }}
       >
-        {robotSvg}
-      </motion.div>
+        <div
+          ref={nodeRef}
+          className="fixed bottom-[10vmin] right-[5vmin] z-[9999] touch-none select-none"
+          onClick={() => {
+            if (!isDragging) {
+              setShowWindow(true);
+              setIsLoading(true);
+            }
+          }}
+        >
+          <motion.div
+            whileHover={{ scale: 1.1 }}
+            whileTap={{ scale: 0.9 }}
+          >
+            {robotSvg}
+          </motion.div>
+        </div>
+      </Draggable>
 
       {/* In-App Window (Iframe Modal) */}
       <AnimatePresence>
@@ -111,52 +122,57 @@ const NextoRobot: React.FC = () => {
             exit={{ opacity: 0, scale: 0.9, y: 20 }}
             className={`fixed inset-0 z-[10000] flex items-center justify-center ${isFullScreen ? 'p-0' : 'p-4 md:p-8'} bg-black/60 backdrop-blur-sm`}
           >
-            <div className={`bg-white dark:bg-gray-900 w-full ${isFullScreen ? 'h-full max-w-none rounded-none' : 'max-w-5xl h-[80vh] rounded-3xl'} overflow-hidden shadow-2xl flex flex-col border border-white/20 transition-all duration-300`}>
+            <div className={`bg-white dark:bg-gray-900 w-full ${isFullScreen ? 'h-full max-w-none rounded-none' : 'max-w-[95vw] md:max-w-3xl h-fit max-h-[90vh] rounded-3xl'} overflow-hidden shadow-2xl flex flex-col border border-white/20 transition-all duration-300`}>
               {/* Header */}
-              <div className="bg-gray-100 dark:bg-gray-800 p-2 flex items-center justify-end border-b border-gray-200 dark:border-gray-700 gap-2">
-                <button 
-                  onClick={() => {
-                    setIsLoading(true);
-                    const iframe = document.querySelector('iframe[title="Nexto Assistant"]') as HTMLIFrameElement;
-                    if (iframe) iframe.src = iframe.src;
-                  }}
-                  className="p-2 hover:bg-gray-200 dark:hover:bg-gray-700 rounded-lg text-gray-500 transition-colors"
-                  title="Refresh"
-                >
-                  <RefreshCw size={18} />
-                </button>
-                <button 
-                  onClick={() => setIsFullScreen(!isFullScreen)}
-                  className="p-2 hover:bg-gray-200 dark:hover:bg-gray-700 rounded-lg text-gray-500 transition-colors"
-                  title={isFullScreen ? "Exit Full Screen" : "Full Screen"}
-                >
-                  {isFullScreen ? <Minimize2 size={18} /> : <Maximize2 size={18} />}
-                </button>
-                <button 
-                  onClick={() => {
-                    setShowWindow(false);
-                    setIsFullScreen(false);
-                  }}
-                  className="p-2 hover:bg-red-100 dark:hover:bg-red-900/30 rounded-lg text-gray-500 hover:text-red-600 transition-colors"
-                >
-                  <X size={18} />
-                </button>
+              <div className="bg-gray-100 dark:bg-gray-800 p-2 flex items-center justify-between border-b border-gray-200 dark:border-gray-700 gap-2">
+                <span className="text-xs font-bold text-gray-400 px-2 uppercase tracking-widest">Nexto</span>
+                <div className="flex items-center gap-2">
+                  <button 
+                    onClick={() => {
+                      setIsLoading(true);
+                      const iframe = document.querySelector('iframe[title="Nexto Window"]') as HTMLIFrameElement;
+                      if (iframe) {
+                        iframe.src = targetUrl;
+                      }
+                    }}
+                    className="p-2 hover:bg-gray-200 dark:hover:bg-gray-700 rounded-lg text-gray-500 transition-colors"
+                    title="Refresh"
+                  >
+                    <RefreshCw size={18} />
+                  </button>
+                  <button 
+                    onClick={() => setIsFullScreen(!isFullScreen)}
+                    className="p-2 hover:bg-gray-200 dark:hover:bg-gray-700 rounded-lg text-gray-500 transition-colors"
+                    title={isFullScreen ? "Exit Full Screen" : "Full Screen"}
+                  >
+                    {isFullScreen ? <Minimize2 size={18} /> : <Maximize2 size={18} />}
+                  </button>
+                  <button 
+                    onClick={() => {
+                      setShowWindow(false);
+                      setIsFullScreen(false);
+                    }}
+                    className="p-2 hover:bg-red-100 dark:hover:bg-red-900/30 rounded-lg text-gray-500 hover:text-red-600 transition-colors"
+                  >
+                    <X size={18} />
+                  </button>
+                </div>
               </div>
 
               {/* Content (Iframe) */}
-              <div className="flex-1 relative bg-white">
+              <div className="flex-1 relative bg-white dark:bg-gray-800 overflow-auto min-h-[300px]">
                 {isLoading && (
-                  <div className="absolute inset-0 flex flex-col items-center justify-center gap-4 bg-white dark:bg-gray-900 z-10">
-                    <div className="w-12 h-12 border-4 border-blue-500 border-t-transparent rounded-full animate-spin"></div>
-                    <p className="font-bold text-gray-500 animate-pulse">Connecting to Nexto...</p>
+                  <div className="absolute inset-0 flex items-center justify-center bg-white dark:bg-gray-900 z-10">
+                    <Loader2 className="animate-spin text-[#1877F2]" size={40} />
                   </div>
                 )}
                 <iframe 
-                  src="https://nexto-done.vercel.app/" 
-                  className="w-full h-full border-none"
+                  src={targetUrl}
+                  className="w-full h-full border-none min-h-[600px]"
+                  title="Nexto Window"
                   onLoad={() => setIsLoading(false)}
-                  title="Nexto Assistant"
-                  allow="microphone; camera; clipboard-write; autoplay; encrypted-media; gyroscope; picture-in-picture"
+                  sandbox="allow-scripts allow-same-origin allow-forms"
+                  allow="autoplay; encrypted-media"
                 />
               </div>
             </div>

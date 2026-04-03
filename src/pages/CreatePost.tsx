@@ -2,11 +2,13 @@ import React, { useState, useCallback } from 'react';
 import { UploadCloud, X, RefreshCw } from 'lucide-react';
 import { useDropzone } from 'react-dropzone';
 import { supabase } from '../lib/supabase';
-import { useAuth } from '@/App';
+import { useAuth } from '@/contexts/AuthContext';
 import { useNavigate } from 'react-router-dom';
+import { useUpload } from '@/contexts/UploadContext';
 
 const CreatePost = () => {
   const { currentUser } = useAuth();
+  const { addUpload } = useUpload();
   const navigate = useNavigate();
   const [file, setFile] = useState<File | null>(null);
   const [preview, setPreview] = useState<string | null>(null);
@@ -83,67 +85,37 @@ const CreatePost = () => {
 
   const handleSubmit = async () => {
     if (!currentUser) return;
-    setIsUploading(true);
-    setUploadProgress(10);
+    
+    const mediaType = file ? (file.type.startsWith('video/') ? 'video' : 'image') : (validEmbedUrl ? 'video' : 'text');
+    const mediaUrl = validEmbedUrl || ''; // If file, it will be handled by UploadContext
 
-    try {
-      let mediaUrl = null;
-      let mediaType = 'text';
+    const postData: any = {
+      user_id: currentUser.id,
+      content: caption,
+      media_url: mediaUrl,
+      media_type: mediaType,
+      views: 0
+    };
 
-      if (file) {
-        setUploadProgress(30);
-        const reader = new FileReader();
-        const base64 = await new Promise<string>((resolve) => {
-          reader.onloadend = () => resolve(reader.result as string);
-          reader.readAsDataURL(file);
-        });
-        
-        mediaUrl = base64;
-        mediaType = file.type.startsWith('video/') ? 'video' : 'image';
-      } else if (validEmbedUrl) {
-        mediaUrl = validEmbedUrl;
-        mediaType = 'video';
-      }
+    if (showCategoryInput ? customCategory : postCategory) {
+      postData.category = showCategoryInput ? customCategory : postCategory;
+    }
 
-      setUploadProgress(70);
-      const postData: any = {
-        user_id: currentUser.id,
-        content: caption,
-        media_url: mediaUrl,
-        media_type: mediaType,
-        views: 0
-      };
-
-      if (showCategoryInput ? customCategory : postCategory) {
-        postData.category = showCategoryInput ? customCategory : postCategory;
-      }
-
-      const { error: insertError } = await supabase.from('posts').insert([postData]);
-
-      if (insertError) {
-        console.warn('Full insert failed, trying basic insert...', insertError);
-        const { error: fallbackError } = await supabase.from('posts').insert([{
-          user_id: currentUser.id,
-          content: caption,
-          media_url: mediaUrl,
-          media_type: mediaType
-        }]);
-        if (fallbackError) throw fallbackError;
-      }
-
-      setUploadProgress(100);
-      setTimeout(() => {
-        handleRemoveFile();
-        setCaption('');
-        setYtLink('');
-        setPostCategory('Entertainment');
-        setCustomCategory('');
-        setShowCategoryInput(false);
+    if (file) {
+      addUpload(file, 'post', {
+        userId: currentUser.id,
+        payload: postData,
+        onSuccess: () => console.log('Upload finished')
+      });
+      navigate('/');
+    } else {
+      setIsUploading(true);
+      const { error } = await supabase.from('posts').insert([postData]);
+      if (error) {
+        alert(error.message || 'Failed to create post');
+      } else {
         navigate('/');
-      }, 500);
-    } catch (error: any) {
-      alert(error.message || 'Failed to create post');
-    } finally {
+      }
       setIsUploading(false);
     }
   };

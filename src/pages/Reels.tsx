@@ -1,70 +1,87 @@
 
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { Plus, X, Link as LinkIcon, ThumbsUp, MessageSquare, Share2, Music, UserPlus, Send, Video, Trash2, CheckCircle, Volume2, VolumeX, Eye } from 'lucide-react';
 import { Link } from 'react-router-dom';
-import { useAuth } from '@/App';
+import { useAuth } from '@/contexts/AuthContext';
 import { supabase } from '../lib/supabase';
 import { VerifiedBadge } from '@/components/VerifiedBadge';
+import { useQuery, useInfiniteQuery, useQueryClient } from '@tanstack/react-query';
 import { Reel } from '@/types';
 import ProfilePhoto from '@/components/ProfilePhoto';
+import { formatTime } from '@/lib/utils';
+
+import { useUpload } from '@/contexts/UploadContext';
+
+const REELS_PER_PAGE = 5;
 
 const Reels: React.FC = () => {
   const { currentUser } = useAuth();
-  const [reels, setReels] = useState<Reel[]>([]);
-  const [loading, setLoading] = useState(true);
+  const { addUpload } = useUpload();
+  const queryClient = useQueryClient();
   const [isUploadModalOpen, setIsUploadModalOpen] = useState(false);
   const [activeReelId, setActiveReelId] = useState<string | null>(null);
   
   // Upload State
   const [ytLink, setYtLink] = useState('');
   const [caption, setCaption] = useState('');
-  const [localFile, setLocalFile] = useState<string | null>(null);
-  const [isUploading, setIsUploading] = useState(false);
-  const [uploadProgress, setUploadProgress] = useState(0);
+  const [localFile, setLocalFile] = useState<File | string | null>(null);
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [showYoutube, setShowYoutube] = useState(false);
   
   const fileInputRef = useRef<HTMLInputElement>(null);
   const observer = useRef<IntersectionObserver | null>(null);
+  const {
+    data: reelsData,
+    fetchNextPage,
+    hasNextPage,
+    isFetchingNextPage,
+    isLoading: reelsLoading,
+  } = useInfiniteQuery({
+    queryKey: ['reels_infinite'],
+    queryFn: async ({ pageParam = 0 }) => {
+      const { data, error } = await supabase
+        .from('reels')
+        .select('*, profiles(*), likes:reel_likes(user_id), comments:reel_comments(*, profiles(*))')
+        .order('created_at', { ascending: false })
+        .range(pageParam * REELS_PER_PAGE, (pageParam + 1) * REELS_PER_PAGE - 1);
+      
+      if (error) throw error;
+      return data || [];
+    },
+    initialPageParam: 0,
+    getNextPageParam: (lastPage, allPages) => {
+      return lastPage.length === REELS_PER_PAGE ? allPages.length : undefined;
+    },
+    staleTime: 1000 * 60 * 5, // 5 minutes
+  });
+
+  const reels = useMemo(() => 
+    Array.from(new Map((reelsData?.pages.flat() || []).map(r => [r.id, r])).values()),
+    [reelsData?.pages]
+  );
 
   useEffect(() => {
-    fetchReels();
+    if (reels.length > 0 && !activeReelId) {
+      setActiveReelId(reels[0].id);
+    }
+  }, [reels, activeReelId]);
+
+  useEffect(() => {
     const channel = supabase.channel('reels_realtime_changes')
-      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'reels' }, (payload) => {
-        fetchReels();
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'reels' }, () => {
+        queryClient.invalidateQueries({ queryKey: ['reels_infinite'] });
       })
-      .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'reels' }, (payload) => {
-        fetchReels();
+      .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'reels' }, () => {
+        queryClient.invalidateQueries({ queryKey: ['reels_infinite'] });
       })
       .subscribe();
 
     return () => { supabase.removeChannel(channel); };
-  }, []);
+  }, [queryClient]);
 
-  const fetchReels = async () => {
-    try {
-      const { data, error } = await supabase
-        .from('reels')
-        .select('*, profiles:user_id(*), likes:reel_likes(user_id), comments:reel_comments(*, profiles:user_id(*))')
-        .order('created_at', { ascending: false });
-      
-      if (data) {
-        // Filter duplicate reels by ID
-        const uniqueReels = Array.from(new Map(data.map((r: any) => [r.id, r])).values());
-        setReels(uniqueReels as any);
-        if (uniqueReels.length > 0 && !activeReelId) {
-          setActiveReelId(uniqueReels[0].id);
-        }
-      }
-    } catch (err) {
-      console.error('Error fetching reels:', err);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  // Intersection Observer for Auto-Play
+  // Intersection Observer for Auto-Play and Infinite Scroll
   const lastElementRef = useCallback((node: HTMLDivElement) => {
-    if (loading) return;
+    if (reelsLoading) return;
     if (observer.current) observer.current.disconnect();
     
     observer.current = new IntersectionObserver(entries => {
@@ -72,13 +89,19 @@ const Reels: React.FC = () => {
         if (entry.isIntersecting) {
           const id = entry.target.getAttribute('data-id');
           if (id) setActiveReelId(id);
+          
+          // Check for infinite scroll
+          const index = entry.target.getAttribute('data-index');
+          if (index && parseInt(index) === reels.length - 1 && hasNextPage && !isFetchingNextPage) {
+            fetchNextPage();
+          }
         }
       });
     }, { threshold: 0.6 });
 
     // Observe all reel items
     document.querySelectorAll('.reel-item').forEach(el => observer.current?.observe(el));
-  }, [loading, reels]);
+  }, [reelsLoading, reels.length, hasNextPage, isFetchingNextPage, fetchNextPage]);
 
 
   // --- Upload Logic ---
@@ -105,26 +128,13 @@ const Reels: React.FC = () => {
         alert('File is too large. Please select a video under 10MB.');
         return;
       }
-      const reader = new FileReader();
-      reader.onprogress = (data) => {
-        if (data.lengthComputable) {
-          setUploadProgress(Math.round((data.loaded / data.total) * 100));
-        }
-      };
-      reader.onloadstart = () => { setIsUploading(true); setUploadProgress(0); };
-      reader.onloadend = () => {
-        setLocalFile(reader.result as string);
-        setIsUploading(false);
-        setUploadProgress(100);
-      };
-      reader.readAsDataURL(file);
+      setLocalFile(file);
+      setPreviewUrl(URL.createObjectURL(file));
     }
   };
 
   const handleCreateReel = async () => {
     if (!caption.trim() && !ytLink && !localFile) return;
-    setIsUploading(true);
-    setUploadProgress(10);
 
     let targetLink = ytLink;
     if (!targetLink && !localFile) {
@@ -136,7 +146,7 @@ const Reels: React.FC = () => {
       user_id: currentUser?.id,
       caption,
       source_type: 'local',
-      video_url: localFile || ''
+      video_url: '' // Will be updated by UploadContext
     };
 
     const ytId = getYoutubeId(targetLink);
@@ -151,57 +161,32 @@ const Reels: React.FC = () => {
       payload.video_url = fbUrl;
     }
 
-    if (!payload.video_url) {
-      setIsUploading(false);
-      setUploadProgress(0);
+    if (!localFile && !payload.video_url) {
       alert('Please provide a valid video file or YouTube/Facebook link.');
       return;
     }
 
-    setUploadProgress(50);
-    const { error } = await supabase.from('reels').insert([payload]);
-    
-    if (error) {
-      console.warn('Full insert failed, trying fallback...', error);
-      // Fallback if source_type 'facebook' violates a CHECK constraint
-      if (payload.source_type === 'facebook') {
-         payload.source_type = 'youtube'; // Hack to bypass CHECK constraint if it exists
-         const { error: fallbackError } = await supabase.from('reels').insert([payload]);
-         if (fallbackError) {
-           alert('Failed to share video: ' + fallbackError.message);
-           setIsUploading(false);
-           setUploadProgress(0);
-           return;
-         }
-      } else {
-         alert('Failed to share video: ' + error.message);
-         setIsUploading(false);
-         setUploadProgress(0);
-         return;
+    addUpload(localFile || payload.video_url, 'reel', {
+      payload,
+      onSuccess: () => {
+        queryClient.invalidateQueries({ queryKey: ['reels_infinite'] });
       }
-    }
+    });
 
-    setUploadProgress(100);
-    setTimeout(() => {
-      setIsUploading(false);
-      if (!error) {
-        setIsUploadModalOpen(false);
-        setYtLink('');
-        setCaption('');
-        setLocalFile(null);
-        setUploadProgress(0);
-        fetchReels();
-      }
-    }, 500);
+    setIsUploadModalOpen(false);
+    setYtLink('');
+    setCaption('');
+    setLocalFile(null);
+    setPreviewUrl(null);
   };
 
   const deleteReel = async (id: string) => {
     if (!confirm('Delete this video?')) return;
     await supabase.from('reels').delete().eq('id', id);
-    fetchReels();
+    queryClient.invalidateQueries({ queryKey: ['reels_infinite'] });
   };
 
-  if (loading) return <div className="h-screen flex items-center justify-center text-[#1877F2] font-black">Loading Videos...</div>;
+  if (reelsLoading && reels.length === 0) return <div className="h-screen flex items-center justify-center text-[#1877F2] font-black">Loading Videos...</div>;
 
   return (
     <div className="h-[90vmin] overflow-y-scroll snap-y snap-mandatory bg-black scroll-smooth">
@@ -227,6 +212,7 @@ const Reels: React.FC = () => {
         <div 
           key={reel.id} 
           data-id={reel.id}
+          data-index={index}
           ref={lastElementRef}
           className="reel-item h-full w-full snap-start relative flex items-center justify-center bg-black"
         >
@@ -259,10 +245,10 @@ const Reels: React.FC = () => {
                 onClick={() => !localFile && !getYoutubeId(ytLink) && fileInputRef.current?.click()}
                 className={`border-2 border-dashed rounded-2xl overflow-hidden flex flex-col items-center justify-center transition-all aspect-[9/16] ${localFile || getYoutubeId(ytLink) ? 'border-green-500 bg-black' : 'border-gray-300 dark:border-gray-700 hover:border-[#1877F2] hover:bg-blue-50 dark:hover:bg-blue-900/20 cursor-pointer'}`}
               >
-                {localFile ? (
+                {localFile && previewUrl ? (
                   <div className="relative w-full h-full flex flex-col items-center justify-center">
-                      <video src={localFile} className="w-full h-full object-contain" controls />
-                      <button onClick={(e) => { e.stopPropagation(); setLocalFile(null); }} className="absolute top-2 right-2 bg-black/50 text-white p-2 rounded-full hover:bg-red-500"><X size={16} /></button>
+                      <video src={previewUrl} className="w-full h-full object-contain" controls />
+                      <button onClick={(e) => { e.stopPropagation(); setLocalFile(null); setPreviewUrl(null); }} className="absolute top-2 right-2 bg-black/50 text-white p-2 rounded-full hover:bg-red-500"><X size={16} /></button>
                   </div>
                 ) : (getYoutubeId(ytLink) || getFacebookEmbedUrl(ytLink)) ? (
                   <div className="relative w-full h-full flex flex-col items-center justify-center">
@@ -310,24 +296,12 @@ const Reels: React.FC = () => {
 
               <input type="file" ref={fileInputRef} hidden accept="video/*" onChange={handleFileUpload} />
 
-              {(isUploading || uploadProgress > 0) && (
-                <div className="space-y-1">
-                  <div className="flex justify-between text-xs font-bold text-gray-500 dark:text-gray-400">
-                    <span>Uploading...</span>
-                    <span>{uploadProgress}%</span>
-                  </div>
-                  <div className="w-full bg-gray-100 dark:bg-gray-700 h-1.5 rounded-full overflow-hidden">
-                    <div className="bg-[#1877F2] h-full transition-all duration-300" style={{ width: `${uploadProgress}%` }} />
-                  </div>
-                </div>
-              )}
-
               <button 
                 onClick={handleCreateReel}
-                disabled={isUploading || (!localFile && !ytLink && !caption.match(/https?:\/\/(?:www\.|m\.|web\.)?(?:youtube\.com|youtu\.be|facebook\.com|fb\.watch)\/[^\s]+/i))}
+                disabled={(!localFile && !ytLink && !caption.match(/https?:\/\/(?:www\.|m\.|web\.)?(?:youtube\.com|youtu\.be|facebook\.com|fb\.watch)\/[^\s]+/i))}
                 className="w-full bg-[#1877F2] text-white py-3.5 rounded-xl font-bold shadow-lg hover:brightness-110 disabled:opacity-50 disabled:shadow-none transition-all"
               >
-                {isUploading ? 'Sharing...' : 'Share Video'}
+                Share Video
               </button>
             </div>
           </div>
@@ -388,6 +362,15 @@ const ReelItem: React.FC<{ reel: Reel, isActive: boolean, onDelete: () => void }
       setLikesCount(prev => prev + 1);
       setIsLiked(true);
       await supabase.from('reel_likes').insert([{ reel_id: reel.id, user_id: currentUser?.id }]);
+      
+      if (reel.user_id !== currentUser?.id) {
+        await supabase.from('notifications').insert([{
+          user_id: reel.user_id,
+          sender_id: currentUser?.id,
+          type: 'like',
+          created_at: new Date().toISOString()
+        }]);
+      }
     }
   };
 
@@ -398,12 +381,21 @@ const ReelItem: React.FC<{ reel: Reel, isActive: boolean, onDelete: () => void }
     const { data, error } = await supabase
       .from('reel_comments')
       .insert([{ reel_id: reel.id, user_id: currentUser?.id, content: commentText }])
-      .select('*, profiles:user_id(*)')
+      .select('*, profiles(*)')
       .single();
 
     if (data) {
       setComments(prev => [...prev, data]);
       setCommentText('');
+      
+      if (reel.user_id !== currentUser?.id) {
+        await supabase.from('notifications').insert([{
+          user_id: reel.user_id,
+          sender_id: currentUser?.id,
+          type: 'comment',
+          created_at: new Date().toISOString()
+        }]);
+      }
     }
   };
 
@@ -546,7 +538,7 @@ const ReelItem: React.FC<{ reel: Reel, isActive: boolean, onDelete: () => void }
                           {c.profiles.display_name}
                           {c.profiles.is_verified && <VerifiedBadge size={12} />}
                         </Link>
-                        <span className="text-[10px] text-gray-500">{new Date(c.created_at).toLocaleDateString()}</span>
+                        <span className="text-[10px] text-gray-500">{formatTime(c.created_at)}</span>
                       </div>
                       <p className="text-sm text-gray-300 mt-0.5">{c.content}</p>
                    </div>

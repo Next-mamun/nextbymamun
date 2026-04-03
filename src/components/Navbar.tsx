@@ -2,11 +2,11 @@
 import React, { useState, useEffect } from 'react';
 import { Link, useNavigate, useLocation } from 'react-router-dom';
 import { Home, Users, MessageCircle, Bell, User, LogOut, Menu } from 'lucide-react';
-import { useAuth } from '@/App';
+import { useAuth } from '@/contexts/AuthContext';
 import { supabase } from '../lib/supabase';
 import { VerifiedBadge } from './VerifiedBadge';
 
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 
 const Navbar: React.FC = () => {
   const { currentUser, logout } = useAuth();
@@ -14,33 +14,127 @@ const Navbar: React.FC = () => {
   const [showNotifications, setShowNotifications] = useState(false);
   const navigate = useNavigate();
   const location = useLocation();
+  const queryClient = useQueryClient();
 
   const { data: notifications = [] } = useQuery({
     queryKey: ['notifications', currentUser?.id],
     queryFn: async () => {
       if (!currentUser?.id) return [];
-      const { data } = await supabase
-        .from('friendships')
-        .select('*, profiles:sender_id(*)')
-        .eq('receiver_id', currentUser.id)
-        .eq('status', 'pending');
       
-      if (!data) return [];
+      // Fetch regular notifications
+      const { data: notifs } = await supabase
+        .from('notifications')
+        .select('*')
+        .eq('user_id', currentUser.id)
+        .order('created_at', { ascending: false })
+        .limit(10);
+        
+      // Fetch unread messages to show as notifications
+      const { data: unreadMsgs } = await supabase
+        .from('messages')
+        .select('*')
+        .eq('receiver_id', currentUser.id)
+        .or('is_read.eq.false,is_read.is.null')
+        .order('created_at', { ascending: false })
+        .limit(15);
+        
+      const validNotifs = notifs || [];
+      const validMsgs = unreadMsgs || [];
+      
+      // Get unique senders for messages to only show one notification per sender
+      const msgSenders = new Set();
+      const msgNotifs: any[] = [];
+      
+      validMsgs.forEach(msg => {
+        if (!msgSenders.has(msg.sender_id)) {
+          msgSenders.add(msg.sender_id);
+          msgNotifs.push({
+            id: `msg-${msg.id}`,
+            type: 'message',
+            sender_id: msg.sender_id,
+            created_at: msg.created_at,
+            is_read: false,
+            real_msg_id: msg.id
+          });
+        }
+      });
+
+      const combined = [...validNotifs, ...msgNotifs]
+        .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
+        .slice(0, 15);
+
+      // Fetch sender profiles manually to avoid foreign key issues
+      const senderIds = [...new Set(combined.map(n => n.sender_id).filter(Boolean))];
+      let profileMap: any = {};
+      
+      if (senderIds.length > 0) {
+        const { data: profiles } = await supabase
+          .from('profiles')
+          .select('*')
+          .in('id', senderIds);
+          
+        if (profiles) {
+          profileMap = profiles.reduce((acc: any, p: any) => {
+            acc[p.id] = p;
+            return acc;
+          }, {});
+        }
+      }
       
       const seenIds = JSON.parse(localStorage.getItem('seen_notifications') || '[]');
-      return data.map(req => ({
-        id: req.id,
-        type: 'friend_request',
-        text: `${req.profiles.display_name} sent you a friend request.`,
-        avatar: req.profiles.avatar_url,
-        link: '/friends',
-        created_at: req.created_at,
-        is_seen: seenIds.includes(req.id)
-      }));
+      return combined.map(n => {
+        const sender = profileMap[n.sender_id] || null;
+        let text = `${sender?.display_name || 'Someone'} interacted with you.`;
+        let link = `/profile/${currentUser.username}`;
+        
+        if (n.type === 'friend_request') {
+          text = `${sender?.display_name || 'Someone'} sent you a friend request.`;
+          link = '/friends';
+        } else if (n.type === 'friend_accept') {
+          text = `${sender?.display_name || 'Someone'} accepted your friend request.`;
+          link = '/friends';
+        } else if (n.type === 'message') {
+          text = `${sender?.display_name || 'Someone'} sent you a message.`;
+          link = '/messages';
+        } else if (n.type === 'like') {
+          text = `${sender?.display_name || 'Someone'} liked your post.`;
+        } else if (n.type === 'comment') {
+          text = `${sender?.display_name || 'Someone'} commented on your post.`;
+        }
+
+        return {
+          id: n.id,
+          type: n.type,
+          text,
+          avatar: sender?.avatar_url,
+          link,
+          state: n.type === 'message' ? { userId: n.sender_id } : undefined,
+          created_at: n.created_at,
+          is_seen: seenIds.includes(n.id) || !!n.is_read
+        };
+      });
     },
     enabled: !!currentUser?.id,
     refetchInterval: 1000 * 30, // Refetch every 30 seconds
   });
+
+  useEffect(() => {
+    if (!currentUser) return;
+
+    const sub = supabase
+      .channel('navbar_notifications')
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'notifications', filter: `user_id=eq.${currentUser.id}` }, () => {
+        queryClient.invalidateQueries({ queryKey: ['notifications', currentUser.id] });
+      })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'messages', filter: `receiver_id=eq.${currentUser.id}` }, () => {
+        queryClient.invalidateQueries({ queryKey: ['totalUnread'] });
+        queryClient.invalidateQueries({ queryKey: ['unreadCounts'] });
+        queryClient.invalidateQueries({ queryKey: ['messages'] });
+      })
+      .subscribe();
+
+    return () => { supabase.removeChannel(sub); };
+  }, [currentUser, queryClient]);
 
   const handleNotificationsClick = () => {
     const opening = !showNotifications;
@@ -54,11 +148,19 @@ const Navbar: React.FC = () => {
     }
   };
 
+  const handleNotificationClick = async (notif: any) => {
+    setShowNotifications(false);
+    if (!notif.id.toString().startsWith('msg-')) {
+      await supabase.from('notifications').delete().eq('id', notif.id);
+    }
+    queryClient.invalidateQueries({ queryKey: ['notifications', currentUser?.id] });
+  };
+
   return (
     <nav className="fixed top-0 left-0 right-0 h-14 bg-white/80 dark:bg-black/80 backdrop-blur-md border-b border-transparent dark:border-transparent z-50 px-4 flex items-center justify-between shadow-sm transition-colors">
       <div className="flex items-center gap-2">
         <Link to="/" className="flex items-center">
-          <img src="https://i.postimg.cc/wxwt5tsk/retouch-2026030721254774.png" alt="Next Media" className="h-8 w-auto" />
+          <img src="https://i.postimg.cc/wxwt5tsk/retouch-2026030721254774.png" alt="Next" className="h-8 w-auto" />
         </Link>
       </div>
 
@@ -97,14 +199,15 @@ const Navbar: React.FC = () => {
                   <Link 
                     key={notif.id} 
                     to={notif.link}
-                    onClick={() => setShowNotifications(false)}
+                    state={notif.state}
+                    onClick={() => handleNotificationClick(notif)}
                     className="flex items-start gap-3 p-3 hover:bg-gray-100/50 dark:hover:bg-gray-800/50 rounded-xl transition-colors"
                   >
                     <img src={notif.avatar} className="w-12 h-12 rounded-full object-cover border dark:border-gray-700 shadow-sm" alt="avatar" />
                     <div className="flex-1">
                       <p className="text-sm text-gray-900 dark:text-white font-medium leading-tight">{notif.text}</p>
                       <p className="text-xs text-[#1A2933] dark:text-blue-400 font-bold mt-1">
-                        {new Date(notif.created_at).toLocaleDateString()}
+                        {new Date(notif.created_at).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: true })}
                       </p>
                     </div>
                   </Link>

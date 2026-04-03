@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <style>
+      body { 
+        margin: 0; 
+        padding: 0; 
+        display: flex; 
+        flex-direction: column; 
+        justify-content: center; 
+        align-items: center; 
+        min-height: 100vh; 
+        background: transparent; 
+      }
+      div:empty { display: none; }
+    </style>
+  </head>
+  <body>
+    <!-- Fallback text to ensure iframe is loading -->
+    <div style="text-align: center; padding: 20px; color: #666; font-family: sans-serif; font-size: 14px;">
+      Advertisement Loading...
+    </div>
+    
+    <!-- Adsterra Native Banner -->
+    <div id="container-b2d25e5f1d98cd2a2b687075a26b20ab"></div>
+    <script async="async" data-cfasync="false" src="//pl28929493.profitablecpmratenetwork.com/b2d25e5f1d98cd2a2b687075a26b20ab/invoke.js"></script>
+    
+    <!-- Adsterra 728x90 Banner -->
+    <script type="text/javascript">
+      atOptions = {
+        'key' : '4813063a83e6d5c416f3d681e251cacd',
+        'format' : 'iframe',
+        'height' : 90,
+        'width' : 728,
+        'params' : {}
+      };
+    </script>
+    <script type="text/javascript" src="//www.highperformanceformat.com/4813063a83e6d5c416f3d681e251cacd/invoke.js"></script>
+
+    <!-- Other Adsterra Scripts -->
+    <script type='text/javascript' src='//pl29034610.profitablecpmratenetwork.com/24/cc/83/24cc836a9b9152ab128aa87ea0513eb4.js'></script>
+    <script type='text/javascript' src='//pl29034608.profitablecpmratenetwork.com/30/5c/42/305c42d9d9a3311de5bdd8fe8f1035cc.js'></script>
+    
+    <script>
+      // Send height to parent to auto-adjust
+      const resizeObserver = new ResizeObserver(entries => {
+        for (let entry of entries) {
+          window.parent.postMessage({ type: 'ad-resize', height: document.body.scrollHeight }, '*');
+        }
+      });
+      resizeObserver.observe(document.body);
+    </script>
+  </body>
+</html>
