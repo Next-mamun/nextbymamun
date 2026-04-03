@@ -140,7 +140,7 @@ const Messages: React.FC = () => {
       });
     },
     enabled: !!currentUser,
-    staleTime: 0, // Always fresh
+    staleTime: 1000 * 60 * 5, // 5 minutes
   });
 
   const { data: messages = [] } = useQuery({
@@ -159,28 +159,6 @@ const Messages: React.FC = () => {
     },
     enabled: !!selectedChat,
     staleTime: 0, // Messages should be fresh
-  });
-
-  const { data: unreadCounts = {} } = useQuery({
-    queryKey: ['unreadCounts'],
-    queryFn: async () => {
-      const { data } = await supabase
-        .from('messages')
-        .select('*')
-        .eq('receiver_id', currentUser?.id);
-      
-      const counts: { [key: string]: number } = {};
-      if (data) {
-        data.forEach((msg: any) => {
-          if (msg.is_read !== true && msg.is_read !== 'true') {
-            counts[msg.sender_id] = (counts[msg.sender_id] || 0) + 1;
-          }
-        });
-      }
-      return counts;
-    },
-    enabled: !!currentUser,
-    refetchInterval: 5000, // Poll every 5s as fallback
   });
 
   const { data: blockData = null } = useQuery({
@@ -262,15 +240,22 @@ const Messages: React.FC = () => {
       const markAsRead = async () => {
         if (!currentUser?.id || !selectedChat?.id) return;
         
-        const { error } = await supabase
+        const { error: error1 } = await supabase
           .from('messages')
           .update({ is_read: true })
           .eq('receiver_id', currentUser.id)
           .eq('sender_id', selectedChat.id)
-          .or('is_read.eq.false,is_read.is.null');
+          .eq('is_read', false);
+        
+        const { error: error2 } = await supabase
+          .from('messages')
+          .update({ is_read: true })
+          .eq('receiver_id', currentUser.id)
+          .eq('sender_id', selectedChat.id)
+          .is('is_read', null);
           
-        if (error) {
-          console.error("Error marking as read:", error);
+        if (error1 || error2) {
+          console.error("Error marking as read:", error1 || error2);
         } else {
           queryClient.invalidateQueries({ queryKey: ['unreadCounts'] });
           queryClient.invalidateQueries({ queryKey: ['totalUnread'] });
@@ -281,9 +266,15 @@ const Messages: React.FC = () => {
       markAsRead();
 
       const msgSub = supabase.channel(`msgs_${selectedChat.id}`)
-        .on('postgres_changes', { event: '*', schema: 'public', table: 'messages', filter: `sender_id=eq.${selectedChat.id}` }, () => {
-          queryClient.invalidateQueries({ queryKey: ['messages', selectedChat.id] });
-          markAsRead();
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'messages' }, (payload) => {
+          const { sender_id, receiver_id } = (payload.new as any);
+          if ((sender_id === currentUser?.id && receiver_id === selectedChat.id) ||
+              (sender_id === selectedChat.id && receiver_id === currentUser?.id)) {
+            queryClient.invalidateQueries({ queryKey: ['messages', selectedChat.id] });
+            if (sender_id === selectedChat.id) {
+                markAsRead();
+            }
+          }
         })
         .subscribe();
 
@@ -451,7 +442,6 @@ const Messages: React.FC = () => {
           ) : (showNewFriends ? filteredContacts.filter(c => c.isNewFriend) : filteredContacts.filter(c => !c.isNewFriend)).map(c => {
             const isOnline = onlineUsers.has(c.id);
             const lastMsg = c.lastMessage;
-            const isUnread = unreadCounts[c.id] > 0;
             
             return (
               <div 
@@ -476,7 +466,7 @@ const Messages: React.FC = () => {
                     )}
                   </div>
                   <div className="flex justify-between items-center gap-2">
-                    <p className={`text-sm truncate ${isUnread ? 'font-black text-gray-900 dark:text-white' : 'text-gray-500 dark:text-gray-400 font-medium'}`}>
+                    <p className="text-sm truncate text-gray-500 dark:text-gray-400 font-medium">
                       {c.blockStatus ? (
                         <span className="text-red-500 flex items-center gap-1">
                           <Ban size={12} />
@@ -493,11 +483,6 @@ const Messages: React.FC = () => {
                         </>
                       )}
                     </p>
-                    {isUnread && !c.blockStatus && (
-                      <div className="bg-red-500 text-white text-[10px] font-black w-5 h-5 flex items-center justify-center rounded-full shadow-lg flex-shrink-0 animate-bounce">
-                        {unreadCounts[c.id] > 9 ? '9+' : unreadCounts[c.id]}
-                      </div>
-                    )}
                   </div>
                   <p className={`text-[10px] font-black uppercase tracking-widest mt-1 ${isOnline ? 'text-green-500' : 'text-gray-400'}`}>
                     {isOnline ? 'Active Now' : 'Offline'}

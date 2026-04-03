@@ -26,10 +26,6 @@ const Profile: React.FC = () => {
   const viewedPostsRef = useRef<Set<string>>(new Set());
   const observer = useRef<IntersectionObserver | null>(null);
 
-  const avatarInputRef = React.useRef<HTMLInputElement>(null);
-
-  const isOwnProfile = currentUser?.username === username;
-
   const { data: profile, isLoading: profileLoading } = useQuery({
     queryKey: ['profile', username],
     queryFn: async () => {
@@ -43,6 +39,25 @@ const Profile: React.FC = () => {
     },
     staleTime: 1000 * 60 * 5,
   });
+
+  const avatarInputRef = React.useRef<HTMLInputElement>(null);
+  const isOwnProfile = currentUser?.username === username;
+
+  useEffect(() => {
+    if (!profile?.id) return;
+
+    const sub = supabase
+      .channel('profile_changes')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'profiles', filter: `id=eq.${profile.id}` }, () => {
+        queryClient.invalidateQueries({ queryKey: ['profile', username] });
+      })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'posts', filter: `user_id=eq.${profile.id}` }, () => {
+        queryClient.invalidateQueries({ queryKey: ['userPosts', profile.id] });
+      })
+      .subscribe();
+
+    return () => { supabase.removeChannel(sub); };
+  }, [profile?.id, username, queryClient]);
 
   useEffect(() => {
     if (profile) {

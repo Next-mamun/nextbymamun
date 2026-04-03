@@ -101,6 +101,7 @@ const Feed: React.FC = () => {
     getNextPageParam: (lastPage, allPages) => {
       return lastPage.length === POSTS_PER_PAGE ? allPages.length : undefined;
     },
+    staleTime: 1000 * 60 * 5, // 5 minutes
   });
 
   const posts = useMemo(() => 

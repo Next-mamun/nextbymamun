@@ -115,7 +115,6 @@ const Navbar: React.FC = () => {
       });
     },
     enabled: !!currentUser?.id,
-    refetchInterval: 1000 * 30, // Refetch every 30 seconds
   });
 
   useEffect(() => {
@@ -126,10 +125,8 @@ const Navbar: React.FC = () => {
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'notifications', filter: `user_id=eq.${currentUser.id}` }, () => {
         queryClient.invalidateQueries({ queryKey: ['notifications', currentUser.id] });
       })
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'messages', filter: `receiver_id=eq.${currentUser.id}` }, () => {
-        queryClient.invalidateQueries({ queryKey: ['totalUnread'] });
-        queryClient.invalidateQueries({ queryKey: ['unreadCounts'] });
-        queryClient.invalidateQueries({ queryKey: ['messages'] });
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages', filter: `receiver_id=eq.${currentUser.id}` }, () => {
+        queryClient.invalidateQueries({ queryKey: ['notifications', currentUser.id] });
       })
       .subscribe();
 

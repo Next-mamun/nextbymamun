@@ -14,6 +14,19 @@ const Friends: React.FC = () => {
   const [searchQuery, setSearchQuery] = useState('');
   const [activeTab, setActiveTab] = useState<'friends' | 'requests' | 'discover' | 'blocked'>('discover');
 
+  useEffect(() => {
+    if (!currentUser) return;
+
+    const sub = supabase
+      .channel('friendships_changes')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'friendships', filter: `sender_id=eq.${currentUser.id},receiver_id=eq.${currentUser.id}` }, () => {
+        queryClient.invalidateQueries({ queryKey: ['friends'] });
+      })
+      .subscribe();
+
+    return () => { supabase.removeChannel(sub); };
+  }, [currentUser, queryClient]);
+
   const { data: friendsData, isLoading: loading } = useQuery({
     queryKey: ['friends', searchQuery],
     queryFn: async () => {
@@ -117,7 +130,7 @@ const Friends: React.FC = () => {
         discovery: uniqueById(filterList(disc))
       };
     },
-    staleTime: 1000 * 60 * 2, // 2 minutes
+    staleTime: 1000 * 60 * 5, // 5 minutes
   });
 
   const { requests = [], friends = [], discovery = [], blockedUsers = [] } = friendsData || {};

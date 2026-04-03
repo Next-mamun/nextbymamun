@@ -10,9 +10,18 @@ const NextoRobot: React.FC = () => {
   const [isFullScreen, setIsFullScreen] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
+  const [hasOpenedOnce, setHasOpenedOnce] = useState(false);
   const nodeRef = useRef<HTMLDivElement>(null);
+  const dragStartPos = useRef({ x: 0, y: 0 });
 
   const targetUrl = 'https://nexto-done.vercel.app';
+
+  const handleRobotClick = () => {
+    setShowWindow(true);
+    if (!hasOpenedOnce) {
+      setHasOpenedOnce(true);
+    }
+  };
 
   const robotSvg = (
     <svg
@@ -82,27 +91,32 @@ const NextoRobot: React.FC = () => {
       {/* Draggable Robot */}
       <Draggable
         nodeRef={nodeRef}
-        onStart={() => {
+        onStart={(e, data) => {
           setIsDragging(false);
+          dragStartPos.current = { x: data.x, y: data.y };
           document.body.style.overflow = 'hidden';
         }}
         onDrag={() => {
           setIsDragging(true);
         }}
-        onStop={() => {
-          setTimeout(() => setIsDragging(false), 100);
+        onStop={(e, data) => {
           document.body.style.overflow = '';
+          // If the movement is less than 5px, consider it a click
+          const distance = Math.sqrt(
+            Math.pow(data.x - dragStartPos.current.x, 2) + 
+            Math.pow(data.y - dragStartPos.current.y, 2)
+          );
+          
+          if (distance < 5) {
+            handleRobotClick();
+          }
+          
+          setTimeout(() => setIsDragging(false), 50);
         }}
       >
         <div
           ref={nodeRef}
           className="fixed bottom-[10vmin] right-[5vmin] z-[9999] touch-none select-none"
-          onClick={() => {
-            if (!isDragging) {
-              setShowWindow(true);
-              setIsLoading(true);
-            }
-          }}
         >
           <motion.div
             whileHover={{ scale: 1.1 }}
@@ -117,12 +131,17 @@ const NextoRobot: React.FC = () => {
       <AnimatePresence>
         {showWindow && (
           <motion.div
-            initial={{ opacity: 0, scale: 0.9, y: 20 }}
-            animate={{ opacity: 1, scale: 1, y: 0 }}
-            exit={{ opacity: 0, scale: 0.9, y: 20 }}
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
             className={`fixed inset-0 z-[10000] flex items-center justify-center ${isFullScreen ? 'p-0' : 'p-4 md:p-8'} bg-black/60 backdrop-blur-sm`}
           >
-            <div className={`bg-white dark:bg-gray-900 w-full ${isFullScreen ? 'h-full max-w-none rounded-none' : 'max-w-[95vw] md:max-w-3xl h-fit max-h-[90vh] rounded-3xl'} overflow-hidden shadow-2xl flex flex-col border border-white/20 transition-all duration-300`}>
+            <motion.div 
+              initial={{ scale: 0.9, y: 20 }}
+              animate={{ scale: 1, y: 0 }}
+              exit={{ scale: 0.9, y: 20 }}
+              className={`bg-white dark:bg-gray-900 w-full ${isFullScreen ? 'h-full max-w-none rounded-none' : 'max-w-[95vw] md:max-w-3xl h-fit max-h-[90vh] rounded-3xl'} overflow-hidden shadow-2xl flex flex-col border border-white/20 transition-all duration-300`}
+            >
               {/* Header */}
               <div className="bg-gray-100 dark:bg-gray-800 p-2 flex items-center justify-between border-b border-gray-200 dark:border-gray-700 gap-2">
                 <span className="text-xs font-bold text-gray-400 px-2 uppercase tracking-widest">Nexto</span>
@@ -169,16 +188,24 @@ const NextoRobot: React.FC = () => {
                 <iframe 
                   src={targetUrl}
                   className="w-full h-full border-none min-h-[600px]"
+                  style={{ display: isLoading && !hasOpenedOnce ? 'none' : 'block' }}
                   title="Nexto Window"
                   onLoad={() => setIsLoading(false)}
                   sandbox="allow-scripts allow-same-origin allow-forms"
                   allow="autoplay; encrypted-media"
                 />
               </div>
-            </div>
+            </motion.div>
           </motion.div>
         )}
       </AnimatePresence>
+
+      {/* Hidden Iframe for Caching when window is closed */}
+      {!showWindow && hasOpenedOnce && (
+        <div className="hidden">
+          <iframe src={targetUrl} title="Nexto Cache" />
+        </div>
+      )}
     </>
   );
 };
