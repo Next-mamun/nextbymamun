@@ -11,6 +11,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 
 import { MediaEditor } from '../components/MediaTools';
 import { useUpload } from '@/contexts/UploadContext';
+import ConfirmDialog from '@/components/ConfirmDialog';
 import { formatTime } from '@/lib/utils';
 
 const Messages: React.FC = () => {
@@ -28,6 +29,7 @@ const Messages: React.FC = () => {
   const [selectedMedia, setSelectedMedia] = useState<{ file?: File, url: string, type: 'image' | 'video' } | null>(null);
   const [showMediaEditor, setShowMediaEditor] = useState(false);
   const [mediaType, setMediaType] = useState<'image' | 'video'>('image');
+  const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -401,10 +403,26 @@ const Messages: React.FC = () => {
     }
   };
 
-  const deleteMessage = async (id: string) => {
-    if (!confirm('Delete this message for everyone?')) return;
+  const triggerDeleteMessage = (id: string) => {
+    setDeleteConfirmId(id);
+  };
+
+  const executeDeleteMessage = async () => {
+    if (!deleteConfirmId) return;
+    const id = deleteConfirmId;
+    setDeleteConfirmId(null);
+
+    // Optimistic delete
+    if (selectedChat) {
+      queryClient.setQueryData(['messages', selectedChat.id], (oldData: any[]) => {
+        if (!oldData) return oldData;
+        return oldData.filter(msg => msg.id !== id);
+      });
+    }
+
     const { error } = await supabase.from('messages').delete().eq('id', id);
-    if (!error) {
+    if (error && selectedChat) {
+      console.error(error);
       queryClient.invalidateQueries({ queryKey: ['messages', selectedChat.id] });
     }
   };
@@ -566,7 +584,7 @@ const Messages: React.FC = () => {
                   {messages.map(msg => (
                     <div key={msg.id} className={`flex ${msg.sender_id === currentUser?.id ? 'justify-end' : 'justify-start'} group relative animate-in fade-in slide-in-from-bottom-2 duration-300`}>
                       {msg.sender_id === currentUser?.id && (
-                        <button onClick={() => deleteMessage(msg.id)} className="opacity-0 group-hover:opacity-100 mr-2 self-center text-red-300 hover:text-red-500 transition-all"><Trash2 size={16} /></button>
+                        <button onClick={() => triggerDeleteMessage(msg.id)} className="opacity-0 group-hover:opacity-100 mr-2 self-center text-red-300 hover:text-red-500 transition-all"><Trash2 size={16} /></button>
                       )}
                       <div className={`p-3.5 rounded-2xl max-w-[75%] shadow-sm text-[15px] font-medium leading-relaxed ${msg.sender_id === currentUser?.id ? 'bg-[#1877F2] text-white rounded-tr-none' : 'bg-white dark:bg-gray-800 border border-gray-100 dark:border-gray-700 text-gray-800 dark:text-gray-200 rounded-tl-none'}`}>
                         {msg.media_url && (
@@ -663,6 +681,14 @@ const Messages: React.FC = () => {
           />
         )}
       </div>
+
+      <ConfirmDialog
+        isOpen={!!deleteConfirmId}
+        title="Delete Message"
+        message="Are you sure you want to delete this message for everyone?"
+        onConfirm={executeDeleteMessage}
+        onCancel={() => setDeleteConfirmId(null)}
+      />
     </div>
   );
 };

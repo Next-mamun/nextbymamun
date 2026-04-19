@@ -11,6 +11,7 @@ import ProfilePhoto from '@/components/ProfilePhoto';
 import { formatTime } from '@/lib/utils';
 
 import { useUpload } from '@/contexts/UploadContext';
+import ConfirmDialog from '@/components/ConfirmDialog';
 
 const REELS_PER_PAGE = 5;
 
@@ -20,6 +21,7 @@ const Reels: React.FC = () => {
   const queryClient = useQueryClient();
   const [isUploadModalOpen, setIsUploadModalOpen] = useState(false);
   const [activeReelId, setActiveReelId] = useState<string | null>(null);
+  const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
   
   // Upload State
   const [ytLink, setYtLink] = useState('');
@@ -180,10 +182,29 @@ const Reels: React.FC = () => {
     setPreviewUrl(null);
   };
 
-  const deleteReel = async (id: string) => {
-    if (!confirm('Delete this video?')) return;
-    await supabase.from('reels').delete().eq('id', id);
-    queryClient.invalidateQueries({ queryKey: ['reels_infinite'] });
+  const triggerDelete = (id: string) => {
+    setDeleteConfirmId(id);
+  };
+
+  const executeDelete = async () => {
+    if (!deleteConfirmId) return;
+    const id = deleteConfirmId;
+    setDeleteConfirmId(null);
+
+    // Optimistic delete
+    queryClient.setQueriesData({ queryKey: ['reels_infinite'] }, (oldData: any) => {
+      if (!oldData || !oldData.pages) return oldData;
+      return {
+        ...oldData,
+        pages: oldData.pages.map((page: any[]) => page.filter((r: any) => r.id !== id))
+      };
+    });
+    try {
+      await supabase.from('reels').delete().eq('id', id);
+    } catch (e) {
+      console.error(e);
+      queryClient.invalidateQueries({ queryKey: ['reels_infinite'] });
+    }
   };
 
   if (reelsLoading && reels.length === 0) return <div className="h-screen flex items-center justify-center text-[#1877F2] font-black">Loading Videos...</div>;
@@ -205,7 +226,7 @@ const Reels: React.FC = () => {
         <div className="h-full flex flex-col items-center justify-center text-white/50 px-10 text-center">
           <Video size={80} strokeWidth={1} className="mb-4 opacity-20" />
           <p className="text-xl font-bold">No Videos Yet</p>
-          <p className="text-sm">Be the first to share a moment on Next Media!</p>
+          <p className="text-sm">Be the first to share a moment on Next!</p>
           <button onClick={() => setIsUploadModalOpen(true)} className="mt-6 bg-[#1877F2] text-white px-6 py-3 rounded-full font-bold hover:brightness-110">Create First Video</button>
         </div>
       ) : reels.map((reel, index) => (
@@ -219,10 +240,18 @@ const Reels: React.FC = () => {
           <ReelItem 
             reel={reel} 
             isActive={activeReelId === reel.id} 
-            onDelete={() => deleteReel(reel.id)} 
+            onDelete={() => triggerDelete(reel.id)} 
           />
         </div>
       ))}
+
+      <ConfirmDialog
+        isOpen={!!deleteConfirmId}
+        title="Delete Video"
+        message="Are you sure you want to delete this video? This action cannot be undone."
+        onConfirm={executeDelete}
+        onCancel={() => setDeleteConfirmId(null)}
+      />
 
       {/* Upload Modal */}
       {isUploadModalOpen && (

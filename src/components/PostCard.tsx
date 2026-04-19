@@ -10,6 +10,7 @@ import ZoomableImage from '@/components/ZoomableImage';
 import ProfilePhoto from '@/components/ProfilePhoto';
 import VideoPlayer from '@/components/VideoPlayer';
 import EmbedPlayer from '@/components/EmbedPlayer';
+import ConfirmDialog from '@/components/ConfirmDialog';
 import { formatTime } from '@/lib/utils';
 
 interface PostCardProps {
@@ -30,6 +31,7 @@ const PostCard = React.memo(({ post, onObserve, isProfileView = false }: PostCar
   const initialIsLiked = post.likes?.some((l: any) => l.user_id === currentUser?.id);
   const [isLiked, setIsLiked] = useState(initialIsLiked);
   const [likesCount, setLikesCount] = useState(post.likes?.length || 0);
+  const [showConfirmDelete, setShowConfirmDelete] = useState(false);
   
   const cardRef = useRef<HTMLDivElement>(null);
 
@@ -118,9 +120,35 @@ const PostCard = React.memo(({ post, onObserve, isProfileView = false }: PostCar
     }
   };
 
-  const handleDelete = async () => {
-    if (window.confirm('Are you sure you want to delete this post?')) {
-      await supabase.from('posts').delete().eq('id', post.id);
+  const triggerDelete = () => {
+    setShowConfirmDelete(true);
+  };
+
+  const executeDelete = async () => {
+    setShowConfirmDelete(false);
+    const postId = post.id;
+    // Optimistic delete: hide from all queries starting with 'posts'
+    queryClient.setQueriesData({ queryKey: ['posts'] }, (oldData: any) => {
+      if (!oldData || !oldData.pages) return oldData;
+      return {
+        ...oldData,
+        pages: oldData.pages.map((page: any[]) => page.filter((p: any) => p.id !== postId))
+      };
+    });
+    // Update userPosts cache
+    queryClient.setQueriesData({ queryKey: ['userPosts'] }, (oldData: any) => {
+       if (!oldData) return oldData;
+       if (Array.isArray(oldData)) {
+         return oldData.filter((p: any) => p.id !== postId);
+       }
+       return oldData;
+    });
+
+    try {
+      await supabase.from('posts').delete().eq('id', postId);
+    } catch (error) {
+      console.error('Failed to delete post:', error);
+      // Re-invalidate on failure
       queryClient.invalidateQueries({ queryKey: ['posts'] });
       queryClient.invalidateQueries({ queryKey: ['userPosts'] });
     }
@@ -140,7 +168,7 @@ const PostCard = React.memo(({ post, onObserve, isProfileView = false }: PostCar
             <p className="text-[12px] text-gray-500 dark:text-gray-400 font-medium">{formatTime(post.created_at, { showYear: true })}</p>
           </div>
         </Link>
-        {post.user_id === currentUser?.id && <button onClick={handleDelete} className="p-2 text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-full transition-colors"><Trash2 size={18} /></button>}
+        {post.user_id === currentUser?.id && <button onClick={triggerDelete} className="p-2 text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-full transition-colors"><Trash2 size={18} /></button>}
       </div>
       <p className="px-4 pb-3 text-[15px] text-gray-800 dark:text-gray-200 leading-relaxed font-medium">{post.content}</p>
       {post.media_url && (
@@ -209,6 +237,14 @@ const PostCard = React.memo(({ post, onObserve, isProfileView = false }: PostCar
           </form>
         </div>
       )}
+
+      <ConfirmDialog
+        isOpen={showConfirmDelete}
+        title="Delete Post"
+        message="Are you sure you want to delete this post? This action cannot be undone."
+        onConfirm={executeDelete}
+        onCancel={() => setShowConfirmDelete(false)}
+      />
     </div>
   );
 });

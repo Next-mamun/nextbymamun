@@ -191,8 +191,8 @@ const NextoRobot: React.FC = () => {
                   style={{ display: isLoading && !hasOpenedOnce ? 'none' : 'block' }}
                   title="Nexto Window"
                   onLoad={() => setIsLoading(false)}
-                  sandbox="allow-scripts allow-same-origin allow-forms"
-                  allow="autoplay; encrypted-media"
+                  sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
+                  allow="microphone; camera; display-capture; geolocation; autoplay; encrypted-media"
                 />
               </div>
             </motion.div>

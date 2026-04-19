@@ -60,15 +60,15 @@ export const generateImage = async (prompt: string): Promise<string | null> => {
 };
 
 export const generateBio = async (username: string): Promise<string> => {
-  if (!ai) return "Just joined Next Media!";
+  if (!ai) return "Just joined Next!";
   try {
     const response = await ai.models.generateContent({
       model: "gemini-3-flash-preview",
-      contents: `Create a funny and creative one-sentence bio for a user named ${username} for a new social media app called Next Media.`,
+      contents: `Create a funny and creative one-sentence bio for a user named ${username} for a new social media app called Next.`,
     });
     // Fix: Access the .text property directly.
-    return response.text || "Just joined Next Media!";
+    return response.text || "Just joined Next!";
   } catch (error) {
-    return "Exploring the world of Next Media.";
+    return "Exploring the world of Next.";
   }
 };

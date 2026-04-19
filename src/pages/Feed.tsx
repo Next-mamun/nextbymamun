@@ -1,5 +1,6 @@
 
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
+import { motion, AnimatePresence } from 'motion/react';
 import { Image as LucideImage, Video, ThumbsUp, Send, X, CheckCircle, Clapperboard, Link as LinkIcon, Search, Camera, Pencil } from 'lucide-react';
 import { VerifiedBadge } from '@/components/VerifiedBadge';
 import ZoomableImage from '@/components/ZoomableImage';
@@ -509,18 +510,23 @@ const Feed: React.FC = () => {
             </div>
           ))}
 
-          {/* Top Ad */}
-          {filteredPosts.length > 0 && <AdsterraAd />}
-
-          {filteredPosts.map((post, index) => (
-            <React.Fragment key={post.id}>
-              {index > 0 && index % 4 === 0 && <AdsterraAd />}
-              <PostCard 
-                post={post} 
-                onObserve={handleObserve}
-              />
-            </React.Fragment>
-          ))}
+          <AnimatePresence mode="popLayout">
+            {filteredPosts.map((post, index) => (
+              <motion.div 
+                key={post.id}
+                initial={{ opacity: 0, y: 30, scale: 0.95 }}
+                animate={{ opacity: 1, y: 0, scale: 1 }}
+                exit={{ opacity: 0, scale: 0.9, transition: { duration: 0.2 } }}
+                transition={{ duration: 0.4, type: "spring", bounce: 0.3 }}
+              >
+                <PostCard 
+                  post={post} 
+                  onObserve={handleObserve}
+                />
+                {index > 0 && (index + 1) % 4 === 0 && <AdsterraAd />}
+              </motion.div>
+            ))}
+          </AnimatePresence>
           {hasNextPage && (
             <div ref={loadMoreRef} className="py-4 text-center font-bold text-gray-500">
               {isFetchingNextPage ? 'Loading more...' : 'Loading...'}

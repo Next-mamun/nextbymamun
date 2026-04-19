@@ -3,15 +3,19 @@ import { supabase } from '../lib/supabase';
 import Draggable from 'react-draggable';
 import { Pause, Play, X, RefreshCw } from 'lucide-react';
 import * as idb from 'idb-keyval';
+import * as tus from 'tus-js-client';
+
+import imageCompression from 'browser-image-compression';
 
 interface UploadTask {
   id: string;
   file?: File | string; // Can be a File or a processed base64 string
   progress: number;
-  status: 'processing' | 'uploading' | 'success' | 'error' | 'paused';
+  status: 'optimizing' | 'processing' | 'uploading' | 'success' | 'error' | 'paused';
   type: 'post' | 'story' | 'message' | 'reel' | 'profile';
   metadata?: any;
 }
+
 
 interface UploadContextType {
   uploads: UploadTask[];
@@ -110,23 +114,119 @@ export const UploadProvider: React.FC<{ children: React.ReactNode }> = ({ childr
               fileExt = fileBody.type.split('/')[1] || (isVideo ? 'mp4' : 'jpeg');
             }
             
+            if (isVideo) {
+              console.log('Video detected. Preparing direct TUS resumable chunked upload...');
+              setUploads(prev => prev.map(x => x.id === id ? { ...x, status: 'uploading', progress: 0 } : x));
+              clearInterval(interval);
+            } else if (isImage) {
+              try {
+                console.log('Optimizing image...');
+                const options = {
+                  maxSizeMB: 1,
+                  maxWidthOrHeight: 1920,
+                  useWebWorker: true,
+                };
+                fileBody = await imageCompression(fileBody as File, options);
+                let uploadFileExt = fileExt;
+                if (fileBody.type && fileBody.type.includes('/')) {
+                   uploadFileExt = fileBody.type.split('/')[1] || fileExt;
+                }
+                fileExt = uploadFileExt;
+                console.log('Image optimized successfully.');
+              } catch (err) {
+                console.warn('Image optimization failed, uploading raw.', err);
+              }
+            }
+            
             const fileName = `${Date.now()}_${Math.random().toString(36).substring(7)}.${fileExt}`;
             const filePath = `${metadata.userId}/${fileName}`;
             
-            // Try to upload to 'media' bucket
-            let { error: uploadError } = await supabase.storage.from('media').upload(filePath, fileBody);
-            
-            // If bucket doesn't exist, try to create it and retry
-            if (uploadError && (uploadError.message.includes('bucket') || uploadError.message.includes('not found'))) {
-              console.log('Bucket "media" might not exist. Attempting to create...');
-              await supabase.storage.createBucket('media', { public: true });
-              const retry = await supabase.storage.from('media').upload(filePath, fileBody);
-              uploadError = retry.error;
-            }
-            
-            if (uploadError) {
-              console.warn('Storage upload failed, falling back to base64:', uploadError.message);
-              throw uploadError; // Fallback to catch block
+            clearInterval(interval); // We use real progress now, so clear simulated one
+
+            if (isVideo) {
+               console.log('Starting resumable chunked upload via TUS (Fast & Reliable)...');
+               await new Promise<void>(async (resolve, reject) => {
+                const { data: { session } } = await supabase.auth.getSession();
+                const uploadUrl = import.meta.env.VITE_SUPABASE_URL;
+
+                if (!session || !uploadUrl) {
+                  // Fallback if no auth (should not happen normally)
+                  const { error } = await supabase.storage.from('media').upload(filePath, fileBody);
+                  if (error) return reject(error);
+                  return resolve();
+                }
+
+                const upload = new tus.Upload(fileBody as File | Blob, {
+                  endpoint: `${uploadUrl}/storage/v1/upload/resumable`,
+                  retryDelays: [0, 3000, 5000, 10000, 20000],
+                  headers: {
+                    authorization: `Bearer ${session.access_token}`,
+                    apikey: import.meta.env.VITE_SUPABASE_ANON_KEY as string,
+                    'x-upsert': 'true',
+                  },
+                  uploadDataDuringCreation: true,
+                  removeFingerprintOnSuccess: true,
+                  metadata: {
+                    bucketName: 'media',
+                    objectName: filePath,
+                    contentType: 'video/mp4',
+                    cacheControl: '3600',
+                  },
+                  chunkSize: 6 * 1024 * 1024, // 6MB chunks for reliability
+                  onError: (error) => {
+                    console.error('TUS Chunked Upload failed:', error);
+                    // Standard RLS error message if applicable
+                    if (error.message && (error.message.includes('row-level security') || error.message.includes('RLS') || error.message.includes('403'))) {
+                        return reject(new Error("Supabase Storage RLS Error: You need to add a Storage Policy in your Supabase dashboard to allow uploads to the 'media' bucket. Run this SQL in Supabase: CREATE POLICY \"Public Uploads\" ON storage.objects FOR INSERT WITH CHECK (bucket_id = 'media');"));
+                    }
+                    reject(error);
+                  },
+                  onProgress: (bytesUploaded, bytesTotal) => {
+                    const percentage = (bytesUploaded / bytesTotal) * 100;
+                    setUploads(prev => prev.map(x => x.id === id ? { ...x, progress: percentage } : x));
+                  },
+                  onSuccess: () => {
+                    console.log('TUS Chunked Upload successful.');
+                    setUploads(prev => prev.map(x => x.id === id ? { ...x, progress: 100 } : x));
+                    resolve();
+                  }
+                });
+
+                if (controller.signal.aborted) {
+                  upload.abort(true);
+                  return reject(new Error('Aborted'));
+                }
+                
+                controller.signal.addEventListener('abort', () => {
+                  upload.abort(false, () => {
+                    reject(new Error('Aborted'));
+                  });
+                });
+
+                upload.start();
+              });
+            } else {
+              // Standard upload for images/audio
+              simulateProgress(id, 0, 95, 10);
+              console.log('Starting direct upload...');
+              let { error: uploadError } = await supabase.storage.from('media').upload(filePath, fileBody);
+              
+              if (uploadError && (uploadError.message.includes('bucket') || uploadError.message.includes('not found'))) {
+                console.log('Bucket "media" might not exist. Attempting to create...');
+                await supabase.storage.createBucket('media', { public: true });
+                const retry = await supabase.storage.from('media').upload(filePath, fileBody);
+                uploadError = retry.error;
+              }
+
+              if (uploadError) {
+                console.error('Upload failed directly:', uploadError);
+                if (uploadError.message.includes('row-level security') || uploadError.message.includes('RLS')) {
+                   throw new Error("Supabase Storage RLS Error: You need to add a Storage Policy in your Supabase dashboard to allow uploads to the 'media' bucket. Run this SQL in Supabase: CREATE POLICY \"Public Uploads\" ON storage.objects FOR INSERT WITH CHECK (bucket_id = 'media');");
+                }
+                throw uploadError;
+              }
+              
+              setUploads(prev => prev.map(x => x.id === id ? { ...x, progress: 100 } : x));
             }
             
             const { data: { publicUrl } } = supabase.storage.from('media').getPublicUrl(filePath);

@@ -439,7 +439,7 @@ const Settings: React.FC = () => {
                       onClick={async () => {
                         const granted = await requestNotificationPermission();
                         if (granted) {
-                          toast('Notifications Enabled!', { description: 'You will now receive alerts from Next Media.' });
+                          toast('Notifications Enabled!', { description: 'You will now receive alerts from Next.' });
                           window.location.reload(); // Refresh to update UI state
                         } else {
                           alert('Notification permission was denied. Please enable it in your browser settings.');

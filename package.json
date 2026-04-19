@@ -10,10 +10,13 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@ffmpeg/ffmpeg": "^0.12.15",
+    "@ffmpeg/util": "^0.12.2",
     "@google/genai": "^1.42.0",
     "@supabase/supabase-js": "^2.97.0",
     "@tailwindcss/vite": "^4.2.1",
     "@tanstack/react-query": "^5.90.21",
+    "browser-image-compression": "^2.0.2",
     "clsx": "^2.1.1",
     "emoji-picker-react": "^4.18.0",
     "idb-keyval": "^6.2.2",
@@ -27,6 +30,7 @@
     "sonner": "^2.0.7",
     "tailwind-merge": "^3.5.0",
     "tailwindcss": "^4.2.1",
+    "tus-js-client": "^4.3.1",
     "vite-plugin-pwa": "^1.2.0",
     "workbox-window": "^7.4.0"
   },

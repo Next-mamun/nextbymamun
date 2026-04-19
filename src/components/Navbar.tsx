@@ -133,7 +133,7 @@ const Navbar: React.FC = () => {
     return () => { supabase.removeChannel(sub); };
   }, [currentUser, queryClient]);
 
-  const handleNotificationsClick = () => {
+  const handleNotificationsClick = async () => {
     const opening = !showNotifications;
     setShowNotifications(opening);
     setShowDropdown(false);
@@ -142,6 +142,21 @@ const Navbar: React.FC = () => {
       const seenIds = JSON.parse(localStorage.getItem('seen_notifications') || '[]');
       const newSeenIds = Array.from(new Set([...seenIds, ...notifications.map((n: any) => n.id)]));
       localStorage.setItem('seen_notifications', JSON.stringify(newSeenIds));
+
+      // Update the local react-query state instantly so the badge disappears
+      if (currentUser?.id) {
+         queryClient.setQueryData(['notifications', currentUser.id], (oldData: any) => {
+            if (!oldData) return oldData;
+            return oldData.map((n: any) => ({ ...n, is_seen: true }));
+         });
+      }
+      
+      // Inform the server about read notifications if possible
+      try {
+        await supabase.from('notifications').update({ is_read: true }).eq('user_id', currentUser?.id).eq('is_read', false);
+      } catch (e) {
+        console.error(e);
+      }
     }
   };
 

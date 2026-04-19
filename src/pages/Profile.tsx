@@ -207,8 +207,30 @@ const Profile: React.FC = () => {
 
   const deletePost = async (id: string) => {
     if (!confirm('Delete this post?')) return;
-    await supabase.from('posts').delete().eq('id', id);
-    queryClient.invalidateQueries({ queryKey: ['userPosts', profile?.id] });
+    // Optimistic delete
+    queryClient.setQueriesData({ queryKey: ['userPosts'] }, (oldData: any) => {
+      if (!oldData) return oldData;
+      if (Array.isArray(oldData)) {
+        return oldData.filter((p: any) => p.id !== id);
+      }
+      return oldData;
+    });
+    // Also remove from main feed if present
+    queryClient.setQueriesData({ queryKey: ['posts'] }, (oldData: any) => {
+      if (!oldData || !oldData.pages) return oldData;
+      return {
+        ...oldData,
+        pages: oldData.pages.map((page: any[]) => page.filter((p: any) => p.id !== id))
+      };
+    });
+    
+    try {
+      await supabase.from('posts').delete().eq('id', id);
+    } catch(e) {
+      console.error('Failed to delete user post:', e);
+      queryClient.invalidateQueries({ queryKey: ['userPosts'] });
+      queryClient.invalidateQueries({ queryKey: ['posts'] });
+    }
   };
 
   const getYoutubeId = (url: string | null | undefined) => {
@@ -328,7 +350,7 @@ const Profile: React.FC = () => {
               <div className="mt-6 space-y-4">
                 <div className="flex items-center gap-3 text-gray-600 dark:text-gray-400 font-medium"><Users className="text-gray-400" size={20} /> <span className="font-bold text-gray-900 dark:text-white">{friendsCount}</span> Friends</div>
                 <div className="flex items-center gap-3 text-gray-600 dark:text-gray-400 font-medium"><Calendar className="text-gray-400" size={20} /> Member since {new Date(profile.created_at).getFullYear()}</div>
-                <div className="flex items-center gap-3 text-gray-600 dark:text-gray-400 font-medium"><CheckCircle className="text-gray-400" size={20} /> Active Next Media User</div>
+                <div className="flex items-center gap-3 text-gray-600 dark:text-gray-400 font-medium"><CheckCircle className="text-gray-400" size={20} /> Active Next User</div>
               </div>
               <button onClick={() => setIsEditing(true)} className="w-full bg-[#f0f2f5] dark:bg-gray-800 hover:bg-gray-200 dark:hover:bg-gray-700 py-2.5 rounded-xl font-bold mt-6 text-gray-800 dark:text-white transition-colors">Edit Bio</button>
             </div>
