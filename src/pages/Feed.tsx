@@ -105,10 +105,37 @@ const Feed: React.FC = () => {
     staleTime: 1000 * 60 * 5, // 5 minutes
   });
 
-  const posts = useMemo(() => 
-    Array.from(new Map((postsData?.pages.flat() || []).map(p => [p.id, p])).values()),
-    [postsData?.pages]
-  );
+  const [feedRandomSeed] = useState(() => Math.random());
+
+  const posts = useMemo(() => {
+    let flatPosts = Array.from(new Map((postsData?.pages.flat() || []).map(p => [p.id, p])).values()) as any[];
+    
+    // Only shuffle the first few pages simply so the user gets a unique feed at the top every entry
+    // without completely breaking the illusion of pagination.
+    if (flatPosts.length > 0 && selectedCategory === 'All') {
+      // Create a deterministic shuffle based on the mount seed
+      const seededRandom = (seed: number) => {
+        let x = Math.sin(seed++) * 10000;
+        return x - Math.floor(x);
+      };
+      
+      let currentSeed = feedRandomSeed;
+      
+      // We'll shuffle the top 30 items so the very latest ones get mixed up.
+      const toShuffle = flatPosts.slice(0, 30);
+      const remaining = flatPosts.slice(30);
+      
+      for (let i = toShuffle.length - 1; i > 0; i--) {
+        const j = Math.floor(seededRandom(currentSeed) * (i + 1));
+        currentSeed += 1;
+        [toShuffle[i], toShuffle[j]] = [toShuffle[j], toShuffle[i]];
+      }
+      
+      flatPosts = [...toShuffle, ...remaining];
+    }
+    
+    return flatPosts;
+  }, [postsData?.pages, selectedCategory, feedRandomSeed]);
 
   const handleObserve = useCallback((el: HTMLElement) => {
     observer.current?.observe(el);
@@ -488,7 +515,25 @@ const Feed: React.FC = () => {
           <button onClick={() => window.location.reload()} className="bg-[#1877F2] text-white px-4 py-2 rounded-lg font-bold">Retry</button>
         </div>
       ) : postsLoading && posts.length === 0 ? (
-        <div className="flex flex-col items-center justify-center p-20 gap-4"><div className="w-8 h-8 border-4 border-[#1877F2] border-t-transparent rounded-full animate-spin"></div><p className="font-bold text-gray-500">Fast Loading...</p></div>
+        <div className="flex flex-col gap-4">
+           {[...Array(3)].map((_, i) => (
+             <div key={i} className="bg-white dark:bg-black rounded-xl shadow-sm border border-gray-200 dark:border-gray-800 p-4 animate-pulse">
+               <div className="flex items-center gap-3 mb-4">
+                 <div className="w-10 h-10 bg-gray-200 dark:bg-gray-800 rounded-full"></div>
+                 <div className="flex-1">
+                   <div className="h-4 bg-gray-200 dark:bg-gray-800 rounded w-1/3 mb-2"></div>
+                   <div className="h-3 bg-gray-200 dark:bg-gray-800 rounded w-1/4"></div>
+                 </div>
+               </div>
+               <div className="space-y-2 mb-4">
+                 <div className="h-4 bg-gray-200 dark:bg-gray-800 rounded w-full"></div>
+                 <div className="h-4 bg-gray-200 dark:bg-gray-800 rounded w-5/6"></div>
+                 <div className="h-4 bg-gray-200 dark:bg-gray-800 rounded w-4/6"></div>
+               </div>
+               <div className="w-full h-48 bg-gray-200 dark:bg-gray-800 rounded-lg"></div>
+             </div>
+           ))}
+        </div>
       ) : (
         <>
           {/* Optimistic Uploads */}

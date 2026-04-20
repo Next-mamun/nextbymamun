@@ -18,32 +18,19 @@ window.addEventListener('error', (e) => {
   }
 });
 
-// Cleanup huge base64 posts that crash the feed
-const cleanupHugePosts = async () => {
-  try {
-    const { error } = await supabase
-      .from('posts')
-      .delete()
-      .like('media_url', 'data:%');
-    if (error) console.error('Cleanup error:', error);
-    else console.log('Cleaned up base64 posts');
-  } catch (e) {
-    console.error(e);
-  }
-};
-cleanupHugePosts();
+// Primary pages imported directly for instant loading
+import Feed from '@/pages/Feed';
+import Messages from '@/pages/Messages';
+import Friends from '@/pages/Friends';
+import Profile from '@/pages/Profile';
+import Notifications from '@/pages/Notifications';
+import Reels from '@/pages/Reels';
+import CreatePost from '@/pages/CreatePost';
 
-// Lazy load pages for better performance
-const Feed = lazy(() => import('@/pages/Feed'));
+// Less common pages can remain lazy
 const Login = lazy(() => import('@/pages/Login'));
 const Register = lazy(() => import('@/pages/Register'));
-const Messages = lazy(() => import('@/pages/Messages'));
-const Friends = lazy(() => import('@/pages/Friends'));
-const Profile = lazy(() => import('@/pages/Profile'));
 const Settings = lazy(() => import('@/pages/Settings'));
-const CreatePost = lazy(() => import('@/pages/CreatePost'));
-const Notifications = lazy(() => import('@/pages/Notifications'));
-const Reels = lazy(() => import('@/pages/Reels'));
 
 import { AuthContext, AuthContextType, ThemeContext, ThemeContextType, useAuth, useTheme } from '@/contexts/AuthContext';
 

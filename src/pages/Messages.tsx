@@ -56,7 +56,8 @@ const Messages: React.FC = () => {
         .from('messages')
         .select('sender_id, receiver_id, content, media_url, media_type, created_at, id')
         .or(`sender_id.eq.${currentUser.id},receiver_id.eq.${currentUser.id}`)
-        .order('created_at', { ascending: false });
+        .order('created_at', { ascending: false })
+        .limit(200);
       
       if (msgError) {
         console.error("Error fetching messages for contacts:", msgError);
@@ -142,7 +143,8 @@ const Messages: React.FC = () => {
       });
     },
     enabled: !!currentUser,
-    staleTime: 1000 * 60 * 5, // 5 minutes
+    staleTime: Infinity, 
+    gcTime: Infinity,
   });
 
   const { data: messages = [] } = useQuery({
@@ -153,11 +155,14 @@ const Messages: React.FC = () => {
         .from('messages')
         .select('*')
         .or(`and(sender_id.eq.${currentUser?.id},receiver_id.eq.${selectedChat.id}),and(sender_id.eq.${selectedChat.id},receiver_id.eq.${currentUser?.id})`)
-        .order('created_at', { ascending: true });
+        .order('created_at', { ascending: false })
+        .limit(100);
       
       if (!data) return [];
+      // Data arrives descending so newest are first. Reverse to show chronologically
+      const chronoData = data.reverse();
       // Filter duplicate messages by ID
-      return Array.from(new Map(data.map(m => [m.id, m])).values());
+      return Array.from(new Map(chronoData.map(m => [m.id, m])).values());
     },
     enabled: !!selectedChat,
     staleTime: 0, // Messages should be fresh
@@ -453,9 +458,19 @@ const Messages: React.FC = () => {
         </div>
         <div className="flex-1 overflow-y-auto p-2 space-y-1">
           {loadingContacts && contacts.length === 0 ? (
-            <div className="flex flex-col items-center justify-center py-10 gap-3">
-              <RefreshCw className="animate-spin text-blue-500" size={24} />
-              <p className="text-xs font-bold text-gray-400 uppercase tracking-widest">Loading Chats...</p>
+            <div className="flex flex-col gap-2 px-2 pt-2">
+              {[...Array(6)].map((_, i) => (
+                <div key={i} className="flex items-center gap-3 p-3 w-full animate-pulse">
+                  <div className="w-14 h-14 bg-gray-200 dark:bg-gray-800 rounded-full flex-shrink-0"></div>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex justify-between items-baseline mb-2">
+                      <div className="h-4 bg-gray-200 dark:bg-gray-800 rounded w-1/2"></div>
+                      <div className="h-3 bg-gray-200 dark:bg-gray-800 rounded w-1/5"></div>
+                    </div>
+                    <div className="h-3 bg-gray-200 dark:bg-gray-800 rounded w-3/4"></div>
+                  </div>
+                </div>
+              ))}
             </div>
           ) : (showNewFriends ? filteredContacts.filter(c => c.isNewFriend) : filteredContacts.filter(c => !c.isNewFriend)).map(c => {
             const isOnline = onlineUsers.has(c.id);

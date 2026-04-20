@@ -43,7 +43,6 @@ const Sidebar: React.FC = () => {
       return uniqueSenders.size;
     },
     enabled: !!currentUser,
-    refetchInterval: 10000,
   });
 
   return (

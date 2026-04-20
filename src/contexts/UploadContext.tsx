@@ -99,146 +99,120 @@ export const UploadProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
         if (isVideo || isImage) {
           mediaType = isVideo ? 'video' : 'image';
-          console.log(`Uploading ${mediaType} to Supabase Storage...`);
           
           try {
             let fileBody: File | Blob;
-            let fileExt = '';
             
             if (file instanceof File) {
               fileBody = file;
-              fileExt = file.name.split('.').pop() || (isVideo ? 'mp4' : 'jpeg');
             } else {
               const res = await fetch(file);
               fileBody = await res.blob();
-              fileExt = fileBody.type.split('/')[1] || (isVideo ? 'mp4' : 'jpeg');
             }
-            
-            if (isVideo) {
-              console.log('Video detected. Preparing direct TUS resumable chunked upload...');
+
+            if (type === 'profile') {
+              console.log(`Uploading ${mediaType} to Supabase Storage (Profile Picture)...`);
               setUploads(prev => prev.map(x => x.id === id ? { ...x, status: 'uploading', progress: 0 } : x));
               clearInterval(interval);
-            } else if (isImage) {
-              try {
-                console.log('Optimizing image...');
-                const options = {
-                  maxSizeMB: 1,
-                  maxWidthOrHeight: 1920,
-                  useWebWorker: true,
-                };
-                fileBody = await imageCompression(fileBody as File, options);
-                let uploadFileExt = fileExt;
-                if (fileBody.type && fileBody.type.includes('/')) {
-                   uploadFileExt = fileBody.type.split('/')[1] || fileExt;
-                }
-                fileExt = uploadFileExt;
-                console.log('Image optimized successfully.');
-              } catch (err) {
-                console.warn('Image optimization failed, uploading raw.', err);
-              }
-            }
-            
-            const fileName = `${Date.now()}_${Math.random().toString(36).substring(7)}.${fileExt}`;
-            const filePath = `${metadata.userId}/${fileName}`;
-            
-            clearInterval(interval); // We use real progress now, so clear simulated one
-
-            if (isVideo) {
-               console.log('Starting resumable chunked upload via TUS (Fast & Reliable)...');
-               await new Promise<void>(async (resolve, reject) => {
-                const { data: { session } } = await supabase.auth.getSession();
-                const uploadUrl = import.meta.env.VITE_SUPABASE_URL;
-
-                if (!session || !uploadUrl) {
-                  // Fallback if no auth (should not happen normally)
-                  const { error } = await supabase.storage.from('media').upload(filePath, fileBody);
-                  if (error) return reject(error);
-                  return resolve();
-                }
-
-                const upload = new tus.Upload(fileBody as File | Blob, {
-                  endpoint: `${uploadUrl}/storage/v1/upload/resumable`,
-                  retryDelays: [0, 3000, 5000, 10000, 20000],
-                  headers: {
-                    authorization: `Bearer ${session.access_token}`,
-                    apikey: import.meta.env.VITE_SUPABASE_ANON_KEY as string,
-                    'x-upsert': 'true',
-                  },
-                  uploadDataDuringCreation: true,
-                  removeFingerprintOnSuccess: true,
-                  metadata: {
-                    bucketName: 'media',
-                    objectName: filePath,
-                    contentType: 'video/mp4',
-                    cacheControl: '3600',
-                  },
-                  chunkSize: 6 * 1024 * 1024, // 6MB chunks for reliability
-                  onError: (error) => {
-                    console.error('TUS Chunked Upload failed:', error);
-                    // Standard RLS error message if applicable
-                    if (error.message && (error.message.includes('row-level security') || error.message.includes('RLS') || error.message.includes('403'))) {
-                        return reject(new Error("Supabase Storage RLS Error: You need to add a Storage Policy in your Supabase dashboard to allow uploads to the 'media' bucket. Run this SQL in Supabase: CREATE POLICY \"Public Uploads\" ON storage.objects FOR INSERT WITH CHECK (bucket_id = 'media');"));
-                    }
-                    reject(error);
-                  },
-                  onProgress: (bytesUploaded, bytesTotal) => {
-                    const percentage = (bytesUploaded / bytesTotal) * 100;
-                    setUploads(prev => prev.map(x => x.id === id ? { ...x, progress: percentage } : x));
-                  },
-                  onSuccess: () => {
-                    console.log('TUS Chunked Upload successful.');
-                    setUploads(prev => prev.map(x => x.id === id ? { ...x, progress: 100 } : x));
-                    resolve();
-                  }
-                });
-
-                if (controller.signal.aborted) {
-                  upload.abort(true);
-                  return reject(new Error('Aborted'));
-                }
-                
-                controller.signal.addEventListener('abort', () => {
-                  upload.abort(false, () => {
-                    reject(new Error('Aborted'));
-                  });
-                });
-
-                upload.start();
-              });
-            } else {
-              // Standard upload for images/audio
-              simulateProgress(id, 0, 95, 10);
-              console.log('Starting direct upload...');
-              let { error: uploadError } = await supabase.storage.from('media').upload(filePath, fileBody);
               
-              if (uploadError && (uploadError.message.includes('bucket') || uploadError.message.includes('not found'))) {
-                console.log('Bucket "media" might not exist. Attempting to create...');
-                await supabase.storage.createBucket('media', { public: true });
-                const retry = await supabase.storage.from('media').upload(filePath, fileBody);
-                uploadError = retry.error;
+              let fileExt = file instanceof File ? (file.name.split('.').pop() || 'jpeg') : 'jpeg';
+              
+              if (isImage) {
+                try {
+                  const options = { maxSizeMB: 1, maxWidthOrHeight: 1024, useWebWorker: true };
+                  fileBody = await imageCompression(fileBody as File, options);
+                  if (fileBody.type && fileBody.type.includes('/')) {
+                    fileExt = fileBody.type.split('/')[1] || fileExt;
+                  }
+                } catch (err) {
+                  console.warn('Image optimization failed, uploading raw.', err);
+                }
               }
+
+              const fileName = `${Date.now()}_${Math.random().toString(36).substring(7)}.${fileExt}`;
+              const filePath = `${metadata.userId}/${fileName}`;
+
+              simulateProgress(id, 0, 95, 10);
+              const { error: uploadError } = await supabase.storage.from('media').upload(filePath, fileBody, {
+                upsert: true
+              });
 
               if (uploadError) {
-                console.error('Upload failed directly:', uploadError);
-                if (uploadError.message.includes('row-level security') || uploadError.message.includes('RLS')) {
-                   throw new Error("Supabase Storage RLS Error: You need to add a Storage Policy in your Supabase dashboard to allow uploads to the 'media' bucket. Run this SQL in Supabase: CREATE POLICY \"Public Uploads\" ON storage.objects FOR INSERT WITH CHECK (bucket_id = 'media');");
-                }
+                console.error('Supabase upload failed:', uploadError);
                 throw uploadError;
               }
-              
+
+              const { data: { publicUrl } } = supabase.storage.from('media').getPublicUrl(filePath);
+              mediaUrl = publicUrl;
+              console.log('Upload to Supabase successful:', mediaUrl);
               setUploads(prev => prev.map(x => x.id === id ? { ...x, progress: 100 } : x));
+
+            } else {
+              console.log(`Uploading ${mediaType} to Cloudinary...`);
+              setUploads(prev => prev.map(x => x.id === id ? { ...x, status: 'uploading', progress: 0 } : x));
+              clearInterval(interval);
+
+              if (isImage) {
+                try {
+                  const options = {
+                    maxSizeMB: 2,
+                    maxWidthOrHeight: 1920,
+                    useWebWorker: true,
+                  };
+                  fileBody = await imageCompression(fileBody as File, options);
+                } catch (err) {
+                  console.warn('Image optimization failed, uploading raw.', err);
+                }
+              }
+
+              const formData = new FormData();
+              formData.append('file', fileBody);
+              formData.append('upload_preset', 'next_app_uploads'); // User-provided upload preset
+
+              mediaUrl = await new Promise((resolve, reject) => {
+                const xhr = new XMLHttpRequest();
+                const cloudName = 'dcwe6ln0h'; // User-provided cloud name
+                xhr.open('POST', `https://api.cloudinary.com/v1_1/${cloudName}/${mediaType === 'video' ? 'video' : 'image'}/upload`);
+                
+                xhr.upload.onprogress = (e) => {
+                  if (e.lengthComputable) {
+                    const percentage = (e.loaded / e.total) * 100;
+                    setUploads(prev => prev.map(x => x.id === id ? { ...x, progress: percentage } : x));
+                  }
+                };
+
+                xhr.onload = () => {
+                  if (xhr.status === 200) {
+                    const response = JSON.parse(xhr.responseText);
+                    resolve(response.secure_url);
+                    console.log('Upload to Cloudinary successful:', response.secure_url);
+                  } else {
+                    reject(new Error(`Cloudinary Upload Error: ${xhr.statusText} ${xhr.responseText}`));
+                  }
+                };
+
+                xhr.onerror = () => reject(new Error('Cloudinary Upload failed due to network error.'));
+                
+                if (controller.signal.aborted) {
+                  xhr.abort();
+                  return reject(new Error('Aborted'));
+                }
+
+                controller.signal.addEventListener('abort', () => {
+                  xhr.abort();
+                  reject(new Error('Aborted'));
+                });
+
+                xhr.send(formData);
+              });
             }
             
-            const { data: { publicUrl } } = supabase.storage.from('media').getPublicUrl(filePath);
-            mediaUrl = publicUrl;
-            console.log('Upload to storage successful:', mediaUrl);
-            
           } catch (storageError) {
-            console.warn('Failed to use Supabase Storage. Falling back to base64 encoding (not recommended for large files).', storageError);
-            // Fallback to base64 if storage fails (e.g., RLS issues, no bucket)
+            console.warn('Failed to use Cloudinary Storage. Falling back to base64 encoding (not recommended for large files).', storageError);
+            // Fallback to base64 if storage fails
             if (file instanceof File) {
               if (file.size > 1024 * 1024 * 50) { // 50MB limit for base64 fallback
-                throw new Error("File is too large for base64 fallback. Please configure Supabase Storage.");
+                throw new Error("File is too large for base64 fallback. Please check Cloudinary config.");
               }
               mediaUrl = await new Promise<string>((resolve, reject) => {
                 const reader = new FileReader();

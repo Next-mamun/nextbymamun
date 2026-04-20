@@ -115,6 +115,8 @@ const Navbar: React.FC = () => {
       });
     },
     enabled: !!currentUser?.id,
+    staleTime: Infinity,
+    gcTime: Infinity,
   });
 
   useEffect(() => {

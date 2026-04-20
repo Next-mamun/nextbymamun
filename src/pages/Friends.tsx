@@ -130,7 +130,8 @@ const Friends: React.FC = () => {
         discovery: uniqueById(filterList(disc))
       };
     },
-    staleTime: 1000 * 60 * 5, // 5 minutes
+    staleTime: Infinity,
+    gcTime: Infinity,
   });
 
   const { requests = [], friends = [], discovery = [], blockedUsers = [] } = friendsData || {};
@@ -293,9 +294,16 @@ const Friends: React.FC = () => {
         </button>
       </div>
 
-      {loading ? (
-          <div className="flex justify-center py-20">
-              <div className="w-10 h-10 border-4 border-[#1877F2] border-t-transparent rounded-full animate-spin"></div>
+      {loading && !friendsData ? (
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+            {[...Array(8)].map((_, i) => (
+              <div key={i} className="bg-white dark:bg-black border border-gray-100 dark:border-gray-800 rounded-2xl p-4 flex flex-col items-center text-center animate-pulse">
+                <div className="w-20 h-20 rounded-full bg-gray-200 dark:bg-gray-800 mb-3"></div>
+                <div className="h-4 bg-gray-200 dark:bg-gray-800 rounded w-2/3 mb-2"></div>
+                <div className="h-3 bg-gray-200 dark:bg-gray-800 rounded w-1/2 mb-4"></div>
+                <div className="w-full h-10 bg-gray-200 dark:bg-gray-800 rounded-xl"></div>
+              </div>
+            ))}
           </div>
       ) : (
         <>
