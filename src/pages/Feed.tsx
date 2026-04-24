@@ -9,23 +9,31 @@ import VideoPlayer from '@/components/VideoPlayer';
 import EmbedPlayer from '@/components/EmbedPlayer';
 import { useAuth } from '@/contexts/AuthContext';
 import { supabase } from '../lib/supabase';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { useQuery, useInfiniteQuery, useQueryClient } from '@tanstack/react-query';
 import { CameraCapture, MediaEditor } from '@/components/MediaTools';
 
 import PostCard from '@/components/PostCard';
 import AdsterraAd from '@/components/AdsterraAd';
+import { getPosterUrl } from '@/lib/utils';
+import { redis } from '@/lib/redis';
 
 import { useUpload } from '@/contexts/UploadContext';
 
 const Feed: React.FC = () => {
   const { currentUser } = useAuth();
   const queryClient = useQueryClient();
+  const navigate = useNavigate();
   const { addUpload, uploads } = useUpload();
   const [newPostContent, setNewPostContent] = useState('');
   const [selectedFile, setSelectedFile] = useState<File | string | null>(null);
+  const [selectedThumbnail, setSelectedThumbnail] = useState<File | null>(null);
+  const [thumbnailPreview, setThumbnailPreview] = useState<string | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [fileType, setFileType] = useState<'image' | 'video' | 'text'>('text');
+  
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const thumbnailInputRef = useRef<HTMLInputElement>(null);
   
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedCategory, setSelectedCategory] = useState('All');
@@ -47,7 +55,6 @@ const Feed: React.FC = () => {
   const [ytLink, setYtLink] = useState('');
   const [showYoutube, setShowYoutube] = useState(false);
   
-  const fileInputRef = useRef<HTMLInputElement>(null);
   const viewedPostsRef = useRef<Set<string>>(new Set());
   const observer = useRef<IntersectionObserver | null>(null);
 
@@ -57,7 +64,7 @@ const Feed: React.FC = () => {
     queryFn: async () => {
       const { data } = await supabase
         .from('reels')
-        .select('*, profiles(*), likes:reel_likes(*)')
+        .select('*, profiles(*)')
         .limit(5)
         .order('created_at', { ascending: false });
       return data || [];
@@ -77,6 +84,17 @@ const Feed: React.FC = () => {
   } = useInfiniteQuery({
     queryKey: ['posts', selectedCategory, contentTypeFilter],
     queryFn: async ({ pageParam = 0 }) => {
+      const cacheKey = `posts_cache_${selectedCategory}_${contentTypeFilter}_${pageParam}`;
+      try {
+        const cachedStr = await redis.get(cacheKey);
+        if (cachedStr) {
+          // Check if it's already an object or a string
+          return typeof cachedStr === 'string' ? JSON.parse(cachedStr) : cachedStr;
+        }
+      } catch (e) {
+        console.warn('Redis read failed frontend cache', e);
+      }
+
       let query = supabase
         .from('posts')
         .select('*, profiles(*), comments(*, profiles(*)), likes(*)')
@@ -96,7 +114,15 @@ const Feed: React.FC = () => {
         console.error("Error fetching posts:", error);
         throw error;
       }
-      return data || [];
+      
+      const responseData = data || [];
+      try {
+        // Cache in redis for 10 minutes (600s)
+        await redis.setex(cacheKey, 600, JSON.stringify(responseData));
+      } catch (e) {
+        console.warn('Redis write failed frontend cache', e);
+      }
+      return responseData;
     },
     initialPageParam: 0,
     getNextPageParam: (lastPage, allPages) => {
@@ -111,8 +137,8 @@ const Feed: React.FC = () => {
     let flatPosts = Array.from(new Map((postsData?.pages.flat() || []).map(p => [p.id, p])).values()) as any[];
     
     // Only shuffle the first few pages simply so the user gets a unique feed at the top every entry
-    // without completely breaking the illusion of pagination.
-    if (flatPosts.length > 0 && selectedCategory === 'All') {
+    // without completely breaking the illusion of pagination. We only do this if ALL types are shown.
+    if (flatPosts.length > 0 && selectedCategory === 'All' && contentTypeFilter === 'All') {
       // Create a deterministic shuffle based on the mount seed
       const seededRandom = (seed: number) => {
         let x = Math.sin(seed++) * 10000;
@@ -121,9 +147,9 @@ const Feed: React.FC = () => {
       
       let currentSeed = feedRandomSeed;
       
-      // We'll shuffle the top 30 items so the very latest ones get mixed up.
-      const toShuffle = flatPosts.slice(0, 30);
-      const remaining = flatPosts.slice(30);
+      // We'll shuffle the top 20 items so the very latest ones get mixed up.
+      const toShuffle = flatPosts.slice(0, 20);
+      const remaining = flatPosts.slice(20);
       
       for (let i = toShuffle.length - 1; i > 0; i--) {
         const j = Math.floor(seededRandom(currentSeed) * (i + 1));
@@ -135,7 +161,7 @@ const Feed: React.FC = () => {
     }
     
     return flatPosts;
-  }, [postsData?.pages, selectedCategory, feedRandomSeed]);
+  }, [postsData?.pages, selectedCategory, contentTypeFilter, feedRandomSeed]);
 
   const handleObserve = useCallback((el: HTMLElement) => {
     observer.current?.observe(el);
@@ -254,6 +280,28 @@ const Feed: React.FC = () => {
     }
   };
 
+  const handleThumbnailSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      setSelectedThumbnail(file);
+      setThumbnailPreview(URL.createObjectURL(file));
+    }
+  };
+
+  const uploadToCloudinary = async (file: File): Promise<string> => {
+    const formData = new FormData();
+    formData.append('file', file);
+    formData.append('upload_preset', 'next_app_uploads');
+    const cloudName = 'dcwe6ln0h';
+    const res = await fetch(`https://api.cloudinary.com/v1_1/${cloudName}/image/upload`, {
+      method: 'POST',
+      body: formData,
+    });
+    if (!res.ok) throw new Error('Cloudinary Upload Failed');
+    const data = await res.json();
+    return data.secure_url;
+  };
+
   const getYoutubeId = (url: string | null | undefined) => {
     if (!url) return null;
     const regExp = /^.*(youtu.be\/|v\/|u\/\w\/|embed\/|watch\?v=|&v=|shorts\/)([^#&?]*).*/;
@@ -312,7 +360,17 @@ const Feed: React.FC = () => {
       const category = showCategoryInput ? customCategory : postCategory;
 
       setIsUploading(true);
-      addUpload(mediaUrl || '', 'post', {
+
+      let thumbnailUrl: string | undefined = undefined;
+      if (selectedThumbnail) {
+        try {
+          thumbnailUrl = await uploadToCloudinary(selectedThumbnail);
+        } catch (err) {
+          console.error("Failed to upload custom thumbnail", err);
+        }
+      }
+
+      const metadataObj: any = {
         userId: currentUser!.id,
         content: newPostContent,
         mediaType: mType,
@@ -320,11 +378,23 @@ const Feed: React.FC = () => {
         onSuccess: () => {
           queryClient.invalidateQueries({ queryKey: ['posts'] });
         }
-      });
+      };
+      if (thumbnailUrl) {
+         metadataObj.payload = { 
+             user_id: currentUser!.id,
+             content: newPostContent,
+             category: category,
+             views: 0,
+             thumbnail_url: thumbnailUrl 
+         };
+      }
+      addUpload(mediaUrl || '', 'post', metadataObj);
 
       setNewPostContent('');
       setSelectedFile(null);
       setPreviewUrl(null);
+      setSelectedThumbnail(null);
+      setThumbnailPreview(null);
       setYtLink('');
       setShowYoutube(false);
       setShowCategoryInput(false);
@@ -364,6 +434,13 @@ const Feed: React.FC = () => {
             {type}
           </button>
         ))}
+        <button 
+          onClick={() => navigate('/reels')}
+          className="px-4 py-1.5 rounded-full text-sm font-bold whitespace-nowrap transition-all border bg-white dark:bg-black text-gray-600 dark:text-gray-300 border-gray-200 dark:border-gray-800 hover:bg-gray-50 dark:hover:bg-gray-900 flex items-center gap-1"
+        >
+          <Clapperboard size={14} className="text-[#1877F2]" />
+          Reels
+        </button>
       </div>
 
       {/* Category Filter Bar */}
@@ -379,108 +456,151 @@ const Feed: React.FC = () => {
         ))}
       </div>
 
-      {/* Create Post Section */}
-      <div className="bg-white dark:bg-black rounded-xl shadow-sm border border-gray-200 dark:border-gray-800 overflow-hidden">
-        <div className="p-4">
-          <div className="flex gap-2 mb-4 items-center">
-            <textarea value={newPostContent} onChange={(e) => setNewPostContent(e.target.value)} placeholder="What's on your mind?" className="flex-1 bg-[#f0f2f5] dark:bg-gray-900 rounded-xl px-5 py-3 outline-none resize-none text-[15px] text-gray-800 dark:text-white placeholder-gray-400 font-medium" rows={2} />
-          </div>
-          {selectedFile && previewUrl && (
-            <div className="relative mb-4 bg-black rounded-lg overflow-hidden max-h-48 flex justify-center border dark:border-gray-800">
-              {fileType === 'image' ? (
-                <img src={previewUrl} className="h-full object-contain" referrerPolicy="no-referrer" />
-              ) : (
-                <video src={previewUrl} className="h-full" />
-              )}
-              <div className="absolute top-2 right-2 flex gap-2">
-                <button 
-                  onClick={() => setShowEditor(true)}
-                  className="bg-black/50 text-white p-1.5 rounded-full hover:bg-black/70 transition-all"
-                  title="Edit Media"
-                >
-                  <Pencil size={14} />
-                </button>
-                <button onClick={() => { setSelectedFile(null); setPreviewUrl(null); }} className="bg-black/50 text-white p-1.5 rounded-full hover:bg-black/70 transition-all">
-                  <X size={14} />
-                </button>
+      <div className="bg-white dark:bg-black rounded-xl shadow-sm border border-gray-100 dark:border-gray-800 overflow-hidden mb-4">
+        <div className="p-4 flex gap-3">
+          <ProfilePhoto src={currentUser?.avatar_url || ''} alt="user" size="medium" />
+          <div className="flex-1">
+            <textarea 
+              value={newPostContent} 
+              onChange={(e) => setNewPostContent(e.target.value)} 
+              placeholder="What's on your mind?" 
+              className="w-full bg-transparent border-none outline-none resize-none text-[15px] text-gray-800 dark:text-white placeholder-gray-500 font-medium pt-2 min-h-[40px]" 
+              rows={newPostContent.split('\n').length > 1 ? Math.min(newPostContent.split('\n').length, 5) : 1} 
+              style={{ overflow: 'hidden' }}
+            />
+            
+            {selectedFile && previewUrl && (
+              <div className="relative mt-3 flex flex-col gap-2">
+                <div className="relative bg-gray-50 dark:bg-gray-900 rounded-xl overflow-hidden max-h-64 flex justify-center border border-gray-100 dark:border-gray-800">
+                  {fileType === 'image' ? (
+                    <img src={previewUrl} className="h-full w-full object-contain" referrerPolicy="no-referrer" />
+                  ) : (
+                    <video src={previewUrl} className="h-full w-full object-cover" />
+                  )}
+                  <div className="absolute top-2 right-2 flex gap-2">
+                    <button 
+                      onClick={() => setShowEditor(true)}
+                      className="bg-black/60 backdrop-blur-md text-white p-2 rounded-full hover:bg-black/80 transition-all shadow-sm"
+                      title="Edit Media"
+                    >
+                      <Pencil size={14} />
+                    </button>
+                    <button onClick={() => { setSelectedFile(null); setPreviewUrl(null); }} className="bg-black/60 backdrop-blur-md text-white p-2 rounded-full hover:bg-black/80 transition-all shadow-sm">
+                      <X size={14} />
+                    </button>
+                  </div>
+                </div>
+                
+                {fileType === 'video' && (
+                  <div className="flex gap-3 items-center bg-gray-50 dark:bg-gray-800/50 p-2 rounded-lg border border-gray-100 dark:border-gray-800 mt-1">
+                    <input type="file" ref={thumbnailInputRef} hidden onChange={handleThumbnailSelect} accept="image/*" />
+                    <button onClick={() => thumbnailInputRef.current?.click()} className="text-xs font-bold text-[#1877F2] hover:bg-blue-50 dark:hover:bg-blue-900/30 px-3 py-1.5 rounded-md transition-colors flex items-center gap-1.5">
+                      <LucideImage size={14} /> {thumbnailPreview ? 'Change Cover' : 'Add Cover Image'}
+                    </button>
+                    {thumbnailPreview && (
+                      <div className="relative w-8 h-8 rounded shrink-0 shadow-sm border border-gray-200 dark:border-gray-700">
+                        <img src={thumbnailPreview} className="w-full h-full object-cover rounded" />
+                        <button onClick={() => { setSelectedThumbnail(null); setThumbnailPreview(null); }} className="absolute -top-1.5 -right-1.5 bg-black text-white rounded-full shadow-md p-0.5">
+                          <X size={10} />
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
-            </div>
-          )}
-          
-          {!selectedFile && (
-            (ytLink && getEmbedUrl(ytLink)) || 
-            (!ytLink && newPostContent.match(/https?:\/\/(?:www\.|m\.|web\.)?(?:youtube\.com|youtu\.be|facebook\.com|fb\.watch)\/[^\s]+/i) && getEmbedUrl(newPostContent.match(/https?:\/\/(?:www\.|m\.|web\.)?(?:youtube\.com|youtu\.be|facebook\.com|fb\.watch)\/[^\s]+/i)?.[0] || ''))
-          ) && (
-            <div className="relative mb-4 bg-black rounded-lg overflow-hidden aspect-video flex justify-center border dark:border-gray-800">
-              <iframe 
-                src={getEmbedUrl(ytLink) || getEmbedUrl(newPostContent.match(/https?:\/\/(?:www\.|m\.|web\.)?(?:youtube\.com|youtu\.be|facebook\.com|fb\.watch)\/[^\s]+/i)?.[0] || '') || ''} 
-                className="w-full h-full"
-                allowFullScreen
-              />
-              <button 
-                onClick={() => {
-                  setYtLink('');
-                }} 
-                className="absolute top-2 right-2 bg-black/50 text-white p-1 rounded-full"
-              >
-                <X size={14} />
-              </button>
-            </div>
-          )}
-        </div>
-        <div className="flex justify-between items-center border-t border-gray-100 dark:border-gray-800 px-4 py-2 bg-white dark:bg-black flex-wrap gap-2">
-          <div className="flex gap-1 flex-wrap">
-            <input type="file" ref={fileInputRef} hidden onChange={(e) => handleFileSelect(e)} accept="image/*,video/*" />
-            <button onClick={() => fileInputRef.current?.click()} className="flex items-center gap-2 px-3 py-2 hover:bg-gray-100 dark:hover:bg-gray-900 rounded-lg text-green-500 transition-colors"><LucideImage size={22} /><span className="font-bold text-gray-700 dark:text-gray-300 text-sm">Photo/Video</span></button>
-            <button onClick={() => setShowCamera(true)} className="flex items-center gap-2 px-3 py-2 hover:bg-gray-100 dark:hover:bg-gray-900 rounded-lg text-blue-500 transition-colors"><Camera size={22} /><span className="font-bold text-gray-700 dark:text-gray-300 text-sm">Camera</span></button>
-            <button onClick={() => setShowYoutube(!showYoutube)} className="flex items-center gap-2 px-3 py-2 hover:bg-gray-100 dark:hover:bg-gray-900 rounded-lg text-[#1877F2] transition-colors"><LinkIcon size={22} /><span className="font-bold text-gray-700 dark:text-gray-300 text-sm">Embed Video</span></button>
-            {(newPostContent.trim() || selectedFile || ytLink) && (
-              <div className="relative group">
-                <button onClick={() => setShowCategoryInput(!showCategoryInput)} className="flex items-center gap-2 px-3 py-2 hover:bg-gray-100 dark:hover:bg-gray-900 rounded-lg text-orange-500 transition-colors">
-                  <CheckCircle size={22} />
-                  <span className="font-bold text-gray-700 dark:text-gray-300 text-sm">{showCategoryInput ? 'Custom' : postCategory}</span>
+            )}
+            
+            {!selectedFile && (
+              (ytLink && getEmbedUrl(ytLink)) || 
+              (!ytLink && newPostContent.match(/https?:\/\/(?:www\.|m\.|web\.)?(?:youtube\.com|youtu\.be|facebook\.com|fb\.watch)\/[^\s]+/i) && getEmbedUrl(newPostContent.match(/https?:\/\/(?:www\.|m\.|web\.)?(?:youtube\.com|youtu\.be|facebook\.com|fb\.watch)\/[^\s]+/i)?.[0] || ''))
+            ) && (
+              <div className="relative mt-3 bg-black rounded-xl overflow-hidden aspect-video flex justify-center shadow-inner">
+                <iframe 
+                  src={getEmbedUrl(ytLink) || getEmbedUrl(newPostContent.match(/https?:\/\/(?:www\.|m\.|web\.)?(?:youtube\.com|youtu\.be|facebook\.com|fb\.watch)\/[^\s]+/i)?.[0] || '') || ''} 
+                  className="w-full h-full border-none"
+                  allowFullScreen
+                />
+                <button 
+                  onClick={() => { setYtLink(''); }} 
+                  className="absolute top-2 right-2 bg-black/60 backdrop-blur-md text-white p-2 rounded-full hover:bg-black/80 transition-all shadow-sm"
+                >
+                  <X size={14} />
                 </button>
               </div>
             )}
           </div>
-          <button onClick={handleCreatePost} disabled={(!newPostContent.trim() && !selectedFile && !ytLink) || isUploading} className="bg-[#1877F2] text-white px-8 py-2 rounded-lg font-bold disabled:opacity-50 transition-all shadow-md hover:brightness-110">Post</button>
         </div>
-        {(newPostContent.trim() || selectedFile || ytLink) && (
-          showCategoryInput ? (
-            <div className="p-4 border-t border-gray-100 dark:border-gray-800 bg-gray-50 dark:bg-gray-900 animate-in slide-in-from-top-2 duration-200">
+
+        {/* Options & Action Bar */}
+        <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center border-t border-gray-100 dark:border-gray-800/60 px-4 py-3 bg-gray-50/50 dark:bg-gray-900/30 gap-3">
+          <div className="flex items-center gap-1 flex-wrap">
+            <input type="file" ref={fileInputRef} hidden onChange={(e) => handleFileSelect(e)} accept="image/*,video/*" />
+            <button onClick={() => fileInputRef.current?.click()} className="flex items-center gap-1.5 px-3 py-1.5 hover:bg-green-50 dark:hover:bg-green-900/20 rounded-full text-green-500 transition-colors group" title="Photo/Video">
+              <LucideImage size={20} className="group-hover:scale-110 transition-transform" />
+              <span className="text-sm font-bold text-gray-600 dark:text-gray-400 hidden sm:inline">Media</span>
+            </button>
+            <button onClick={() => setShowCamera(true)} className="flex items-center gap-1.5 px-3 py-1.5 hover:bg-blue-50 dark:hover:bg-blue-900/20 rounded-full text-blue-500 transition-colors group" title="Camera">
+              <Camera size={20} className="group-hover:scale-110 transition-transform" />
+            </button>
+            <button onClick={() => setShowYoutube(!showYoutube)} className="flex items-center gap-1.5 px-3 py-1.5 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-full text-red-500 transition-colors group" title="Embed Video">
+              <LinkIcon size={20} className="group-hover:scale-110 transition-transform" />
+            </button>
+            <button onClick={() => setShowCategoryInput(!showCategoryInput)} className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full transition-colors group ${showCategoryInput || postCategory !== 'Entertainment' ? 'bg-orange-50 dark:bg-orange-900/20 text-orange-500' : 'hover:bg-orange-50 dark:hover:bg-orange-900/20 text-orange-400'}`}>
+              <CheckCircle size={20} className="group-hover:scale-110 transition-transform" />
+              <span className="text-xs font-bold whitespace-nowrap hidden sm:inline">{postCategory === 'Entertainment' && !showCategoryInput ? 'Category' : postCategory}</span>
+            </button>
+          </div>
+          <div className="flex items-center gap-3 w-full sm:w-auto justify-between sm:justify-end">
+            <button 
+              onClick={handleCreatePost} 
+              disabled={(!newPostContent.trim() && !selectedFile && !ytLink) || isUploading} 
+              className="bg-[#1877F2] text-white px-6 py-2 rounded-full font-bold text-sm tracking-wide disabled:bg-gray-300 disabled:text-gray-500 dark:disabled:bg-gray-700 dark:disabled:text-gray-400 transition-all shadow-md hover:shadow-lg disabled:shadow-none hover:scale-[1.02] active:scale-[0.98] shrink-0 ml-auto"
+            >
+              Post
+            </button>
+          </div>
+        </div>
+
+        {/* Expandable Menus */}
+        <div className="overflow-hidden">
+          {showCategoryInput && (
+            <div className="p-3 border-t border-gray-100 dark:border-gray-800 bg-white dark:bg-black animate-in slide-in-from-top-2 duration-200">
               <input 
                 type="text" 
-                placeholder="Enter custom category..." 
+                placeholder="Type custom category..." 
                 value={customCategory}
                 onChange={e => setCustomCategory(e.target.value)}
-                className="w-full p-3 bg-white dark:bg-black rounded-xl outline-none border-2 border-transparent focus:border-[#1877F2] text-sm font-medium shadow-sm text-gray-900 dark:text-white"
+                autoFocus
+                className="w-full p-2.5 bg-gray-50 dark:bg-gray-900 rounded-lg outline-none border border-gray-200 dark:border-gray-700 focus:border-[#1877F2] text-sm font-medium shadow-sm text-gray-900 dark:text-white transition-colors"
               />
             </div>
-          ) : (
-            <div className="px-4 py-2 border-t border-gray-100 dark:border-gray-800 bg-gray-50 dark:bg-gray-900 flex gap-2 overflow-x-auto scrollbar-hide">
+          )}
+          {!showCategoryInput && (newPostContent.trim() || selectedFile || ytLink) && (
+            <div className="px-4 py-2.5 border-t border-gray-100 dark:border-gray-800 bg-white dark:bg-black flex gap-2 overflow-x-auto scrollbar-hide">
               {categories.filter(c => c !== 'All').map(cat => (
                 <button 
                   key={cat} 
                   onClick={() => setPostCategory(cat)}
-                  className={`px-3 py-1 rounded-full text-xs font-bold whitespace-nowrap transition-all border ${postCategory === cat ? 'bg-orange-500 text-white border-orange-500' : 'bg-white dark:bg-black text-gray-600 dark:text-gray-300 border-gray-200 dark:border-gray-800'}`}
+                  className={`px-3 py-1.5 rounded-full text-xs font-bold whitespace-nowrap transition-all border ${postCategory === cat ? 'bg-black dark:bg-white text-white dark:text-black border-transparent shadow-sm' : 'bg-white dark:bg-black text-gray-600 dark:text-gray-300 border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-800'}`}
                 >
                   {cat}
                 </button>
               ))}
             </div>
-          )
-        )}
-        {showYoutube && (
-          <div className="p-4 border-t border-gray-100 dark:border-gray-800 bg-gray-50 dark:bg-gray-900 animate-in slide-in-from-top-2 duration-200">
-            <input 
-              type="text" 
-              placeholder="Paste YouTube or Facebook Video Link..." 
-              value={ytLink}
-              onChange={e => setYtLink(e.target.value)}
-              className="w-full p-3 bg-white dark:bg-black rounded-xl outline-none border-2 border-transparent focus:border-[#1877F2] text-sm font-medium shadow-sm text-gray-900 dark:text-white"
-            />
-          </div>
-        )}
+          )}
+          {showYoutube && (
+            <div className="p-3 border-t border-gray-100 dark:border-gray-800 bg-white dark:bg-black animate-in slide-in-from-top-2 duration-200">
+              <input 
+                type="text" 
+                placeholder="Paste YouTube or Facebook Link..." 
+                value={ytLink}
+                onChange={e => setYtLink(e.target.value)}
+                autoFocus
+                className="w-full p-2.5 bg-gray-50 dark:bg-gray-900 rounded-lg outline-none border border-gray-200 dark:border-gray-700 focus:border-red-400 text-sm font-medium shadow-sm text-gray-900 dark:text-white transition-colors"
+              />
+            </div>
+          )}
+        </div>
       </div>
 
       {/* Quick Videos Ribbon */}
@@ -496,9 +616,15 @@ const Feed: React.FC = () => {
                 {reel.source_type === 'youtube' ? (
                    <img src={`https://img.youtube.com/vi/${reel.youtube_id}/mqdefault.jpg`} className="w-full h-full object-cover" />
                 ) : (
-                   <video src={reel.video_url} className="w-full h-full object-cover" />
+                   <img src={getPosterUrl(reel.video_url)} onError={(e) => { e.currentTarget.style.display='none'; e.currentTarget.nextElementSibling?.classList.remove('hidden'); }} className="w-full h-full object-cover" />
                 )}
-                <div className="absolute bottom-2 left-2 flex items-center gap-1">
+                <video src={reel.video_url} className={`w-full h-full object-cover ${getPosterUrl(reel.video_url) ? 'hidden' : ''}`} muted playsInline />
+                <div className="absolute inset-0 flex items-center justify-center bg-black/10">
+                  <div className="bg-black/50 p-2 rounded-full backdrop-blur-sm">
+                    <Clapperboard size={20} className="text-white" />
+                  </div>
+                </div>
+                <div className="absolute bottom-2 left-2 flex items-center gap-1 z-10">
                    <ThumbsUp size={12} className="text-white drop-shadow-md" />
                    <span className="text-white text-[10px] font-bold drop-shadow-md">{reel.likes?.length || 0}</span>
                 </div>

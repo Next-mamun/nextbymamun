@@ -1,10 +1,11 @@
 import React, { useState, useCallback } from 'react';
-import { UploadCloud, X, RefreshCw } from 'lucide-react';
+import { UploadCloud, X, RefreshCw, Link as LinkIcon, Clapperboard, Image } from 'lucide-react';
 import { useDropzone } from 'react-dropzone';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '@/contexts/AuthContext';
 import { useNavigate } from 'react-router-dom';
 import { useUpload } from '@/contexts/UploadContext';
+import { invalidatePostsCache } from '@/lib/redis';
 
 const CreatePost = () => {
   const { currentUser } = useAuth();
@@ -21,16 +22,52 @@ const CreatePost = () => {
   const [showCategoryInput, setShowCategoryInput] = useState(false);
   const [customCategory, setCustomCategory] = useState('');
 
+  const [thumbnailFile, setThumbnailFile] = useState<File | null>(null);
+  const [thumbnailPreview, setThumbnailPreview] = useState<string | null>(null);
+
   const categories = ['Entertainment', 'Learning', 'AI', 'Technology', 'Music', 'Gaming', 'News', 'Lifestyle', 'Sports', 'Art'];
+
+  const handleLinkChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    setYtLink(e.target.value);
+  };
 
   const onDrop = useCallback((acceptedFiles: File[]) => {
     if (acceptedFiles && acceptedFiles.length > 0) {
       const selectedFile = acceptedFiles[0];
+      
+      // Limit file size to 10MB
+      if (selectedFile.size > 10 * 1024 * 1024) {
+        alert('File is too large. Please select a file under 10MB.');
+        return;
+      }
+
       setFile(selectedFile);
       const previewUrl = URL.createObjectURL(selectedFile);
       setPreview(previewUrl);
     }
   }, []);
+
+  const handleThumbnailDrop = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      setThumbnailFile(file);
+      setThumbnailPreview(URL.createObjectURL(file));
+    }
+  };
+
+  const uploadToCloudinary = async (file: File): Promise<string> => {
+    const formData = new FormData();
+    formData.append('file', file);
+    formData.append('upload_preset', 'next_app_uploads');
+    const cloudName = 'dcwe6ln0h';
+    const res = await fetch(`https://api.cloudinary.com/v1_1/${cloudName}/image/upload`, {
+      method: 'POST',
+      body: formData,
+    });
+    if (!res.ok) throw new Error('Cloudinary Upload Failed');
+    const data = await res.json();
+    return data.secure_url;
+  };
 
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
     onDrop,
@@ -86,36 +123,50 @@ const CreatePost = () => {
   const handleSubmit = async () => {
     if (!currentUser) return;
     
+    setIsUploading(true);
+    let thumbnailUrl: string | undefined = undefined;
+    if (thumbnailFile) {
+      try {
+        thumbnailUrl = await uploadToCloudinary(thumbnailFile);
+      } catch (err) {
+        console.error("Failed to upload custom thumbnail", err);
+      }
+    }
+
     const mediaType = file ? (file.type.startsWith('video/') ? 'video' : 'image') : (validEmbedUrl ? 'video' : 'text');
     const mediaUrl = validEmbedUrl || ''; // If file, it will be handled by UploadContext
+    const category = showCategoryInput ? customCategory : postCategory;
 
     const postData: any = {
       user_id: currentUser.id,
       content: caption,
       media_url: mediaUrl,
       media_type: mediaType,
+      category: category,
       views: 0
     };
-
-    if (showCategoryInput ? customCategory : postCategory) {
-      postData.category = showCategoryInput ? customCategory : postCategory;
+    
+    if (thumbnailUrl) {
+      postData.thumbnail_url = thumbnailUrl;
     }
 
     if (file) {
       addUpload(file, 'post', {
         userId: currentUser.id,
         payload: postData,
-        onSuccess: () => console.log('Upload finished')
+        onSuccess: () => navigate('/')
       });
-      navigate('/');
     } else {
-      setIsUploading(true);
       const { error } = await supabase.from('posts').insert([postData]);
       if (error) {
         alert(error.message || 'Failed to create post');
       } else {
+        await invalidatePostsCache();
         navigate('/');
       }
+    }
+    
+    if (!file) {
       setIsUploading(false);
     }
   };
@@ -127,130 +178,228 @@ const CreatePost = () => {
 
         <div className="space-y-6">
           {!preview && !validEmbedUrl ? (
-            <div
-              {...getRootProps()}
-              className={`relative flex flex-col items-center justify-center w-full h-64 border-2 border-dashed rounded-xl cursor-pointer transition-colors duration-300
-                ${isDragActive ? 'border-blue-500 bg-blue-500/10' : 'border-gray-300 dark:border-gray-600 hover:border-blue-400 dark:hover:border-blue-500'}`}
-            >
-              <input {...getInputProps()} />
-              <div className="text-center">
-                <UploadCloud className="mx-auto h-12 w-12 text-gray-400" />
-                <p className="mt-2 text-sm text-gray-500 dark:text-gray-400">
-                  <span className="font-semibold">Click to upload</span> or drag and drop
-                </p>
-                <p className="text-xs text-gray-500 dark:text-gray-400">Image or Video</p>
+            <div className="flex flex-col gap-6">
+              <div
+                {...getRootProps()}
+                className={`group relative flex flex-col items-center justify-center w-full min-h-[300px] border-2 border-dashed rounded-3xl cursor-pointer transition-all duration-500 overflow-hidden
+                  ${isDragActive ? 'border-[#1877F2] bg-[#1877F2]/5 scale-105' : 'border-gray-300 dark:border-gray-700 hover:border-[#1877F2] dark:hover:border-[#1877F2] hover:bg-gray-50 dark:hover:bg-gray-800'}`}
+              >
+                <div className="absolute inset-0 bg-gradient-to-b from-transparent to-gray-50/50 dark:to-gray-900/50 opacity-0 group-hover:opacity-100 transition-opacity duration-500" />
+                <input {...getInputProps()} />
+                <div className="text-center z-10 flex flex-col items-center p-8">
+                  <div className={`p-5 rounded-full mb-6 transition-all duration-500 shadow-sm
+                    ${isDragActive ? 'bg-[#1877F2] text-white scale-110 shadow-[#1877F2]/30' : 'bg-gray-100 dark:bg-gray-800 text-gray-500 dark:text-gray-400 group-hover:bg-[#1877F2] group-hover:text-white group-hover:scale-110 group-hover:shadow-[0_0_20px_rgba(24,119,242,0.3)]'}`}>
+                    <UploadCloud className="h-10 w-10" strokeWidth={1.5} />
+                  </div>
+                  <h3 className="text-2xl font-bold text-gray-900 dark:text-white mb-2">
+                    {isDragActive ? 'Drop your file here' : 'Drag and drop video or photo'}
+                  </h3>
+                  <p className="text-sm text-gray-500 dark:text-gray-400 mb-6 max-w-[280px]">
+                    Your videos will be private until you publish them. Supports MP4, WebM, JPG, PNG & more.
+                  </p>
+                  <button className="bg-[#1877F2] text-white px-8 py-2.5 rounded-full font-bold shadow-md shadow-[#1877F2]/20 hover:bg-[#166fe5] hover:scale-105 transition-all">
+                    Select Files
+                  </button>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-4 w-full">
+                <div className="h-px flex-1 bg-gray-200 dark:bg-gray-800"></div>
+                <span className="text-xs font-bold text-gray-400 uppercase tracking-widest">OR EMBED</span>
+                <div className="h-px flex-1 bg-gray-200 dark:bg-gray-800"></div>
+              </div>
+
+              <div className="relative group">
+                <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none text-gray-400 group-focus-within:text-[#1877F2] transition-colors">
+                  <LinkIcon size={20} />
+                </div>
+                <input
+                  type="text"
+                  placeholder="Paste YouTube or Facebook video link..."
+                  value={detectedLink}
+                  onChange={handleLinkChange}
+                  className="w-full pl-11 pr-4 py-3.5 bg-white dark:bg-gray-800 rounded-xl outline-none border border-gray-200 dark:border-gray-700 focus:border-[#1877F2] dark:focus:border-[#1877F2] text-[15px] font-medium shadow-sm transition-all focus:shadow-[0_0_0_4px_rgba(24,119,242,0.1)] text-gray-900 dark:text-white"
+                />
               </div>
             </div>
           ) : preview ? (
-            <div className="relative w-full rounded-xl overflow-hidden bg-black">
-              {file?.type.startsWith('image/') ? (
-                <img src={preview} alt="Preview" className="w-full h-auto max-h-[50vh] object-contain" />
-              ) : (
-                <video src={preview} controls className="w-full h-auto max-h-[50vh] object-contain" />
+            <div className="flex flex-col gap-6 animate-in slide-in-from-bottom-4 duration-500">
+              <div className="relative w-full rounded-2xl overflow-hidden bg-black shadow-lg border border-gray-200 dark:border-gray-800 group">
+                {file?.type.startsWith('image/') ? (
+                  <img src={preview} alt="Preview" className="w-full h-auto max-h-[40vh] object-contain transition-transform duration-500 group-hover:scale-[1.01]" />
+                ) : (
+                  <video src={preview} controls className="w-full h-auto max-h-[40vh] object-contain transition-transform duration-500 group-hover:scale-[1.01]" />
+                )}
+                <button
+                  onClick={handleRemoveFile}
+                  className="absolute top-4 right-4 p-2 bg-black/60 backdrop-blur-md rounded-full text-white hover:bg-red-500 hover:scale-110 transition-all shadow-lg"
+                >
+                  <X size={18} />
+                </button>
+              </div>
+
+              {/* Video Specific Tools */}
+              {file?.type.startsWith('video/') && (
+                 <div className="flex flex-col gap-4 p-5 rounded-2xl bg-gray-50 dark:bg-gray-800/50 border border-gray-100 dark:border-gray-800">
+                   <div className="flex items-center justify-between">
+                     <div className="flex items-center gap-3">
+                       <div className="p-2 bg-purple-500/10 text-purple-500 rounded-lg">
+                         <Image size={20} />
+                       </div>
+                       <div>
+                         <h4 className="font-bold text-gray-900 dark:text-white text-sm">Custom Thumbnail</h4>
+                         <p className="text-xs text-gray-500 dark:text-gray-400">Catch viewers' attention instantly</p>
+                       </div>
+                     </div>
+                     <div className="flex items-center gap-3">
+                       {thumbnailPreview && (
+                         <div className="relative w-12 h-12 rounded-lg overflow-hidden border border-gray-200 dark:border-gray-700 bg-black shadow-sm group/thumb">
+                           <img src={thumbnailPreview} className="w-full h-full object-cover" />
+                           <div className="absolute inset-0 bg-black/40 opacity-0 group-hover/thumb:opacity-100 transition-opacity flex items-center justify-center">
+                             <button onClick={() => { setThumbnailFile(null); setThumbnailPreview(null); }} className="text-white hover:text-red-400 drop-shadow-md">
+                               <X size={16} />
+                             </button>
+                           </div>
+                         </div>
+                       )}
+                       <label className="cursor-pointer bg-white dark:bg-gray-800 hover:bg-gray-50 dark:hover:bg-gray-700 text-gray-800 dark:text-gray-200 text-sm font-bold py-2 px-4 rounded-xl transition-all border border-gray-200 dark:border-gray-600 shadow-sm hover:shadow-md">
+                         {thumbnailPreview ? 'Change' : 'Upload Image'}
+                         <input type="file" hidden accept="image/*" onChange={handleThumbnailDrop} />
+                       </label>
+                     </div>
+                   </div>
+                 </div>
               )}
-              <button
-                onClick={handleRemoveFile}
-                className="absolute top-2 right-2 p-1.5 bg-black/50 rounded-full text-white hover:bg-black/75 transition-colors"
-              >
-                <X size={20} />
-              </button>
             </div>
           ) : (
-            <div className="relative w-full rounded-xl overflow-hidden aspect-video bg-black border border-gray-200 dark:border-gray-700">
-              <iframe 
-                src={validEmbedUrl || ''} 
-                className="w-full h-full"
-                allowFullScreen
-                sandbox="allow-scripts allow-same-origin allow-presentation allow-forms"
-                title="post-preview"
-              />
-              <button
-                onClick={() => setYtLink('')}
-                className="absolute top-2 right-2 p-1.5 bg-black/50 rounded-full text-white hover:bg-black/75 transition-colors"
-              >
-                <X size={20} />
-              </button>
-            </div>
-          )}
-
-          <div className="flex flex-col gap-4">
-            <div className="flex items-center justify-between">
-              <label className="text-sm font-bold text-gray-600 dark:text-gray-400">Post Content</label>
-              <button 
-                onClick={() => setShowYoutube(!showYoutube)}
-                className={`text-xs font-bold px-3 py-1 rounded-full transition-colors ${showYoutube ? 'bg-red-100 text-red-600' : 'bg-gray-100 text-gray-600'}`}
-              >
-                {showYoutube ? 'Hide Link Option' : 'Add Link (YT/FB)'}
-              </button>
-            </div>
-            
-            {showYoutube && (
-              <input 
-                type="text" 
-                placeholder="Paste YouTube or Facebook Link..." 
-                value={ytLink}
-                onChange={(e) => setYtLink(e.target.value)}
-                className="w-full p-3 bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none text-sm"
-              />
-            )}
-
-            <textarea
-              value={caption}
-              onChange={(e) => setCaption(e.target.value)}
-              placeholder="Write a caption..."
-              rows={4}
-              className="w-full p-3 bg-transparent border border-gray-300 dark:border-gray-600 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors duration-300 resize-none"
-            />
-
-            <div className="space-y-3">
-              <div className="flex items-center justify-between">
-                <label className="text-sm font-bold text-gray-600 dark:text-gray-400">Select Category</label>
-                <button 
-                  onClick={() => setShowCategoryInput(!showCategoryInput)}
-                  className="text-xs font-bold text-blue-600 hover:underline"
+            <div className="flex flex-col gap-6 animate-in slide-in-from-bottom-4 duration-500">
+              <div className="relative w-full rounded-2xl overflow-hidden aspect-video bg-black shadow-lg border border-gray-200 dark:border-gray-800 group">
+                <iframe 
+                  src={validEmbedUrl || ''} 
+                  className="w-full h-full border-none"
+                  allowFullScreen
+                  sandbox="allow-scripts allow-same-origin allow-presentation allow-forms"
+                  title="post-preview"
+                />
+                <div className="absolute top-0 inset-x-0 h-16 bg-gradient-to-b from-black/50 to-transparent opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none"></div>
+                <button
+                  onClick={() => setYtLink('')}
+                  className="absolute top-4 right-4 p-2 bg-black/60 backdrop-blur-md rounded-full text-white hover:bg-red-500 hover:scale-110 transition-all shadow-lg z-10"
                 >
-                  {showCategoryInput ? 'Choose from list' : 'Add custom category'}
+                  <X size={18} />
                 </button>
               </div>
               
-              {showCategoryInput ? (
-                <input 
-                  type="text" 
-                  placeholder="Enter custom category..." 
-                  value={customCategory}
-                  onChange={e => setCustomCategory(e.target.value)}
-                  className="w-full p-3 bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none text-sm"
-                />
-              ) : (
-                <div className="flex flex-wrap gap-2">
-                  {categories.map(cat => (
-                    <button 
-                      key={cat} 
-                      onClick={() => setPostCategory(cat)}
-                      className={`px-4 py-1.5 rounded-full text-xs font-bold transition-all border ${postCategory === cat ? 'bg-orange-500 text-white border-orange-500 shadow-md' : 'bg-white dark:bg-gray-800 text-gray-600 dark:text-gray-400 border-gray-200 dark:border-gray-700 hover:bg-gray-50'}`}
-                    >
-                      {cat}
-                    </button>
-                  ))}
+              {/* Embed Video Specific Tools */}
+              <div className="flex flex-col gap-4 p-5 rounded-2xl bg-gray-50 dark:bg-gray-800/50 border border-gray-100 dark:border-gray-800">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-3">
+                    <div className="p-2 bg-purple-500/10 text-purple-500 rounded-lg">
+                      <Image size={20} />
+                    </div>
+                    <div>
+                      <h4 className="font-bold text-gray-900 dark:text-white text-sm">Custom Thumbnail</h4>
+                      <p className="text-xs text-gray-500 dark:text-gray-400">Catch viewers' attention instantly</p>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-3">
+                    {thumbnailPreview && (
+                      <div className="relative w-12 h-12 rounded-lg overflow-hidden border border-gray-200 dark:border-gray-700 bg-black shadow-sm group/thumb">
+                        <img src={thumbnailPreview} className="w-full h-full object-cover" />
+                        <div className="absolute inset-0 bg-black/40 opacity-0 group-hover/thumb:opacity-100 transition-opacity flex items-center justify-center">
+                          <button onClick={() => { setThumbnailFile(null); setThumbnailPreview(null); }} className="text-white hover:text-red-400 drop-shadow-md">
+                            <X size={16} />
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                    <label className="cursor-pointer bg-white dark:bg-gray-800 hover:bg-gray-50 dark:hover:bg-gray-700 text-gray-800 dark:text-gray-200 text-sm font-bold py-2 px-4 rounded-xl transition-all border border-gray-200 dark:border-gray-600 shadow-sm hover:shadow-md">
+                      {thumbnailPreview ? 'Change' : 'Upload Image'}
+                      <input type="file" hidden accept="image/*" onChange={handleThumbnailDrop} />
+                    </label>
+                  </div>
                 </div>
-              )}
+              </div>
+            </div>
+          )}
+
+          {/* Details Section */}
+          <div className={`space-y-5 transition-all duration-500 ${!preview && !validEmbedUrl ? 'opacity-50 pointer-events-none blur-[1px]' : 'opacity-100'}`}>
+            <div className="flex items-start gap-4 flex-col sm:flex-row">
+              <div className="flex-1 space-y-4 w-full">
+                <div className="relative">
+                  <textarea
+                    placeholder="Write a catchy description..."
+                    value={caption}
+                    onChange={(e) => setCaption(e.target.value)}
+                    className="w-full h-32 p-4 bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-2xl outline-none focus:border-[#1877F2] dark:focus:border-[#1877F2] focus:ring-4 focus:ring-[#1877F2]/10 transition-all resize-none text-[15px] text-gray-900 dark:text-white placeholder-gray-400 shadow-inner"
+                  />
+                </div>
+                
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between">
+                    <h4 className="text-sm font-bold text-gray-700 dark:text-gray-300 ml-1">Category</h4>
+                    <button 
+                      onClick={() => setShowCategoryInput(!showCategoryInput)}
+                      className="text-xs font-bold text-[#1877F2] hover:bg-[#1877F2]/10 px-3 py-1 rounded-full transition-colors"
+                    >
+                      {showCategoryInput ? 'Choose from list' : '+ Custom Category'}
+                    </button>
+                  </div>
+                  
+                  {showCategoryInput ? (
+                    <input
+                      type="text"
+                      placeholder="Type your own category..."
+                      value={customCategory}
+                      onChange={(e) => setCustomCategory(e.target.value)}
+                      className="w-full p-3.5 bg-gray-50 dark:bg-gray-800 rounded-xl outline-none border border-gray-200 dark:border-gray-700 focus:border-orange-500 focus:ring-4 focus:ring-orange-500/10 transition-all text-sm font-medium text-gray-900 dark:text-white"
+                      autoFocus
+                    />
+                  ) : (
+                    <div className="flex flex-wrap gap-2">
+                      {categories.filter(c => c !== 'All').map(cat => (
+                        <button
+                          key={cat}
+                          onClick={() => setPostCategory(cat)}
+                          className={`px-4 py-2 rounded-xl text-sm font-bold transition-all shadow-sm
+                            ${postCategory === cat 
+                              ? 'bg-gray-900 text-white dark:bg-white dark:text-black scale-105' 
+                              : 'bg-white text-gray-600 border border-gray-200 hover:bg-gray-50 dark:bg-gray-800 dark:text-gray-300 dark:border-gray-700 dark:hover:bg-gray-700'}`}
+                        >
+                          {cat}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
             </div>
           </div>
 
-          <button
-            onClick={handleSubmit}
-            disabled={(!file && !caption.trim() && !getYoutubeId(ytLink) && !getFacebookEmbedUrl(ytLink)) || isUploading}
-            className="w-full py-3 px-4 bg-blue-600 text-white font-semibold rounded-xl hover:bg-blue-700 disabled:bg-gray-400 disabled:cursor-not-allowed transition-colors duration-300 flex items-center justify-center gap-2"
-          >
-            {isUploading ? (
-              <>
-                <RefreshCw size={20} className="animate-spin" />
-                Posting ({uploadProgress}%)...
-              </>
-            ) : (
-              'Post'
-            )}
-          </button>
+          <div className="pt-6 border-t border-gray-100 dark:border-gray-800 flex items-center justify-end gap-3">
+            <button
+              onClick={() => navigate(-1)}
+              className="px-6 py-3 rounded-full font-bold text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors"
+            >
+              Cancel
+            </button>
+            <button
+              onClick={handleSubmit}
+              disabled={isUploading || (!file && !validEmbedUrl)}
+              className="relative px-8 py-3 bg-[#1877F2] text-white rounded-full font-bold shadow-md shadow-[#1877F2]/20 hover:bg-[#166fe5] hover:shadow-lg disabled:opacity-50 disabled:cursor-not-allowed transition-all transform active:scale-95 disabled:active:scale-100 overflow-hidden group"
+            >
+              <div className="absolute inset-0 w-full h-full bg-white/20 translate-x-[-100%] group-hover:translate-x-[100%] transition-transform duration-700"></div>
+              {isUploading ? (
+                <div className="flex items-center gap-2">
+                  <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                  <span>Publishing...</span>
+                </div>
+              ) : (
+                'Publish Post'
+              )}
+            </button>
+          </div>
         </div>
       </div>
     </div>

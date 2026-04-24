@@ -18,3 +18,12 @@ export function formatTime(date: string | Date, options: { showYear?: boolean, s
     hour12: true
   });
 }
+
+// Generate poster URL from Cloudinary video URL (replaces extension with .jpg)
+export function getPosterUrl(url: string | undefined | null) {
+  if (!url) return undefined;
+  if (url.includes('cloudinary.com') && url.includes('/video/upload/')) {
+    return url.replace(/\.[^/.]+$/, ".jpg");
+  }
+  return undefined;
+}

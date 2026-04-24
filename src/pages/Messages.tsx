@@ -7,7 +7,9 @@ import { useAuth } from '@/contexts/AuthContext';
 import { supabase } from '../lib/supabase';
 import { VerifiedBadge } from '@/components/VerifiedBadge';
 import ZoomableImage from '@/components/ZoomableImage';
+import VideoPlayer from '@/components/VideoPlayer';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { redis } from '@/lib/redis';
 
 import { MediaEditor } from '../components/MediaTools';
 import { useUpload } from '@/contexts/UploadContext';
@@ -50,6 +52,16 @@ const Messages: React.FC = () => {
     queryFn: async () => {
       console.log("Fetching contacts for user:", currentUser?.id);
       if (!currentUser) return [];
+
+      const cacheKey = `contacts_cache_${currentUser.id}`;
+      try {
+        const cachedStr = await redis.get(cacheKey);
+        if (cachedStr) {
+          return typeof cachedStr === 'string' ? JSON.parse(cachedStr) : cachedStr;
+        }
+      } catch (e) {
+        console.warn('Redis read failed for contacts cache', e);
+      }
       
       // 1. Fetch messages to find active conversations
       const { data: messages, error: msgError } = await supabase
@@ -133,7 +145,7 @@ const Messages: React.FC = () => {
       console.log("Contacts with messages:", contactsWithMessages);
 
       // Sort: Active conversations at top (by time), New friends at bottom
-      return contactsWithMessages.sort((a, b) => {
+      const sortedContacts = contactsWithMessages.sort((a, b) => {
         if (a.lastMessage && b.lastMessage) {
           return new Date(b.lastMessage.created_at).getTime() - new Date(a.lastMessage.created_at).getTime();
         }
@@ -141,9 +153,17 @@ const Messages: React.FC = () => {
         if (b.lastMessage) return 1;
         return 0;
       });
+
+      try {
+        await redis.setex(cacheKey, 600, JSON.stringify(sortedContacts));
+      } catch (e) {
+        console.warn('Redis write failed for contacts cache', e);
+      }
+
+      return sortedContacts;
     },
     enabled: !!currentUser,
-    staleTime: Infinity, 
+    staleTime: 60 * 1000, 
     gcTime: Infinity,
   });
 
@@ -151,6 +171,21 @@ const Messages: React.FC = () => {
     queryKey: ['messages', selectedChat?.id],
     queryFn: async () => {
       if (!selectedChat) return [];
+      const cacheKey = currentUser?.id && selectedChat?.id 
+        ? `messages_cache_${[currentUser.id, selectedChat.id].sort().join('_')}`
+        : null;
+      
+      if (cacheKey) {
+        try {
+          const cachedStr = await redis.get(cacheKey);
+          if (cachedStr) {
+            return typeof cachedStr === 'string' ? JSON.parse(cachedStr) : cachedStr;
+          }
+        } catch (e) {
+          console.warn('Redis read failed for messages cache', e);
+        }
+      }
+
       const { data } = await supabase
         .from('messages')
         .select('*')
@@ -162,7 +197,17 @@ const Messages: React.FC = () => {
       // Data arrives descending so newest are first. Reverse to show chronologically
       const chronoData = data.reverse();
       // Filter duplicate messages by ID
-      return Array.from(new Map(chronoData.map(m => [m.id, m])).values());
+      const finalData = Array.from(new Map(chronoData.map(m => [m.id, m])).values());
+      
+      if (cacheKey) {
+        try {
+          // Cache messages for 10 minutes
+          await redis.setex(cacheKey, 600, JSON.stringify(finalData));
+        } catch (e) {
+          console.warn('Redis write failed for messages cache', e);
+        }
+      }
+      return finalData;
     },
     enabled: !!selectedChat,
     staleTime: 0, // Messages should be fresh
@@ -400,6 +445,13 @@ const Messages: React.FC = () => {
       console.log("Message inserted successfully");
       setMessageText('');
       
+      try {
+        const cacheKey = `messages_cache_${[currentUser.id, selectedChat.id].sort().join('_')}`;
+        await redis.del(cacheKey);
+      } catch (e) {
+        console.warn('Redis delete failed', e);
+      }
+      
       queryClient.invalidateQueries({ queryKey: ['messages', selectedChat.id] });
       queryClient.invalidateQueries({ queryKey: ['contacts'] });
       queryClient.invalidateQueries({ queryKey: ['notifications', selectedChat.id] });
@@ -428,6 +480,14 @@ const Messages: React.FC = () => {
     const { error } = await supabase.from('messages').delete().eq('id', id);
     if (error && selectedChat) {
       console.error(error);
+      queryClient.invalidateQueries({ queryKey: ['messages', selectedChat.id] });
+    } else if (!error && selectedChat && currentUser) {
+      try {
+        const cacheKey = `messages_cache_${[currentUser.id, selectedChat.id].sort().join('_')}`;
+        await redis.del(cacheKey);
+      } catch (e) {
+        console.warn('Redis delete failed', e);
+      }
       queryClient.invalidateQueries({ queryKey: ['messages', selectedChat.id] });
     }
   };
@@ -607,7 +667,7 @@ const Messages: React.FC = () => {
                             {msg.media_type === 'image' ? (
                               <ZoomableImage src={msg.media_url} className="max-w-full h-auto rounded-lg" referrerPolicy="no-referrer" />
                             ) : (
-                              <video src={msg.media_url} controls className="max-w-full h-auto rounded-lg" />
+                              <VideoPlayer src={msg.media_url} className="max-w-full h-auto rounded-lg" />
                             )}
                           </div>
                         )}

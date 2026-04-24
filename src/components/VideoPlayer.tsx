@@ -1,4 +1,5 @@
 import React, { useRef, useEffect, useState } from 'react';
+import { getPosterUrl } from '@/lib/utils';
 
 interface VideoPlayerProps {
   src: string;
@@ -8,6 +9,8 @@ interface VideoPlayerProps {
 const VideoPlayer: React.FC<VideoPlayerProps> = ({ src, className }) => {
   const videoRef = useRef<HTMLVideoElement>(null);
   const [isPlaying, setIsPlaying] = useState(false);
+
+  const poster = getPosterUrl(src);
 
   useEffect(() => {
     const observer = new IntersectionObserver(
@@ -33,9 +36,10 @@ const VideoPlayer: React.FC<VideoPlayerProps> = ({ src, className }) => {
        <video
          ref={videoRef}
          src={src}
+         poster={poster}
          controls
          playsInline
-         className="w-full max-h-[600px] rounded-lg bg-black"
+         className="w-full max-h-[600px] rounded-lg bg-black object-contain"
          onPlay={() => setIsPlaying(true)}
          onPause={() => setIsPlaying(false)}
        />

@@ -4,6 +4,7 @@ import Draggable from 'react-draggable';
 import { Pause, Play, X, RefreshCw } from 'lucide-react';
 import * as idb from 'idb-keyval';
 import * as tus from 'tus-js-client';
+import { invalidatePostsCache, redis } from '@/lib/redis';
 
 import imageCompression from 'browser-image-compression';
 
@@ -172,7 +173,7 @@ export const UploadProvider: React.FC<{ children: React.ReactNode }> = ({ childr
               mediaUrl = await new Promise((resolve, reject) => {
                 const xhr = new XMLHttpRequest();
                 const cloudName = 'dcwe6ln0h'; // User-provided cloud name
-                xhr.open('POST', `https://api.cloudinary.com/v1_1/${cloudName}/${mediaType === 'video' ? 'video' : 'image'}/upload`);
+                xhr.open('POST', `https://api.cloudinary.com/v1_1/${cloudName}/auto/upload`);
                 
                 xhr.upload.onprogress = (e) => {
                   if (e.lengthComputable) {
@@ -207,9 +208,14 @@ export const UploadProvider: React.FC<{ children: React.ReactNode }> = ({ childr
               });
             }
             
-          } catch (storageError) {
+          } catch (storageError: any) {
             console.warn('Failed to use Cloudinary Storage. Falling back to base64 encoding (not recommended for large files).', storageError);
-            // Fallback to base64 if storage fails
+            
+            if (mediaType === 'video') {
+              throw new Error(`Video upload to Cloudinary failed. ${storageError.message || storageError}`);
+            }
+            
+            // Fallback to base64 if storage fails for images
             if (file instanceof File) {
               if (file.size > 1024 * 1024 * 50) { // 50MB limit for base64 fallback
                 throw new Error("File is too large for base64 fallback. Please check Cloudinary config.");
@@ -259,8 +265,20 @@ export const UploadProvider: React.FC<{ children: React.ReactNode }> = ({ childr
           if (metadata.category) postData.category = metadata.category;
         }
 
+        let insertError;
         const { error } = await supabase.from('posts').insert([postData]);
-        if (error) throw error;
+        insertError = error;
+        
+        // Fallback for missing thumbnail_url column in posts
+        if (insertError && insertError.message.includes('thumbnail_url')) {
+          delete postData.thumbnail_url;
+          const { error: retryError } = await supabase.from('posts').insert([postData]);
+          insertError = retryError;
+        }
+
+        if (insertError) throw insertError;
+        
+        await invalidatePostsCache();
       } else if (type === 'story') {
          const { error } = await supabase.from('stories').insert([{
           user_id: metadata.userId,
@@ -272,13 +290,31 @@ export const UploadProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       } else if (type === 'reel') {
         const payload = { ...metadata.payload };
         if (mediaUrl) payload.video_url = mediaUrl;
+        
+        let insertError;
         const { error } = await supabase.from('reels').insert([payload]);
-        if (error) throw error;
+        insertError = error;
+        
+        if (insertError && insertError.message.includes('thumbnail_url')) {
+          delete payload.thumbnail_url;
+          const { error: retryError } = await supabase.from('reels').insert([payload]);
+          insertError = retryError;
+        }
+
+        if (insertError) throw insertError;
       } else if (type === 'message') {
         const payload = { ...metadata.payload };
         if (mediaUrl) payload.media_url = mediaUrl;
         const { error } = await supabase.from('messages').insert([payload]);
         if (error) throw error;
+        
+        try {
+          const cacheKey = `messages_cache_${[metadata.payload.sender_id, metadata.payload.receiver_id].sort().join('_')}`;
+          await redis.del(cacheKey);
+        } catch (e) {
+          console.warn('Redis delete failed', e);
+        }
+
         await supabase.from('notifications').insert([{
           user_id: metadata.payload.receiver_id,
           sender_id: metadata.payload.sender_id,
@@ -314,6 +350,8 @@ export const UploadProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         console.log('Upload aborted');
       } else {
         console.error('Upload failed:', error);
+        const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+        alert(`Upload Failed: ${errorMessage}`);
         setUploads(prev => prev.map(u => u.id === id ? { ...u, status: 'error' } : u));
       }
     }

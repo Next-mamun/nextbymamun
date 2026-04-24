@@ -1,6 +1,6 @@
 
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
-import { Plus, X, Link as LinkIcon, ThumbsUp, MessageSquare, Share2, Music, UserPlus, Send, Video, Trash2, CheckCircle, Volume2, VolumeX, Eye } from 'lucide-react';
+import { Plus, X, Link as LinkIcon, ThumbsUp, MessageSquare, Share2, Music, UserPlus, Send, Video, Trash2, CheckCircle, Volume2, VolumeX, Eye, Play } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { useAuth } from '@/contexts/AuthContext';
 import { supabase } from '../lib/supabase';
@@ -8,7 +8,8 @@ import { VerifiedBadge } from '@/components/VerifiedBadge';
 import { useQuery, useInfiniteQuery, useQueryClient } from '@tanstack/react-query';
 import { Reel } from '@/types';
 import ProfilePhoto from '@/components/ProfilePhoto';
-import { formatTime } from '@/lib/utils';
+import { formatTime, getPosterUrl } from '@/lib/utils';
+import { redis } from '@/lib/redis';
 
 import { useUpload } from '@/contexts/UploadContext';
 import ConfirmDialog from '@/components/ConfirmDialog';
@@ -41,13 +42,33 @@ const Reels: React.FC = () => {
   } = useInfiniteQuery({
     queryKey: ['reels_infinite'],
     queryFn: async ({ pageParam = 0 }) => {
+      const cacheKey = `reels_page_${pageParam}`;
+      try {
+        const cached = await redis.get(cacheKey);
+        if (cached) return cached as any;
+      } catch (e) {
+        console.warn('Redis cache error', e);
+      }
+
       const { data, error } = await supabase
-        .from('reels')
-        .select('*, profiles(*), likes:reel_likes(user_id), comments:reel_comments(*, profiles(*))')
+        .from('posts')
+        .select('*, profiles(*), likes(*), comments(*, profiles(*))')
+        .eq('media_type', 'video')
+        .not('media_url', 'ilike', '%youtube.com/embed%')
+        .not('media_url', 'ilike', '%youtu.be%')
+        .not('media_url', 'ilike', '%facebook.com%')
+        .not('media_url', 'ilike', '%fb.watch%')
         .order('created_at', { ascending: false })
         .range(pageParam * REELS_PER_PAGE, (pageParam + 1) * REELS_PER_PAGE - 1);
       
       if (error) throw error;
+
+      try {
+        if (data && data.length > 0) {
+          await redis.set(cacheKey, data, { ex: 30 }); // 30 sec cache for fresh content but fast load
+        }
+      } catch (e) {}
+
       return data || [];
     },
     initialPageParam: 0,
@@ -70,10 +91,10 @@ const Reels: React.FC = () => {
 
   useEffect(() => {
     const channel = supabase.channel('reels_realtime_changes')
-      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'reels' }, () => {
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'posts', filter: 'media_type=eq.video' }, () => {
         queryClient.invalidateQueries({ queryKey: ['reels_infinite'] });
       })
-      .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'reels' }, () => {
+      .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'posts' }, () => {
         queryClient.invalidateQueries({ queryKey: ['reels_infinite'] });
       })
       .subscribe();
@@ -159,7 +180,7 @@ const Reels: React.FC = () => {
       payload.youtube_id = ytId;
       payload.video_url = `https://www.youtube.com/embed/${ytId}`;
     } else if (fbUrl) {
-      payload.source_type = 'facebook';
+      payload.source_type = 'youtube'; // fallback since DB only allows youtube or local
       payload.video_url = fbUrl;
     }
 
@@ -200,7 +221,7 @@ const Reels: React.FC = () => {
       };
     });
     try {
-      await supabase.from('reels').delete().eq('id', id);
+      await supabase.from('posts').delete().eq('id', id);
     } catch (e) {
       console.error(e);
       queryClient.invalidateQueries({ queryKey: ['reels_infinite'] });
@@ -210,24 +231,14 @@ const Reels: React.FC = () => {
   if (reelsLoading && reels.length === 0) return <div className="h-screen flex items-center justify-center text-[#1877F2] font-black">Loading Videos...</div>;
 
   return (
-    <div className="h-[90vmin] overflow-y-scroll snap-y snap-mandatory bg-black scroll-smooth">
-      {/* Floating Actions */}
-      <div className="fixed top-[10vmin] right-[2vmin] z-50 flex flex-col gap-[2vmin]">
-        <button 
-          onClick={() => setIsUploadModalOpen(true)}
-          className="bg-white p-[2vmin] rounded-full shadow-2xl hover:scale-110 transition-transform group relative"
-        >
-          <Plus size={24} className="text-[#1877F2]" />
-          <span className="absolute right-full mr-[1vmin] top-1/2 -translate-y-1/2 bg-black/80 text-white text-[1vmin] px-[1vmin] py-[0.5vmin] rounded opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap">Create Video</span>
-        </button>
-      </div>
+    <div className="fixed inset-0 z-40 bg-black overflow-y-scroll snap-y snap-mandatory scroll-smooth hide-scrollbar flex flex-col md:items-center">
+      {/* Floating Actions removed */}
 
       {reels.length === 0 ? (
-        <div className="h-full flex flex-col items-center justify-center text-white/50 px-10 text-center">
+        <div className="h-full w-full flex flex-col items-center justify-center text-white/50 px-10 text-center shrink-0 mix-blend-screen">
           <Video size={80} strokeWidth={1} className="mb-4 opacity-20" />
           <p className="text-xl font-bold">No Videos Yet</p>
           <p className="text-sm">Be the first to share a moment on Next!</p>
-          <button onClick={() => setIsUploadModalOpen(true)} className="mt-6 bg-[#1877F2] text-white px-6 py-3 rounded-full font-bold hover:brightness-110">Create First Video</button>
         </div>
       ) : reels.map((reel, index) => (
         <div 
@@ -235,7 +246,7 @@ const Reels: React.FC = () => {
           data-id={reel.id}
           data-index={index}
           ref={lastElementRef}
-          className="reel-item h-full w-full snap-start relative flex items-center justify-center bg-black"
+          className="reel-item h-[100dvh] w-full md:w-[450px] shrink-0 snap-start md:snap-center relative flex items-center justify-center bg-black"
         >
           <ReelItem 
             reel={reel} 
@@ -340,32 +351,43 @@ const Reels: React.FC = () => {
   );
 };
 
-const ReelItem: React.FC<{ reel: Reel, isActive: boolean, onDelete: () => void }> = ({ reel, isActive, onDelete }) => {
+const ReelItem: React.FC<{ reel: any, isActive: boolean, onDelete: () => void }> = ({ reel, isActive, onDelete }) => {
   const { currentUser } = useAuth();
-  const [isLiked, setIsLiked] = useState(reel.likes?.some(l => l.user_id === currentUser?.id));
+  const [views, setViews] = useState(reel.views || 0);
+  const [isMuted, setIsMuted] = useState(false);
+  const [isPlaying, setIsPlaying] = useState(true);
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const hasViewed = useRef(false);
+  const pressTimer = useRef<NodeJS.Timeout | null>(null);
+
+  const [isLiked, setIsLiked] = useState(reel.likes?.some((l: any) => l.user_id === currentUser?.id));
   const [likesCount, setLikesCount] = useState(reel.likes?.length || 0);
   const [showComments, setShowComments] = useState(false);
   const [commentText, setCommentText] = useState('');
-  const [comments, setComments] = useState(reel.comments || []);
-  const [isMuted, setIsMuted] = useState(true);
-  const [views, setViews] = useState(reel.views || 0);
-  const videoRef = useRef<HTMLVideoElement>(null);
-  const hasViewed = useRef(false);
+  const [comments, setComments] = useState((reel.comments || []).slice().reverse());
+
+  const poster = getPosterUrl(reel.media_url);
+
+  const isYouTube = reel.media_url?.includes('youtube.com/embed') || reel.media_url?.includes('fb.watch') || reel.media_url?.includes('facebook.com');
 
   useEffect(() => {
     if (isActive) {
+      setIsPlaying(true);
       if (videoRef.current) {
         videoRef.current.currentTime = 0;
-        videoRef.current.play().catch(e => console.log("Autoplay prevented", e));
+        videoRef.current.play().catch(e => {
+            console.log("Autoplay prevented", e);
+            setIsPlaying(false);
+        });
       }
       
       // Increment view count
       if (!hasViewed.current) {
         const incrementView = async () => {
           try {
-            const { data } = await supabase.from('reels').select('views').eq('id', reel.id).single();
+            const { data } = await supabase.from('posts').select('views').eq('id', reel.id).single();
             if (data) {
-              await supabase.from('reels').update({ views: (data.views || 0) + 1 }).eq('id', reel.id);
+              await supabase.from('posts').update({ views: (data.views || 0) + 1 }).eq('id', reel.id);
               setViews(prev => prev + 1);
             }
           } catch (err) {
@@ -376,21 +398,66 @@ const ReelItem: React.FC<{ reel: Reel, isActive: boolean, onDelete: () => void }
         incrementView();
       }
     } else {
+      setIsPlaying(false);
       if (videoRef.current) {
         videoRef.current.pause();
       }
     }
   }, [isActive, reel.id]);
 
+  const togglePlayPause = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (videoRef.current) {
+      if (isPlaying) {
+        videoRef.current.pause();
+        setIsPlaying(false);
+      } else {
+        videoRef.current.play();
+        setIsPlaying(true);
+      }
+    }
+  };
+
+  const handlePointerDown = (e: React.PointerEvent<HTMLVideoElement>) => {
+    e.stopPropagation();
+    const rect = e.currentTarget.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    if (x > rect.width / 2) {
+      pressTimer.current = setTimeout(() => {
+        if (videoRef.current) {
+          videoRef.current.playbackRate = 2.0;
+        }
+      }, 300); // 300ms hold to activate 2x speed
+    }
+  };
+
+  const handlePointerUp = (e: React.PointerEvent<HTMLVideoElement>) => {
+    e.stopPropagation();
+    if (pressTimer.current) {
+      clearTimeout(pressTimer.current);
+      pressTimer.current = null;
+    }
+    if (videoRef.current) {
+      videoRef.current.playbackRate = 1.0;
+    }
+  };
+
+  const toggleMute = () => {
+    if (videoRef.current) {
+      videoRef.current.muted = !isMuted;
+      setIsMuted(!isMuted);
+    }
+  };
+
   const handleLike = async () => {
     if (isLiked) {
       setLikesCount(prev => prev - 1);
       setIsLiked(false);
-      await supabase.from('reel_likes').delete().match({ reel_id: reel.id, user_id: currentUser?.id });
+      await supabase.from('likes').delete().match({ post_id: reel.id, user_id: currentUser?.id });
     } else {
       setLikesCount(prev => prev + 1);
       setIsLiked(true);
-      await supabase.from('reel_likes').insert([{ reel_id: reel.id, user_id: currentUser?.id }]);
+      await supabase.from('likes').insert([{ post_id: reel.id, user_id: currentUser?.id }]);
       
       if (reel.user_id !== currentUser?.id) {
         await supabase.from('notifications').insert([{
@@ -408,13 +475,13 @@ const ReelItem: React.FC<{ reel: Reel, isActive: boolean, onDelete: () => void }
     if (!commentText.trim()) return;
     
     const { data, error } = await supabase
-      .from('reel_comments')
-      .insert([{ reel_id: reel.id, user_id: currentUser?.id, content: commentText }])
+      .from('comments')
+      .insert([{ post_id: reel.id, user_id: currentUser?.id, content: commentText }])
       .select('*, profiles(*)')
       .single();
 
     if (data) {
-      setComments(prev => [...prev, data]);
+      setComments(prev => [data, ...prev]);
       setCommentText('');
       
       if (reel.user_id !== currentUser?.id) {
@@ -428,48 +495,92 @@ const ReelItem: React.FC<{ reel: Reel, isActive: boolean, onDelete: () => void }
     }
   };
 
-  const toggleMute = () => {
-    if (videoRef.current) {
-      videoRef.current.muted = !isMuted;
-      setIsMuted(!isMuted);
+  let ytUrl = reel.media_url;
+  if (isYouTube && isActive) {
+      try {
+        const urlObj = new URL(reel.media_url);
+        urlObj.searchParams.set('autoplay', '1');
+        urlObj.searchParams.set('mute', '0');
+        urlObj.searchParams.set('controls', '0');
+        urlObj.searchParams.set('loop', '1');
+        const playlistId = urlObj.pathname.split('/').pop();
+        if (playlistId) {
+            urlObj.searchParams.set('playlist', playlistId);
+        }
+        ytUrl = urlObj.toString();
+      } catch (e) {}
+  }
+
+  const handleShare = async () => {
+    try {
+      if (navigator.share) {
+        await navigator.share({
+          title: `Post by ${reel.profiles?.display_name}`,
+          text: reel.content,
+          url: `${window.location.origin}/post/${reel.id}`,
+        });
+      } else {
+        await navigator.clipboard.writeText(`${window.location.origin}/post/${reel.id}`);
+        alert('Link copied to clipboard!');
+      }
+    } catch (e) {
+      console.error('Error sharing', e);
     }
   };
 
   return (
     <div className="relative w-full h-full flex items-center justify-center bg-black">
       {/* Video Layer */}
-      <div className="w-full h-full md:w-[450px] relative bg-black">
-        {reel.source_type === 'youtube' || reel.source_type === 'facebook' ? (
+      <div className="w-full h-full md:w-[450px] relative bg-black flex items-center justify-center">
+        {isYouTube ? (
           isActive ? (
             <iframe 
-              src={reel.video_url.includes('facebook.com') ? reel.video_url : `${reel.video_url}?autoplay=1&mute=0&controls=0&modestbranding=1&loop=1&playlist=${reel.youtube_id}&rel=0&iv_load_policy=3&disablekb=1`}
-              className="w-full h-full object-cover pointer-events-none"
+              src={ytUrl}
+              className="w-full h-full object-contain pointer-events-none"
               frameBorder="0"
               allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
               sandbox="allow-scripts allow-same-origin allow-presentation allow-forms"
               title="reel-player"
             />
           ) : (
-             // Placeholder when not active to prevent background playback
              <div className="w-full h-full bg-gray-900 flex items-center justify-center">
                 <div className="w-16 h-16 rounded-full border-4 border-white/20 border-t-[#1877F2] animate-spin" />
              </div>
           )
         ) : (
-          <video 
-            ref={videoRef}
-            src={reel.video_url} 
-            loop 
-            muted={isMuted}
-            playsInline
-            className="w-full h-full object-cover"
-            onClick={toggleMute}
-          />
+          <>
+            <video 
+              ref={videoRef}
+              src={reel.media_url} 
+              poster={poster}
+              loop 
+              muted={isMuted}
+              playsInline
+              onPointerDown={handlePointerDown}
+              onPointerUp={handlePointerUp}
+              onPointerLeave={handlePointerUp}
+              onClick={togglePlayPause}
+              className="w-full h-full object-contain cursor-pointer"
+            />
+            {!isPlaying && (
+              <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+                <div className="w-16 h-16 rounded-full bg-black/50 flex items-center justify-center backdrop-blur-sm">
+                  <Play size={32} className="text-white ml-2" />
+                </div>
+              </div>
+            )}
+            {/* Speed Indicator */}
+            {videoRef.current && videoRef.current.playbackRate > 1 && (
+              <div className="absolute top-12 left-1/2 -translate-x-1/2 bg-black/60 text-white px-4 py-1.5 rounded-full text-xs font-bold backdrop-blur-md pointer-events-none">
+                2x Speed
+              </div>
+            )}
+          </>
         )}
         
         {/* Mute Indicator (Local Video Only) */}
-        {reel.source_type === 'local' && (
-           <button onClick={toggleMute} className="absolute top-4 right-4 p-2 bg-black/40 rounded-full text-white backdrop-blur-sm z-20">
+        {!isYouTube && (
+           <button onClick={(e) => { e.stopPropagation(); toggleMute(); }} className="absolute top-4 right-4 p-2 bg-black/40 rounded-full text-white backdrop-blur-sm z-20 hover:scale-110 transition-transform">
              {isMuted ? <VolumeX size={20} /> : <Volume2 size={20} />}
            </button>
         )}
@@ -490,30 +601,29 @@ const ReelItem: React.FC<{ reel: Reel, isActive: boolean, onDelete: () => void }
               </div>
             </Link>
             
-            <p className="text-white text-sm drop-shadow-md leading-snug line-clamp-2">{reel.caption}</p>
+            <p className="text-white text-sm drop-shadow-md leading-snug line-clamp-2">{reel.content}</p>
             
-            <div className="flex items-center gap-2 text-white/70 text-xs bg-white/10 px-3 py-1 rounded-full w-fit backdrop-blur-sm">
-              <Music size={12} />
-              <span className="truncate max-w-[150px]">Original Audio • {reel.profiles?.display_name}</span>
+            <div className="flex items-center gap-3">
+              <div className="flex items-center gap-1 text-white/80 text-xs bg-white/10 px-2 py-1 rounded-md backdrop-blur-sm">
+                <Eye size={12} />
+                <span>{views} views</span>
+              </div>
+              <div className="flex items-center gap-2 text-white/70 text-xs bg-white/10 px-3 py-1 rounded-full w-fit backdrop-blur-sm">
+                <Music size={12} />
+                <span className="truncate max-w-[150px]">Original Audio • {reel.profiles?.display_name}</span>
+              </div>
             </div>
           </div>
 
           <div className="flex flex-col items-center gap-5">
-            <div className="flex flex-col items-center gap-1">
+             <div className="flex flex-col items-center gap-1">
               <button 
                 onClick={handleLike}
-                className={`p-3 rounded-full backdrop-blur-md transition-all active:scale-90 ${isLiked ? 'bg-[#1877F2] text-white' : 'bg-black/40 text-white hover:bg-black/60'}`}
+                className={`p-3 rounded-full backdrop-blur-md transition-all active:scale-90 ${isLiked ? 'bg-[#1877F2]' : 'bg-black/40 hover:bg-black/60'} text-white`}
               >
                 <ThumbsUp size={24} fill={isLiked ? "currentColor" : "none"} />
               </button>
               <span className="text-white text-xs font-bold drop-shadow-md">{likesCount}</span>
-            </div>
-
-            <div className="flex flex-col items-center gap-1">
-              <div className="p-3 bg-black/40 rounded-full text-white backdrop-blur-md">
-                <Eye size={24} />
-              </div>
-              <span className="text-white text-xs font-bold drop-shadow-md">{views}</span>
             </div>
 
             <div className="flex flex-col items-center gap-1">
@@ -526,7 +636,7 @@ const ReelItem: React.FC<{ reel: Reel, isActive: boolean, onDelete: () => void }
               <span className="text-white text-xs font-bold drop-shadow-md">{comments.length}</span>
             </div>
 
-            <button className="p-3 bg-black/40 rounded-full text-white backdrop-blur-md hover:bg-black/60 transition-all active:scale-90">
+            <button onClick={handleShare} className="p-3 bg-black/40 rounded-full text-white backdrop-blur-md hover:bg-black/60 transition-all active:scale-90">
               <Share2 size={24} />
             </button>
 
@@ -542,59 +652,59 @@ const ReelItem: React.FC<{ reel: Reel, isActive: boolean, onDelete: () => void }
         </div>
       </div>
 
-      {/* Comments Drawer */}
-      {showComments && (
-        <div className="absolute inset-0 z-50 bg-black/80 backdrop-blur-md flex flex-col animate-in slide-in-from-bottom duration-300 md:w-[450px] md:mx-auto">
-           <div className="p-4 border-b border-white/10 flex justify-between items-center bg-black/40">
-             <h3 className="text-white font-bold text-center flex-1">Comments ({comments.length})</h3>
-             <button onClick={() => setShowComments(false)} className="text-white p-1 hover:bg-white/10 rounded-full"><X size={20}/></button>
-           </div>
-           
-           <div className="flex-1 overflow-y-auto p-4 space-y-4">
-              {comments.length === 0 ? (
-                <div className="h-full flex flex-col items-center justify-center text-white/30 gap-2">
-                  <MessageSquare size={40} />
-                  <p>No comments yet</p>
-                </div>
-              ) : Array.from(new Map(comments.map((c: any) => [c.id, c])).values()).map((c: any) => (
-                <div key={c.id} className="flex gap-3 text-white group">
-                   <Link to={`/profile/${c.profiles.username}`}>
-                     <ProfilePhoto src={c.profiles.avatar_url} alt="commenter" size="small" />
-                   </Link>
-                   <div className="flex-1">
-                      <div className="flex items-baseline gap-2">
-                        <Link to={`/profile/${c.profiles.username}`} className="font-bold text-sm hover:underline text-gray-200 flex items-center gap-1">
-                          {c.profiles.display_name}
-                          {c.profiles.is_verified && <VerifiedBadge size={12} />}
-                        </Link>
-                        <span className="text-[10px] text-gray-500">{formatTime(c.created_at)}</span>
-                      </div>
-                      <p className="text-sm text-gray-300 mt-0.5">{c.content}</p>
-                   </div>
-                </div>
-              ))}
-           </div>
-           
-           <form onSubmit={handleComment} className="p-3 bg-black border-t border-white/10 flex gap-2 items-center">
-             <ProfilePhoto src={currentUser?.avatar_url || ''} alt="me" size="small" />
-             <div className="flex-1 relative">
-               <input 
-                  value={commentText}
-                  onChange={e => setCommentText(e.target.value)}
-                  placeholder="Add a comment..." 
-                  className="w-full bg-white/10 rounded-full px-4 py-2 text-white outline-none focus:bg-white/20 transition-colors text-sm pr-10" 
-               />
-               <button 
-                  type="submit" 
-                  disabled={!commentText.trim()}
-                  className="absolute right-2 top-1/2 -translate-y-1/2 text-[#1877F2] disabled:opacity-30 hover:scale-110 transition-transform"
-               >
-                 <Send size={16} />
-               </button>
-             </div>
-           </form>
-        </div>
-      )}
+       {/* Comments Drawer */}
+       {showComments && (
+         <div className="absolute inset-0 z-50 bg-black/80 backdrop-blur-md flex flex-col animate-in slide-in-from-bottom duration-300 md:w-[450px] md:mx-auto">
+            <div className="p-4 border-b border-white/10 flex justify-between items-center bg-black/40">
+              <h3 className="text-white font-bold text-center flex-1">Comments ({comments.length})</h3>
+              <button onClick={() => setShowComments(false)} className="text-white p-1 hover:bg-white/10 rounded-full"><X size={20}/></button>
+            </div>
+            
+            <div className="flex-1 overflow-y-auto p-4 space-y-4">
+               {comments.length === 0 ? (
+                 <div className="h-full flex flex-col items-center justify-center text-white/30 gap-2">
+                   <MessageSquare size={40} />
+                   <p>No comments yet</p>
+                 </div>
+               ) : Array.from(new Map(comments.map((c: any) => [c.id, c])).values()).map((c: any) => (
+                 <div key={c.id} className="flex gap-3 text-white group">
+                    <Link to={`/profile/${c.profiles?.username}`}>
+                      <ProfilePhoto src={c.profiles?.avatar_url || ''} alt="commenter" size="small" />
+                    </Link>
+                    <div className="flex-1">
+                       <div className="flex items-baseline gap-2">
+                         <Link to={`/profile/${c.profiles?.username}`} className="font-bold text-sm hover:underline text-gray-200 flex items-center gap-1">
+                           {c.profiles?.display_name}
+                           {c.profiles?.is_verified && <VerifiedBadge size={12} />}
+                         </Link>
+                         <span className="text-[10px] text-gray-500">{formatTime(c.created_at)}</span>
+                       </div>
+                       <p className="text-sm text-gray-300 mt-0.5">{c.content}</p>
+                    </div>
+                 </div>
+               ))}
+            </div>
+            
+            <form onSubmit={handleComment} className="p-3 bg-black border-t border-white/10 flex gap-2 items-center">
+              <ProfilePhoto src={currentUser?.avatar_url || ''} alt="me" size="small" />
+              <div className="flex-1 relative">
+                <input 
+                   value={commentText}
+                   onChange={e => setCommentText(e.target.value)}
+                   placeholder="Add a comment..." 
+                   className="w-full bg-white/10 rounded-full px-4 py-2 text-white outline-none focus:bg-white/20 transition-colors text-sm pr-10" 
+                />
+                <button 
+                   type="submit" 
+                   disabled={!commentText.trim()}
+                   className="absolute right-2 top-1/2 -translate-y-1/2 text-[#1877F2] disabled:opacity-30 hover:scale-110 transition-transform"
+                >
+                  <Send size={16} />
+                </button>
+              </div>
+            </form>
+         </div>
+       )}
     </div>
   );
 };

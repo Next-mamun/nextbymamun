@@ -6,6 +6,7 @@ import { supabase } from '../lib/supabase';
 import { useNavigate } from 'react-router-dom';
 import { VerifiedBadge } from '@/components/VerifiedBadge';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { redis } from '@/lib/redis';
 
 const Friends: React.FC = () => {
   const { currentUser } = useAuth();
@@ -31,6 +32,16 @@ const Friends: React.FC = () => {
     queryKey: ['friends', searchQuery],
     queryFn: async () => {
       if (!currentUser?.id) return { requests: [], friends: [], discovery: [], blockedUsers: [] };
+
+      const cacheKey = `friends_cache_${currentUser.id}_${searchQuery.trim()}`;
+      try {
+        const cachedStr = await redis.get(cacheKey);
+        if (cachedStr) {
+          return typeof cachedStr === 'string' ? JSON.parse(cachedStr) : cachedStr;
+        }
+      } catch (e) {
+        console.warn('Redis read failed for friends cache', e);
+      }
 
       // 1. Fetch relationships
       const { data: allRel, error: relError } = await supabase
@@ -123,14 +134,22 @@ const Friends: React.FC = () => {
         return Array.from(map.values());
       };
 
-      return {
+      const result = {
         requests: uniqueById(filterList(reqs)),
         friends: uniqueById(filterList(frs)),
         blockedUsers: uniqueById(filterList(blks)),
         discovery: uniqueById(filterList(disc))
       };
+
+      try {
+        await redis.setex(cacheKey, 600, JSON.stringify(result));
+      } catch (e) {
+        console.warn('Redis write failed for friends cache', e);
+      }
+
+      return result;
     },
-    staleTime: Infinity,
+    staleTime: 60 * 1000,
     gcTime: Infinity,
   });
 

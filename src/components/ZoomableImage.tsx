@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { X, ZoomIn } from 'lucide-react';
+import { TransformWrapper, TransformComponent } from 'react-zoom-pan-pinch';
 
 interface ZoomableImageProps {
   src: string;
@@ -16,6 +17,7 @@ const ZoomableImage: React.FC<ZoomableImageProps> = ({ src, alt, className, refe
       <div 
         className="relative group cursor-zoom-in overflow-hidden w-full h-full flex items-center justify-center" 
         onClick={(e) => {
+          e.preventDefault();
           e.stopPropagation();
           setIsOpen(true);
         }}
@@ -36,27 +38,37 @@ const ZoomableImage: React.FC<ZoomableImageProps> = ({ src, alt, className, refe
       {isOpen && (
         <div 
           className="fixed inset-0 z-[9999] bg-black/95 flex items-center justify-center p-4 animate-in fade-in duration-200 backdrop-blur-sm" 
-          onClick={(e) => {
-            e.stopPropagation();
-            setIsOpen(false);
-          }}
         >
           <button 
-            className="absolute top-6 right-6 text-white/80 hover:text-white p-2 hover:bg-white/10 rounded-full transition-colors z-50"
+            className="absolute top-6 right-6 text-white p-2 bg-[#1877F2] hover:bg-[#166fe5] shadow-lg rounded-full transition-colors z-50 flex items-center justify-center"
             onClick={(e) => { 
+              e.preventDefault();
               e.stopPropagation(); 
               setIsOpen(false); 
             }}
           >
-            <X size={32} />
+            <X size={28} />
           </button>
-          <img 
-            src={src} 
-            alt={alt} 
-            className="max-w-[95vw] max-h-[95vh] object-contain shadow-2xl animate-in zoom-in-95 duration-300 rounded-lg select-none" 
-            referrerPolicy={referrerPolicy}
-            onClick={(e) => e.stopPropagation()}
-          />
+          
+          <TransformWrapper
+            initialScale={1}
+            minScale={1}
+            maxScale={5}
+            centerZoomedOut={true}
+            doubleClick={{ disabled: false, step: 1.5 }}
+            panning={{ disabled: false }}
+            wheel={{ disabled: false, step: 0.1 }}
+            pinch={{ disabled: false }}
+          >
+            <TransformComponent wrapperClass="!w-full !h-full flex items-center justify-center" contentClass="!w-full !h-full flex items-center justify-center">
+              <img 
+                src={src} 
+                alt={alt} 
+                className="max-w-[95vw] max-h-[95vh] object-contain shadow-2xl animate-in zoom-in-95 duration-300 rounded-lg select-none cursor-grab active:cursor-grabbing" 
+                referrerPolicy={referrerPolicy}
+              />
+            </TransformComponent>
+          </TransformWrapper>
         </div>
       )}
     </>
