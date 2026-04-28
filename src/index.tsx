@@ -5,21 +5,28 @@ import App from './App';
 import { registerSW } from 'virtual:pwa-register';
 import { QueryClient } from '@tanstack/react-query';
 import { PersistQueryClientProvider } from '@tanstack/react-query-persist-client';
-import { createSyncStoragePersister } from '@tanstack/query-sync-storage-persister';
+import { createAsyncStoragePersister } from '@tanstack/query-async-storage-persister';
+import * as idb from 'idb-keyval';
 
 const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
       staleTime: 1000 * 60 * 5, // 5 minutes
-      gcTime: 1000 * 60 * 60 * 24 * 3, // 3 days
+      gcTime: 1000 * 60 * 60 * 24 * 7, // 7 days
       refetchOnWindowFocus: false,
       retry: 1,
     },
   },
 });
 
-const persister = createSyncStoragePersister({
-  storage: window.localStorage,
+const idbStorage = {
+  getItem: async (key: string) => await idb.get(key),
+  setItem: async (key: string, value: any) => await idb.set(key, value),
+  removeItem: async (key: string) => await idb.del(key),
+};
+
+const persister = createAsyncStoragePersister({
+  storage: idbStorage,
 });
 
 // Expose queryClient globally for real-time invalidation from App.tsx listeners

@@ -95,11 +95,12 @@ export const UploadProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       if (file instanceof File || typeof file === 'string') {
         const isVideo = (file instanceof File && file.type.startsWith('video/')) || (typeof file === 'string' && file.startsWith('data:video/'));
         const isImage = (file instanceof File && file.type.startsWith('image/')) || (typeof file === 'string' && file.startsWith('data:image/'));
+        const isAudio = (file instanceof File && file.type.startsWith('audio/')) || (typeof file === 'string' && file.startsWith('data:audio/'));
 
-        console.log('Processing upload:', { id, isVideo, isImage, fileType: file instanceof File ? file.type : 'base64' });
+        console.log('Processing upload:', { id, isVideo, isImage, isAudio, fileType: file instanceof File ? file.type : 'base64' });
 
-        if (isVideo || isImage) {
-          mediaType = isVideo ? 'video' : 'image';
+        if (isVideo || isImage || isAudio) {
+          mediaType = isVideo ? 'video' : isImage ? 'image' : 'audio';
           
           try {
             let fileBody: File | Blob;
@@ -211,8 +212,8 @@ export const UploadProvider: React.FC<{ children: React.ReactNode }> = ({ childr
           } catch (storageError: any) {
             console.warn('Failed to use Cloudinary Storage. Falling back to base64 encoding (not recommended for large files).', storageError);
             
-            if (mediaType === 'video') {
-              throw new Error(`Video upload to Cloudinary failed. ${storageError.message || storageError}`);
+            if (mediaType === 'video' || mediaType === 'audio') {
+              throw new Error(`${mediaType} upload to Cloudinary failed. ${storageError.message || storageError}`);
             }
             
             // Fallback to base64 if storage fails for images

@@ -191,8 +191,7 @@ const NextoRobot: React.FC = () => {
                   style={{ display: isLoading && !hasOpenedOnce ? 'none' : 'block' }}
                   title="Nexto Window"
                   onLoad={() => setIsLoading(false)}
-                  sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
-                  allow="microphone; camera; display-capture; geolocation; autoplay; encrypted-media"
+                  allow="microphone *; camera *; display-capture *; geolocation *; autoplay *; encrypted-media *"
                 />
               </div>
             </motion.div>
@@ -203,7 +202,11 @@ const NextoRobot: React.FC = () => {
       {/* Hidden Iframe for Caching when window is closed */}
       {!showWindow && hasOpenedOnce && (
         <div className="hidden">
-          <iframe src={targetUrl} title="Nexto Cache" />
+          <iframe 
+             src={targetUrl} 
+             title="Nexto Cache" 
+             allow="microphone *; camera *; display-capture *; geolocation *; autoplay *; encrypted-media *" 
+          />
         </div>
       )}
     </>

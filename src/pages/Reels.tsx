@@ -228,6 +228,8 @@ const Reels: React.FC = () => {
     }
   };
 
+  const activeIndex = useMemo(() => reels.findIndex(r => r.id === activeReelId), [reels, activeReelId]);
+
   if (reelsLoading && reels.length === 0) return <div className="h-screen flex items-center justify-center text-[#1877F2] font-black">Loading Videos...</div>;
 
   return (
@@ -251,6 +253,7 @@ const Reels: React.FC = () => {
           <ReelItem 
             reel={reel} 
             isActive={activeReelId === reel.id} 
+            isNeighbor={Math.abs(index - activeIndex) <= 2}
             onDelete={() => triggerDelete(reel.id)} 
           />
         </div>
@@ -351,8 +354,9 @@ const Reels: React.FC = () => {
   );
 };
 
-const ReelItem: React.FC<{ reel: any, isActive: boolean, onDelete: () => void }> = ({ reel, isActive, onDelete }) => {
+const ReelItem: React.FC<{ reel: any, isActive: boolean, isNeighbor: boolean, onDelete: () => void }> = ({ reel, isActive, isNeighbor, onDelete }) => {
   const { currentUser } = useAuth();
+
   const [views, setViews] = useState(reel.views || 0);
   const [isMuted, setIsMuted] = useState(false);
   const [isPlaying, setIsPlaying] = useState(true);
@@ -532,7 +536,9 @@ const ReelItem: React.FC<{ reel: any, isActive: boolean, onDelete: () => void }>
     <div className="relative w-full h-full flex items-center justify-center bg-black">
       {/* Video Layer */}
       <div className="w-full h-full md:w-[450px] relative bg-black flex items-center justify-center">
-        {isYouTube ? (
+        {(!isNeighbor && !isActive) ? (
+            <div className="w-16 h-16 rounded-full border-4 border-white/10 border-t-[#1877F2] animate-spin" />
+        ) : isYouTube ? (
           isActive ? (
             <iframe 
               src={ytUrl}
@@ -553,6 +559,7 @@ const ReelItem: React.FC<{ reel: any, isActive: boolean, onDelete: () => void }>
               ref={videoRef}
               src={reel.media_url} 
               poster={poster}
+              preload={isNeighbor ? "auto" : "none"}
               loop 
               muted={isMuted}
               playsInline
@@ -654,7 +661,7 @@ const ReelItem: React.FC<{ reel: any, isActive: boolean, onDelete: () => void }>
 
        {/* Comments Drawer */}
        {showComments && (
-         <div className="absolute inset-0 z-50 bg-black/80 backdrop-blur-md flex flex-col animate-in slide-in-from-bottom duration-300 md:w-[450px] md:mx-auto">
+         <div className="absolute top-[60px] bottom-[60px] left-0 right-0 z-50 bg-black/80 backdrop-blur-md flex flex-col animate-in slide-in-from-bottom duration-300 md:w-[450px] md:mx-auto">
             <div className="p-4 border-b border-white/10 flex justify-between items-center bg-black/40">
               <h3 className="text-white font-bold text-center flex-1">Comments ({comments.length})</h3>
               <button onClick={() => setShowComments(false)} className="text-white p-1 hover:bg-white/10 rounded-full"><X size={20}/></button>

@@ -1,6 +1,6 @@
 
 import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { X, Camera, Video, RotateCcw, Check, Scissors, Type, Smile, Download, Crop } from 'lucide-react';
+import { X, Camera, Video, RotateCcw, Check, Scissors, Type, Smile, Download, Crop, Eye, EyeOff } from 'lucide-react';
 import Draggable from 'react-draggable';
 import EmojiPicker, { Theme } from 'emoji-picker-react';
 import Cropper from 'react-easy-crop';
@@ -8,7 +8,7 @@ import Cropper from 'react-easy-crop';
 interface MediaEditorProps {
   mediaUrl: string;
   mediaType: 'image' | 'video';
-  onSave: (processedUrl: string) => void;
+  onSave: (processedUrl: string, isViewOnce: boolean) => void;
   onCancel: () => void;
 }
 
@@ -40,6 +40,7 @@ export const MediaEditor: React.FC<MediaEditorProps> = ({ mediaUrl, mediaType, o
   const [trimStart, setTrimStart] = useState(0);
   const [trimEnd, setTrimEnd] = useState(100);
   const [showEmojiPicker, setShowEmojiPicker] = useState(false);
+  const [isViewOnce, setIsViewOnce] = useState(false);
   
   // Cropping state
   const [isCropping, setIsCropping] = useState(false);
@@ -173,10 +174,10 @@ export const MediaEditor: React.FC<MediaEditorProps> = ({ mediaUrl, mediaType, o
         ctx.fillText(s.emoji, (s.x / 100) * targetWidth, (s.y / 100) * targetHeight);
       });
 
-      onSave(canvas.toDataURL('image/jpeg', 0.8));
+      onSave(canvas.toDataURL('image/jpeg', 0.8), isViewOnce);
     } else {
       // Video processing logic remains similar but needs to account for positions if possible
-      onSave(mediaUrl); // Fallback for video simplicity
+      onSave(mediaUrl, isViewOnce); // Fallback for video simplicity
     }
   };
 
@@ -294,6 +295,10 @@ export const MediaEditor: React.FC<MediaEditorProps> = ({ mediaUrl, mediaType, o
               <span className="text-xs font-bold">Trim</span>
             </button>
           )}
+          <button onClick={() => setIsViewOnce(!isViewOnce)} className={`flex flex-col items-center gap-1 ${isViewOnce ? 'text-red-500' : 'text-gray-600 dark:text-gray-300'}`}>
+            {isViewOnce ? <EyeOff size={24} /> : <Eye size={24} />}
+            <span className="text-xs font-bold">1x View</span>
+          </button>
         </div>
 
         {showEmojiPicker && (

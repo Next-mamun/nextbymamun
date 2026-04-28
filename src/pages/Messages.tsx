@@ -1,7 +1,8 @@
 
 import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
-import { Search, Trash2, Send, Smile, Paperclip, MessageSquare, ArrowLeft, Check, CheckCheck, Ban, RefreshCw, X } from 'lucide-react';
+import { motion } from 'motion/react';
+import { Search, Trash2, Send, Smile, Paperclip, MessageSquare, ArrowLeft, Check, CheckCheck, Ban, RefreshCw, X, CornerUpLeft, EyeOff, Mic, Eye, Play, Pause } from 'lucide-react';
 import EmojiPicker, { Theme } from 'emoji-picker-react';
 import { useAuth } from '@/contexts/AuthContext';
 import { supabase } from '../lib/supabase';
@@ -16,6 +17,102 @@ import { useUpload } from '@/contexts/UploadContext';
 import ConfirmDialog from '@/components/ConfirmDialog';
 import { formatTime } from '@/lib/utils';
 
+const CustomAudioPlayer = ({ src, isSender }: { src: string; isSender?: boolean }) => {
+  const [isPlaying, setIsPlaying] = useState(false);
+  const [progress, setProgress] = useState(0);
+  const [duration, setDuration] = useState(0);
+  const audioRef = useRef<HTMLAudioElement>(null);
+
+  useEffect(() => {
+    const audio = audioRef.current;
+    if (!audio) return;
+
+    const updateProgress = () => {
+      setProgress((audio.currentTime / audio.duration) * 100 || 0);
+    };
+
+    const updateDuration = () => {
+      setDuration(audio.duration);
+    };
+
+    const handleEnded = () => {
+      setIsPlaying(false);
+      setProgress(0);
+      if (audioRef.current) audioRef.current.currentTime = 0;
+    };
+
+    audio.addEventListener('timeupdate', updateProgress);
+    audio.addEventListener('loadedmetadata', updateDuration);
+    audio.addEventListener('ended', handleEnded);
+
+    return () => {
+      audio.removeEventListener('timeupdate', updateProgress);
+      audio.removeEventListener('loadedmetadata', updateDuration);
+      audio.removeEventListener('ended', handleEnded);
+    };
+  }, [src]); // add src to dependency array to handle source changes
+
+  const togglePlay = () => {
+    if (audioRef.current) {
+      if (isPlaying) {
+        audioRef.current.pause();
+      } else {
+        audioRef.current.play().catch(e => console.error("Playback failed", e));
+      }
+      setIsPlaying(!isPlaying);
+    }
+  };
+
+  const handleSeek = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (audioRef.current && duration > 0) {
+      const seekTime = (Number(e.target.value) / 100) * duration;
+      audioRef.current.currentTime = seekTime;
+      setProgress(Number(e.target.value));
+    }
+  };
+
+  const formatAudioTime = (time: number) => {
+    if (isNaN(time)) return "0:00";
+    const minutes = Math.floor(time / 60);
+    const seconds = Math.floor(time % 60);
+    return `${minutes}:${seconds < 10 ? '0' : ''}${seconds}`;
+  };
+
+  return (
+    <div className={`flex items-center gap-3 w-full min-w-[200px] sm:min-w-[240px] max-w-[280px] px-1 py-0.5`}>
+      <audio ref={audioRef} src={src} preload="metadata" />
+      
+      <button 
+        onClick={togglePlay}
+        className={`w-10 h-10 rounded-full shrink-0 flex items-center justify-center transition-transform hover:scale-105 active:scale-95 ${isSender ? 'bg-white text-[#1877F2] shadow-sm' : 'bg-[#1877F2] text-white shadow-md'}`}
+      >
+        {isPlaying ? <Pause fill="currentColor" size={18} /> : <Play fill="currentColor" size={20} className="ml-1" />}
+      </button>
+
+      <div className="flex-1 flex flex-col justify-center">
+        <div className="relative w-full flex items-center h-6 group">
+           <input
+             type="range"
+             min="0"
+             max="100"
+             value={progress || 0}
+             onChange={handleSeek}
+             className={`w-full h-1.5 rounded-full appearance-none cursor-pointer transition-all ${isSender ? 'bg-black/10 accent-white' : 'bg-gray-200 dark:bg-gray-700 accent-[#1877F2]'}`}
+             style={{ 
+               background: `linear-gradient(to right, ${isSender ? 'white' : '#1877F2'} ${progress}%, ${isSender ? 'rgba(0,0,0,0.1)' : 'var(--tw-colors-gray-200)'} ${progress}%)` 
+             }}
+           />
+           {/* Custom thumb styles are usually best done in global CSS but simple inputs work somewhat OK. We are using linear gradient track for better cross browser fill */}
+        </div>
+        <div className={`text-[11px] font-medium leading-none mt-0.5 flex justify-between tracking-wide ${isSender ? 'text-white/80' : 'text-gray-500 dark:text-gray-400'}`}>
+          <span>{formatAudioTime(audioRef.current?.currentTime || 0)}</span>
+          <span>{formatAudioTime(duration)}</span>
+        </div>
+      </div>
+    </div>
+  );
+};
+
 const Messages: React.FC = () => {
   const { currentUser } = useAuth();
   const { addUpload } = useUpload();
@@ -24,6 +121,33 @@ const Messages: React.FC = () => {
   const queryClient = useQueryClient();
   const [selectedChat, setSelectedChat] = useState<any>(null);
   const [messageText, setMessageText] = useState('');
+
+  useEffect(() => {
+    if (selectedChat && currentUser) {
+      const draftKey = `message_draft_${currentUser.id}_${selectedChat.id}`;
+      const draft = localStorage.getItem(draftKey);
+      if (draft !== null) {
+        setMessageText(draft);
+      } else {
+        setMessageText('');
+      }
+    } else {
+      setMessageText('');
+    }
+  }, [selectedChat, currentUser]);
+
+  const handleMessageTextChange = (text: string) => {
+    setMessageText(text);
+    if (currentUser && selectedChat) {
+      const draftKey = `message_draft_${currentUser.id}_${selectedChat.id}`;
+      if (text.trim() === '') {
+        localStorage.removeItem(draftKey);
+      } else {
+        localStorage.setItem(draftKey, text);
+      }
+    }
+  };
+
   const [onlineUsers, setOnlineUsers] = useState<Set<string>>(new Set());
   const [searchQuery, setSearchQuery] = useState('');
   const [showEmojiPicker, setShowEmojiPicker] = useState(false);
@@ -32,6 +156,14 @@ const Messages: React.FC = () => {
   const [showMediaEditor, setShowMediaEditor] = useState(false);
   const [mediaType, setMediaType] = useState<'image' | 'video'>('image');
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
+  const [replyingTo, setReplyingTo] = useState<any>(null);
+  const [isRecording, setIsRecording] = useState(false);
+  const [recordingDuration, setRecordingDuration] = useState(0);
+  const [recordedAudio, setRecordedAudio] = useState<{file: File, url: string} | null>(null);
+  const [isVoiceViewOnce, setIsVoiceViewOnce] = useState(false);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const audioChunksRef = useRef<Blob[]>([]);
+  const timerRef = useRef<NodeJS.Timeout | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -80,8 +212,17 @@ const Messages: React.FC = () => {
       const partnerMap = new Map<string, any>();
       messages?.forEach(m => {
         const partnerId = m.sender_id === currentUser.id ? m.receiver_id : m.sender_id;
+        let parsedM: any = { ...m };
+        if (typeof m.content === 'string' && m.content.startsWith('{"JSON_PAYLOAD":')) {
+          try {
+            const obj = JSON.parse(m.content);
+            parsedM.content = obj.text;
+            parsedM.is_view_once = obj.is_view_once;
+            parsedM.parent_message_id = obj.parent_message_id;
+          } catch(e) {}
+        }
         if (!partnerMap.has(partnerId)) {
-          partnerMap.set(partnerId, m);
+          partnerMap.set(partnerId, parsedM);
         }
       });
       
@@ -197,7 +338,18 @@ const Messages: React.FC = () => {
       // Data arrives descending so newest are first. Reverse to show chronologically
       const chronoData = data.reverse();
       // Filter duplicate messages by ID
-      const finalData = Array.from(new Map(chronoData.map(m => [m.id, m])).values());
+      const finalData = Array.from(new Map(chronoData.map(m => [m.id, m])).values()).map(m => {
+        let parsed: any = { ...m };
+        if (typeof m.content === 'string' && m.content.startsWith('{"JSON_PAYLOAD":')) {
+          try {
+            const obj = JSON.parse(m.content);
+            parsed.content = obj.text;
+            parsed.is_view_once = obj.is_view_once;
+            parsed.parent_message_id = obj.parent_message_id;
+          } catch(e) {}
+        }
+        return parsed;
+      });
       
       if (cacheKey) {
         try {
@@ -335,7 +487,7 @@ const Messages: React.FC = () => {
   }, [selectedChat, currentUser?.id, queryClient]);
 
   const handleEmojiClick = (emojiData: any) => {
-    setMessageText(prev => prev + emojiData.emoji);
+    handleMessageTextChange(messageText + emojiData.emoji);
   };
 
   const filteredContacts = contacts.filter(c => {
@@ -369,14 +521,15 @@ const Messages: React.FC = () => {
     }
   };
 
-  const handleMediaSave = async (processedUrl: string) => {
+  const handleMediaSave = async (processedUrl: string, isViewOnce: boolean = false) => {
     if (!selectedMedia || !selectedChat) return;
     setShowMediaEditor(false);
     
+    const payloadExtra = { JSON_PAYLOAD: true, text: '', is_view_once: isViewOnce, parent_message_id: replyingTo?.id || null };
     const newMessage: any = {
       sender_id: currentUser!.id,
       receiver_id: selectedChat.id,
-      content: '',
+      content: JSON.stringify(payloadExtra),
       media_url: '', // Will be updated by UploadContext
       media_type: selectedMedia.type
     };
@@ -395,6 +548,131 @@ const Messages: React.FC = () => {
     });
 
     setSelectedMedia(null);
+    setReplyingTo(null);
+  };
+
+  const startRecording = async () => {
+    try {
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+         throw new Error("MediaDevicesNotSupported");
+      }
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const mediaRecorder = new MediaRecorder(stream);
+      mediaRecorderRef.current = mediaRecorder;
+      audioChunksRef.current = [];
+
+      mediaRecorder.ondataavailable = (e) => {
+        if (e.data.size > 0) audioChunksRef.current.push(e.data);
+      };
+
+      mediaRecorder.onstop = () => {
+        const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
+        const audioFile = new File([audioBlob], 'voice_message.webm', { type: 'audio/webm' });
+        
+        setRecordedAudio({
+          file: audioFile,
+          url: URL.createObjectURL(audioBlob)
+        });
+        
+        stream.getTracks().forEach(track => track.stop());
+      };
+
+      mediaRecorder.start();
+      setIsRecording(true);
+      setRecordingDuration(0);
+      timerRef.current = setInterval(() => {
+        setRecordingDuration(prev => prev + 1);
+      }, 1000);
+    } catch (err: any) {
+      console.error("Error accessing microphone:", err);
+      if (err.message === "MediaDevicesNotSupported") {
+         alert("Microphone is not supported in this environment or connection is not secure. Please open the app in a new tab.");
+      } else if (err.name === 'NotAllowedError' || err.message.includes('Permission denied')) {
+         alert("Microphone access is denied. Please unblock it by clicking the lock icon (🔒) or settings (⚙️) icon next to the browser's address bar, and allow microphone permissions. You may need to refresh the page after changing the setting.");
+      } else {
+         alert("Could not access microphone: " + err.message);
+      }
+    }
+  };
+
+  const stopRecording = () => {
+    if (mediaRecorderRef.current && isRecording) {
+      mediaRecorderRef.current.stop();
+      setIsRecording(false);
+      if (timerRef.current) clearInterval(timerRef.current);
+    }
+  };
+
+  const handlePointerDown = (e: React.PointerEvent) => {
+    startRecording();
+  };
+
+  const handlePointerUp = (e: React.PointerEvent) => {
+    stopRecording();
+  };
+
+  const handleCancelAudio = () => {
+    setRecordedAudio(null);
+    setIsVoiceViewOnce(false);
+  };
+
+  const handleSendAudio = () => {
+    if (!recordedAudio || !selectedChat) return;
+
+    const uploadData = recordedAudio.file;
+    const payloadExtra = { JSON_PAYLOAD: true, text: '', is_view_once: isVoiceViewOnce, parent_message_id: replyingTo?.id || null };
+    const newMessage: any = {
+       sender_id: currentUser!.id,
+       receiver_id: selectedChat.id,
+       content: JSON.stringify(payloadExtra),
+       media_url: '',
+       media_type: 'audio'
+    };
+    
+    // Add optimistic UI to messages immediately. The url will be blank until addUpload finishes, but we can set a temp one using the blob url!
+    const tempId = `temp-${Date.now()}`;
+    queryClient.setQueryData(['messages', selectedChat.id], (old: any) => {
+      const optimisticMsg = {
+        ...newMessage,
+        id: tempId,
+        created_at: new Date().toISOString(),
+        is_read: false,
+        content: '',
+        media_url: recordedAudio.url,
+        is_view_once: payloadExtra.is_view_once,
+        parent_message_id: payloadExtra.parent_message_id
+      };
+      return [...(old || []), optimisticMsg];
+    });
+
+    addUpload(uploadData, 'message', {
+        payload: newMessage,
+        receiver_id: selectedChat.id,
+        sender_id: currentUser!.id,
+        onSuccess: async () => {
+            queryClient.invalidateQueries({ queryKey: ['messages', selectedChat.id] });
+            queryClient.invalidateQueries({ queryKey: ['contacts'] });
+            queryClient.invalidateQueries({ queryKey: ['notifications', selectedChat.id] });
+        }
+    });
+    
+    setReplyingTo(null);
+    setRecordedAudio(null);
+    setIsVoiceViewOnce(false);
+  };
+
+  const handleViewOnce = async (msg: any) => {
+    // Open full screen or do something. For now, we will simply open it in a new window/tab for viewing.
+    // Or we can just build an inline simple view. I will just render it for 10 seconds? No, usually it's clicked, viewed, and on close, it's deleted.
+    // Let's just open the URL in a new tab, and then immediately destroy it.
+    window.open(msg.media_url, "_blank");
+    
+    // Destroy
+    const payloadExtra = { JSON_PAYLOAD: true, text: 'Viewed ' + (msg.media_type || 'media'), is_view_once: false, parent_message_id: msg.parent_message_id };
+    const { error } = await supabase.from('messages').update({ media_url: null, content: JSON.stringify(payloadExtra) }).eq('id', msg.id);
+    if (!error) {
+        queryClient.invalidateQueries({ queryKey: ['messages', selectedChat?.id] });
+    }
   };
 
   const handleBlockUser = async () => {
@@ -433,17 +711,36 @@ const Messages: React.FC = () => {
       return;
     }
     
+    const payloadExtra = { JSON_PAYLOAD: true, text: messageText, is_view_once: false, parent_message_id: replyingTo?.id || null };
     const newMessage: any = {
        sender_id: currentUser!.id,
        receiver_id: selectedChat.id,
-       content: messageText
+       content: JSON.stringify(payloadExtra)
     };
+
+    // Optimistic UI update
+    const tempId = `temp-${Date.now()}`;
+    queryClient.setQueryData(['messages', selectedChat.id], (old: any) => {
+      const optimisticMsg = {
+        ...newMessage,
+        id: tempId,
+        created_at: new Date().toISOString(),
+        is_read: false,
+        content: payloadExtra.text,
+        is_view_once: payloadExtra.is_view_once,
+        parent_message_id: payloadExtra.parent_message_id
+      };
+      return [...(old || []), optimisticMsg];
+    });
+
+    handleMessageTextChange('');
+    setReplyingTo(null);
+    setShowEmojiPicker(false);
     
     console.log("Inserting message into Supabase:", newMessage);
     const { error } = await supabase.from('messages').insert([newMessage]);
     if (!error) {
       console.log("Message inserted successfully");
-      setMessageText('');
       
       try {
         const cacheKey = `messages_cache_${[currentUser.id, selectedChat.id].sort().join('_')}`;
@@ -457,6 +754,7 @@ const Messages: React.FC = () => {
       queryClient.invalidateQueries({ queryKey: ['notifications', selectedChat.id] });
     } else {
       console.error("Error sending message:", error);
+      // Optional: on error rollback the optimistic update if needed, but since invalidateQueries happens on sub, it might correct itself
     }
   };
 
@@ -656,21 +954,53 @@ const Messages: React.FC = () => {
                     <p className="text-gray-500 font-bold bg-white dark:bg-black px-3 py-1 rounded-full border border-gray-100 dark:border-gray-800 shadow-sm mt-2 text-xs">@{selectedChat.username}</p>
                   </div>
 
-                  {messages.map(msg => (
-                    <div key={msg.id} className={`flex ${msg.sender_id === currentUser?.id ? 'justify-end' : 'justify-start'} group relative animate-in fade-in slide-in-from-bottom-2 duration-300`}>
+                  {messages.map(msg => {
+                    const parentMsg = msg.parent_message_id ? messages.find(m => m.id === msg.parent_message_id) : null;
+                    return (
+                    <motion.div 
+                      key={msg.id} 
+                      className={`flex ${msg.sender_id === currentUser?.id ? 'justify-end' : 'justify-start'} group relative animate-in fade-in slide-in-from-bottom-2 duration-300 w-full`}
+                      drag="x"
+                      dragConstraints={{ left: 0, right: 0 }}
+                      dragElastic={{ left: 0, right: 0.5 }}
+                      onDragEnd={(e, info) => {
+                        if (info.offset.x > 50) {
+                          setReplyingTo(msg);
+                        }
+                      }}
+                    >
                       {msg.sender_id === currentUser?.id && (
                         <button onClick={() => triggerDeleteMessage(msg.id)} className="opacity-0 group-hover:opacity-100 mr-2 self-center text-red-300 hover:text-red-500 transition-all"><Trash2 size={16} /></button>
                       )}
+                      
                       <div className={`p-3.5 rounded-2xl max-w-[75%] shadow-sm text-[15px] font-medium leading-relaxed ${msg.sender_id === currentUser?.id ? 'bg-[#1877F2] text-white rounded-tr-none' : 'bg-white dark:bg-gray-800 border border-gray-100 dark:border-gray-700 text-gray-800 dark:text-gray-200 rounded-tl-none'}`}>
-                        {msg.media_url && (
-                          <div className="mb-2 rounded-lg overflow-hidden bg-black/5 dark:bg-white/5">
+                        {parentMsg && (
+                          <div className={`mb-2 p-2 rounded-xl text-xs opacity-80 border-l-4 ${msg.sender_id === currentUser?.id ? 'bg-white/20 border-white/50 text-white' : 'bg-gray-100 dark:bg-gray-700 border-[#1877F2] text-gray-800 dark:text-gray-300'}`}>
+                            <p className="font-bold mb-0.5">{parentMsg.sender_id === currentUser?.id ? 'You' : selectedChat.display_name}</p>
+                            <p className="line-clamp-1">{parentMsg.content || (parentMsg.media_url ? 'Media' : '')}</p>
+                          </div>
+                        )}
+                        {msg.is_view_once && msg.media_url && msg.sender_id !== currentUser?.id ? (
+                          <button onClick={() => handleViewOnce(msg)} className="flex items-center gap-2 px-4 py-2 bg-black/10 dark:bg-black/30 rounded-xl hover:bg-black/20 dark:hover:bg-black/50 transition-colors">
+                            {msg.media_type === 'audio' ? <Mic size={20} /> : <Eye size={20} />}
+                            <span className="font-bold text-sm">View Once</span>
+                          </button>
+                        ) : msg.media_url ? (
+                          <div className={`mb-2 rounded-lg overflow-hidden relative ${msg.media_type === 'audio' ? 'bg-transparent overflow-visible' : 'bg-black/5 dark:bg-white/5'}`}>
+                            {msg.is_view_once && (
+                              <div className={`absolute shadow-sm bg-black/60 text-white text-[10px] px-2 py-0.5 rounded-full z-10 flex items-center gap-1 font-bold ${msg.media_type === 'audio' ? '-top-3 -right-2' : 'top-2 right-2'}`}>
+                                <Eye size={10} /> 1
+                              </div>
+                            )}
                             {msg.media_type === 'image' ? (
                               <ZoomableImage src={msg.media_url} className="max-w-full h-auto rounded-lg" referrerPolicy="no-referrer" />
+                            ) : msg.media_type === 'audio' ? (
+                              <CustomAudioPlayer src={msg.media_url} isSender={msg.sender_id === currentUser?.id} />
                             ) : (
                               <VideoPlayer src={msg.media_url} className="max-w-full h-auto rounded-lg" />
                             )}
                           </div>
-                        )}
+                        ) : null}
                         {msg.content && <span>{msg.content}</span>}
                         <div className={`flex items-center justify-end gap-1 mt-1 ${msg.sender_id === currentUser?.id ? 'text-blue-200' : 'text-gray-400'}`}>
                           <p className="text-[10px] text-right opacity-80">
@@ -685,58 +1015,125 @@ const Messages: React.FC = () => {
                           )}
                         </div>
                       </div>
-                    </div>
-                  ))}
+                    </motion.div>
+                  )})}
                   <div ref={scrollRef} />
                 </>
               )}
             </div>
             
-            <form onSubmit={handleSendMessage} className="p-5 bg-white dark:bg-black border-t border-gray-100 dark:border-gray-800 flex items-center gap-3 relative">
-              <input type="file" ref={fileInputRef} hidden onChange={handleFileSelect} accept="image/*,video/*" />
-              <button 
-                type="button" 
-                disabled={isBlocked} 
-                onClick={() => fileInputRef.current?.click()}
-                className="p-2.5 text-[#1877F2] hover:bg-blue-50 dark:hover:bg-blue-900/20 rounded-full transition-all disabled:opacity-50"
-              >
-                <Paperclip size={22} />
-              </button>
-              
-              <div className="flex-1 bg-[#f0f2f5] dark:bg-gray-900 rounded-2xl flex items-center px-4 py-2.5 border border-transparent focus-within:border-blue-300 transition-all relative">
-                 <input 
-                  value={messageText} 
-                  onChange={e => setMessageText(e.target.value)} 
-                  placeholder={isBlocked ? "You cannot message this user." : "Type a message..."}
-                  disabled={isBlocked}
-                  className="bg-transparent border-none outline-none text-[15px] w-full font-bold text-gray-800 dark:text-white placeholder-gray-500 disabled:cursor-not-allowed" 
-                />
-                <button 
-                  type="button" 
-                  disabled={isBlocked} 
-                  onClick={() => setShowEmojiPicker(!showEmojiPicker)}
-                  className={`transition-all ${showEmojiPicker ? 'text-orange-500 scale-110' : 'text-[#1877F2]'} disabled:opacity-50`}
-                >
-                  <Smile size={22} />
-                </button>
-
-                {showEmojiPicker && (
-                  <div className="absolute bottom-full right-0 mb-2 z-50 shadow-2xl animate-in slide-in-from-bottom-2 duration-200">
-                    <div className="fixed inset-0" onClick={() => setShowEmojiPicker(false)}></div>
-                    <div className="relative">
-                      <EmojiPicker 
-                        onEmojiClick={handleEmojiClick}
-                        autoFocusSearch={false}
-                        theme={Theme.AUTO}
-                        width={300}
-                        height={400}
-                      />
+            <div className="relative">
+              {replyingTo && (
+                <div className="absolute bottom-full left-0 right-0 bg-white/90 dark:bg-black/90 backdrop-blur border-t border-gray-100 dark:border-gray-800 p-3 px-5 flex items-center justify-between z-20 slide-in-from-bottom-2 animate-in duration-200">
+                  <div className="border-l-4 border-[#1877F2] pl-3 flex-1">
+                    <p className="text-xs font-bold text-[#1877F2]">Replying to {replyingTo.sender_id === currentUser?.id ? 'Yourself' : selectedChat.display_name}</p>
+                    <p className="text-sm text-gray-600 dark:text-gray-300 line-clamp-1">{replyingTo.content || 'Media message'}</p>
+                  </div>
+                  <button onClick={() => setReplyingTo(null)} className="p-2 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-full text-gray-500">
+                    <X size={20} />
+                  </button>
+                </div>
+              )}
+              <form onSubmit={handleSendMessage} className="p-3 md:p-5 bg-white dark:bg-black border-t border-gray-100 dark:border-gray-800 flex items-center gap-2 md:gap-3 relative z-30">
+                {!recordedAudio && (
+                  <input type="file" ref={fileInputRef} hidden onChange={handleFileSelect} accept="image/*,video/*" />
+                )}
+                
+                {!recordedAudio && (
+                  <button 
+                    type="button" 
+                    disabled={isBlocked || isRecording} 
+                    onClick={() => fileInputRef.current?.click()}
+                    className="p-2 md:p-2.5 text-[#1877F2] hover:bg-blue-50 dark:hover:bg-blue-900/20 rounded-full transition-all disabled:opacity-50 shrink-0"
+                  >
+                    <Paperclip size={22} />
+                  </button>
+                )}
+                
+                {recordedAudio ? (
+                  <div className="flex-1 bg-blue-50 dark:bg-blue-900/10 rounded-2xl flex items-center pl-1 pr-4 py-1.5 border border-blue-200 dark:border-blue-800/50 justify-between gap-3">
+                    <CustomAudioPlayer src={recordedAudio.url} isSender={false} />
+                    <div className="flex items-center gap-2 shrink-0">
+                      <button
+                        type="button"
+                        onClick={handleCancelAudio}
+                        className="p-1.5 text-red-500 hover:bg-red-100 dark:hover:bg-red-900/30 rounded-full transition-colors"
+                      >
+                        <Trash2 size={18} />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setIsVoiceViewOnce(!isVoiceViewOnce)}
+                        className={`p-1.5 rounded-full transition-colors ${isVoiceViewOnce ? 'bg-[#1877F2] text-white' : 'text-gray-500 hover:bg-gray-200 dark:hover:bg-gray-800'}`}
+                        title="View Once"
+                      >
+                        <Eye size={18} />
+                      </button>
                     </div>
                   </div>
+                ) : isRecording ? (
+                  <div className="flex-1 bg-red-50 dark:bg-red-900/10 rounded-2xl flex items-center px-4 py-2.5 border border-red-200 dark:border-red-800/50 justify-between">
+                    <div className="flex items-center gap-2 text-red-500 animate-pulse">
+                      <Mic size={20} />
+                      <span className="font-bold">Recording...</span>
+                    </div>
+                    <span className="text-red-500 font-mono font-bold">
+                      {Math.floor(recordingDuration / 60)}:{(recordingDuration % 60).toString().padStart(2, '0')}
+                    </span>
+                  </div>
+                ) : (
+                  <div className="flex-1 bg-[#f0f2f5] dark:bg-gray-900 rounded-2xl flex items-center px-4 py-2.5 border border-transparent focus-within:border-blue-300 transition-all relative">
+                     <input 
+                      value={messageText} 
+                      onChange={e => handleMessageTextChange(e.target.value)} 
+                      placeholder={isBlocked ? "You cannot message this user." : "Type a message..."}
+                      disabled={isBlocked}
+                      className="bg-transparent border-none outline-none text-[15px] w-full font-bold text-gray-800 dark:text-white placeholder-gray-500 disabled:cursor-not-allowed" 
+                    />
+                    <button 
+                      type="button" 
+                      disabled={isBlocked} 
+                      onClick={() => setShowEmojiPicker(!showEmojiPicker)}
+                      className={`transition-all ${showEmojiPicker ? 'text-orange-500 scale-110' : 'text-[#1877F2]'} disabled:opacity-50`}
+                    >
+                      <Smile size={22} />
+                    </button>
+
+                    {showEmojiPicker && (
+                      <div className="absolute bottom-full right-0 mb-2 z-50 shadow-2xl animate-in slide-in-from-bottom-2 duration-200">
+                        <div className="fixed inset-0" onClick={() => setShowEmojiPicker(false)}></div>
+                        <div className="relative">
+                          <EmojiPicker 
+                            onEmojiClick={handleEmojiClick}
+                            autoFocusSearch={false}
+                            theme={Theme.AUTO}
+                            width={300}
+                            height={400}
+                          />
+                        </div>
+                      </div>
+                    )}
+                  </div>
                 )}
-              </div>
-              <button type="submit" disabled={!messageText.trim() || isBlocked} className="bg-[#1877F2] text-white p-2.5 rounded-full shadow-md hover:brightness-110 disabled:opacity-30 transition-all"><Send size={24} /></button>
-            </form>
+                
+                {recordedAudio ? (
+                  <button type="button" onClick={handleSendAudio} disabled={isBlocked} className="bg-[#1877F2] text-white p-2 md:p-2.5 rounded-full shadow-md hover:brightness-110 disabled:opacity-30 transition-all shrink-0">
+                    <Send size={24} />
+                  </button>
+                ) : messageText.trim() ? (
+                  <button type="submit" disabled={isBlocked} className="bg-[#1877F2] text-white p-2 md:p-2.5 rounded-full shadow-md hover:brightness-110 disabled:opacity-30 transition-all shrink-0"><Send size={24} /></button>
+                ) : (
+                  <button 
+                    type="button" 
+                    disabled={isBlocked} 
+                    onClick={isRecording ? stopRecording : startRecording}
+                    className={`p-2.5 rounded-full shadow-md transition-all shrink-0 select-none ${isRecording ? 'bg-red-500 text-white hover:brightness-110 scale-110 animate-pulse' : 'bg-gray-100 dark:bg-gray-800 text-gray-500 hover:text-[#1877F2] dark:hover:text-blue-400 disabled:opacity-30'}`}
+                  >
+                    {isRecording ? <div className="w-6 h-6 rounded-sm bg-white" /> : <Mic size={24} />}
+                  </button>
+                )}
+              </form>
+            </div>
           </>
         ) : (
           <div className="flex-1 flex flex-col items-center justify-center text-gray-200 dark:text-gray-800 bg-gray-50/10 dark:bg-gray-900/10">
