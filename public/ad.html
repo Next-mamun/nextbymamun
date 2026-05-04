@@ -3,6 +3,7 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
+    <script async src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-1044610166642937" crossorigin="anonymous"></script>
     <style>
       body { 
         margin: 0; 
@@ -23,31 +24,21 @@
       Advertisement Loading...
     </div>
     
-    <!-- Adsterra Native Banner -->
-    <div id="container-b2d25e5f1d98cd2a2b687075a26b20ab"></div>
-    <script async="async" data-cfasync="false" src="//pl28929493.profitablecpmratenetwork.com/b2d25e5f1d98cd2a2b687075a26b20ab/invoke.js"></script>
-    
-    <!-- Adsterra 728x90 Banner -->
-    <script type="text/javascript">
-      atOptions = {
-        'key' : '4813063a83e6d5c416f3d681e251cacd',
-        'format' : 'iframe',
-        'height' : 90,
-        'width' : 728,
-        'params' : {}
-      };
+    <!-- Google AdSense -->
+    <ins class="adsbygoogle"
+         style="display:block; width:100%; min-height: 250px;"
+         data-ad-client="ca-pub-1044610166642937"
+         data-ad-format="auto"
+         data-full-width-responsive="true"></ins>
+    <script>
+         (adsbygoogle = window.adsbygoogle || []).push({});
     </script>
-    <script type="text/javascript" src="//www.highperformanceformat.com/4813063a83e6d5c416f3d681e251cacd/invoke.js"></script>
-
-    <!-- Other Adsterra Scripts -->
-    <script type='text/javascript' src='//pl29034610.profitablecpmratenetwork.com/24/cc/83/24cc836a9b9152ab128aa87ea0513eb4.js'></script>
-    <script type='text/javascript' src='//pl29034608.profitablecpmratenetwork.com/30/5c/42/305c42d9d9a3311de5bdd8fe8f1035cc.js'></script>
     
     <script>
       // Send height to parent to auto-adjust
       const resizeObserver = new ResizeObserver(entries => {
         for (let entry of entries) {
-          window.parent.postMessage({ type: 'ad-resize', height: document.body.scrollHeight }, '*');
+          window.parent.postMessage({ type: 'ad-resize', height: Math.max(document.body.scrollHeight, 250) }, '*');
         }
       });
       resizeObserver.observe(document.body);

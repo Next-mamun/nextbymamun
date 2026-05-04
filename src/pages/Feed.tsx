@@ -85,11 +85,23 @@ const Feed: React.FC = () => {
     queryKey: ['posts', selectedCategory, contentTypeFilter],
     queryFn: async ({ pageParam = 0 }) => {
       const cacheKey = `posts_cache_${selectedCategory}_${contentTypeFilter}_${pageParam}`;
+      
+      // Attempt to load from localStorage first in case of offline
+      if (!navigator.onLine) {
+        try {
+          const localCache = localStorage.getItem(cacheKey);
+          if (localCache) return JSON.parse(localCache);
+        } catch (e) {}
+      }
+
       try {
         const cachedStr = await redis.get(cacheKey);
         if (cachedStr) {
           // Check if it's already an object or a string
-          return typeof cachedStr === 'string' ? JSON.parse(cachedStr) : cachedStr;
+          const data = typeof cachedStr === 'string' ? JSON.parse(cachedStr) : cachedStr;
+          // Store locally for offline
+          try { localStorage.setItem(cacheKey, JSON.stringify(data)); } catch (e) {}
+          return data;
         }
       } catch (e) {
         console.warn('Redis read failed frontend cache', e);
@@ -110,7 +122,13 @@ const Feed: React.FC = () => {
       }
 
       const { data, error } = await query.range(pageParam * POSTS_PER_PAGE, (pageParam + 1) * POSTS_PER_PAGE - 1);
-      if (error) {
+      
+      if (error && !navigator.onLine) {
+         try {
+           const localCache = localStorage.getItem(cacheKey);
+           if (localCache) return JSON.parse(localCache);
+         } catch (e) {}
+      } else if (error) {
         console.error("Error fetching posts:", error);
         throw error;
       }
@@ -119,6 +137,8 @@ const Feed: React.FC = () => {
       try {
         // Cache in redis for 10 minutes (600s)
         await redis.setex(cacheKey, 600, JSON.stringify(responseData));
+        // Cache locally for offline
+        localStorage.setItem(cacheKey, JSON.stringify(responseData));
       } catch (e) {
         console.warn('Redis write failed frontend cache', e);
       }

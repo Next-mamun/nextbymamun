@@ -33,6 +33,22 @@ const Reels: React.FC = () => {
   
   const fileInputRef = useRef<HTMLInputElement>(null);
   const observer = useRef<IntersectionObserver | null>(null);
+  const [hiddenAds, setHiddenAds] = useState<Set<string>>(new Set());
+
+  useEffect(() => {
+    const handleMessage = (e: MessageEvent) => {
+      if (e.data?.type === 'ad-empty' && e.data?.id) {
+         setHiddenAds(prev => {
+            const newSet = new Set(prev);
+            newSet.add(e.data.id);
+            return newSet;
+         });
+      }
+    };
+    window.addEventListener('message', handleMessage);
+    return () => window.removeEventListener('message', handleMessage);
+  }, []);
+
   const {
     data: reelsData,
     fetchNextPage,
@@ -43,9 +59,22 @@ const Reels: React.FC = () => {
     queryKey: ['reels_infinite'],
     queryFn: async ({ pageParam = 0 }) => {
       const cacheKey = `reels_page_${pageParam}`;
+      
+      // Attempt to load from localStorage first in case of offline
+      if (!navigator.onLine) {
+        try {
+          const localCache = localStorage.getItem(cacheKey);
+          if (localCache) return JSON.parse(localCache);
+        } catch (e) {}
+      }
+
       try {
         const cached = await redis.get(cacheKey);
-        if (cached) return cached as any;
+        if (cached) {
+          const data = typeof cached === 'string' ? JSON.parse(cached) : cached;
+          try { localStorage.setItem(cacheKey, JSON.stringify(data)); } catch(e) {}
+          return data;
+        }
       } catch (e) {
         console.warn('Redis cache error', e);
       }
@@ -61,11 +90,20 @@ const Reels: React.FC = () => {
         .order('created_at', { ascending: false })
         .range(pageParam * REELS_PER_PAGE, (pageParam + 1) * REELS_PER_PAGE - 1);
       
-      if (error) throw error;
+      if (error && !navigator.onLine) {
+         try {
+           const localCache = localStorage.getItem(cacheKey);
+           if (localCache) return JSON.parse(localCache);
+         } catch (e) {}
+      } else if (error) {
+         throw error;
+      }
 
       try {
-        if (data && data.length > 0) {
-          await redis.set(cacheKey, data, { ex: 30 }); // 30 sec cache for fresh content but fast load
+        const responseData = data || [];
+        if (responseData.length > 0) {
+          await redis.set(cacheKey, responseData, { ex: 30 }); // 30 sec cache for fresh content but fast load
+          localStorage.setItem(cacheKey, JSON.stringify(responseData));
         }
       } catch (e) {}
 
@@ -78,10 +116,35 @@ const Reels: React.FC = () => {
     staleTime: 1000 * 60 * 5, // 5 minutes
   });
 
-  const reels = useMemo(() => 
-    Array.from(new Map((reelsData?.pages.flat() || []).map(r => [r.id, r])).values()),
-    [reelsData?.pages]
-  );
+  const [reelsRandomSeed] = useState(() => Math.random());
+
+  const reels = useMemo(() => {
+    let flatReels = Array.from(new Map((reelsData?.pages.flat() || []).map(r => [r.id, r])).values());
+    
+    // Shuffle the first few items to make it seem random without breaking pagination logic completely
+    if (flatReels.length > 0) {
+      const seededRandom = (seed: number) => {
+        let x = Math.sin(seed++) * 10000;
+        return x - Math.floor(x);
+      };
+      
+      let currentSeed = reelsRandomSeed;
+      const shuffleCount = Math.min(flatReels.length, 25);
+      const toShuffle = flatReels.slice(0, shuffleCount);
+      const rest = flatReels.slice(shuffleCount);
+      
+      for (let i = toShuffle.length - 1; i > 0; i--) {
+        const rand = seededRandom(currentSeed);
+        currentSeed += 1;
+        const j = Math.floor(rand * (i + 1));
+        [toShuffle[i], toShuffle[j]] = [toShuffle[j], toShuffle[i]];
+      }
+      
+      flatReels = [...toShuffle, ...rest];
+    }
+    
+    return flatReels;
+  }, [reelsData?.pages, reelsRandomSeed]);
 
   useEffect(() => {
     if (reels.length > 0 && !activeReelId) {
@@ -242,22 +305,43 @@ const Reels: React.FC = () => {
           <p className="text-xl font-bold">No Videos Yet</p>
           <p className="text-sm">Be the first to share a moment on Next!</p>
         </div>
-      ) : reels.map((reel, index) => (
-        <div 
-          key={reel.id} 
-          data-id={reel.id}
-          data-index={index}
-          ref={lastElementRef}
-          className="reel-item h-[100dvh] w-full md:w-[450px] shrink-0 snap-start md:snap-center relative flex items-center justify-center bg-black"
-        >
-          <ReelItem 
-            reel={reel} 
-            isActive={activeReelId === reel.id} 
-            isNeighbor={Math.abs(index - activeIndex) <= 2}
-            onDelete={() => triggerDelete(reel.id)} 
-          />
-        </div>
-      ))}
+      ) : reels.map((reel, index) => {
+        const isAdSlot = index > 0 && index % 10 === 0;
+        const adId = `ad-${index}`;
+        const isAdHidden = hiddenAds.has(adId);
+        
+        return (
+          <React.Fragment key={reel.id}>
+            {isAdSlot && !isAdHidden && (
+              <div 
+                data-id={adId}
+                className="reel-item h-[100dvh] w-full md:w-[450px] shrink-0 snap-start md:snap-center relative flex flex-col items-center justify-center bg-black"
+              >
+                <span className="text-white/40 text-xs uppercase tracking-widest absolute top-20 font-bold z-0">Advertisement</span>
+                <iframe 
+                  src={`/ad2.html?id=${adId}`}
+                  loading="lazy"
+                  className="w-full h-full relative z-10 border-none"
+                  sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox allow-top-navigation-by-user-activation"
+                />
+              </div>
+            )}
+            <div 
+              data-id={reel.id}
+              data-index={index}
+              ref={lastElementRef}
+              className="reel-item h-[100dvh] w-full md:w-[450px] shrink-0 snap-start md:snap-center relative flex items-center justify-center bg-black"
+            >
+              <ReelItem 
+                reel={reel} 
+                isActive={activeReelId === reel.id} 
+                isNeighbor={Math.abs(index - activeIndex) <= 2}
+                onDelete={() => triggerDelete(reel.id)} 
+              />
+            </div>
+          </React.Fragment>
+        );
+      })}
 
       <ConfirmDialog
         isOpen={!!deleteConfirmId}

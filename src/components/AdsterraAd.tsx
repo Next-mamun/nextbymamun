@@ -10,7 +10,7 @@ const AdsterraAd = () => {
   const [isLoading, setIsLoading] = useState(true);
   const [isVisible, setIsVisible] = useState(true);
 
-  const adUrl = "https://www.profitablecpmratenetwork.com/ea5z8bt2q?key=adafad77a6c4b7f864d08b70c2c1808e";
+  const adUrl = "/ad2.html";
 
   useEffect(() => {
     const handleMessage = (event: MessageEvent) => {
@@ -54,7 +54,8 @@ const AdsterraAd = () => {
           <div className="w-full relative flex justify-center bg-gray-50 dark:bg-gray-900 transition-all duration-300">
             <iframe
               src="/ad.html"
-              sandbox="allow-scripts allow-same-origin allow-forms"
+              loading="lazy"
+              sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox allow-top-navigation-by-user-activation"
               style={{ 
                 width: '100%', 
                 border: 'none', 
@@ -126,7 +127,7 @@ const AdsterraAd = () => {
                   className="w-full h-full border-none min-h-[600px]"
                   title="Ad Content"
                   onLoad={() => setIsLoading(false)}
-                  sandbox="allow-scripts allow-same-origin allow-forms"
+                  sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox allow-top-navigation-by-user-activation"
                   allow="autoplay; encrypted-media"
                 />
               </div>

@@ -1,6 +1,6 @@
 
 import React, { useState, useEffect, createContext, useContext, Suspense, lazy } from 'react';
-import { BrowserRouter, Routes, Route, Navigate, useLocation } from 'react-router-dom';
+import { BrowserRouter, Routes, Route, Navigate, useLocation, useNavigate } from 'react-router-dom';
 import Navbar from '@/components/Navbar';
 import Sidebar from '@/components/Sidebar';
 import BottomNav from '@/components/BottomNav';
@@ -37,14 +37,66 @@ import { AuthContext, AuthContextType, ThemeContext, ThemeContextType, useAuth, 
 const AppLayout: React.FC = () => {
   const { currentUser } = useAuth();
   const location = useLocation();
+  const navigate = useNavigate();
   const isMessages = location.pathname.startsWith('/messages');
+
+  const [touchStart, setTouchStart] = useState<{ x: number, y: number } | null>(null);
+
+  const onTouchStart = (e: React.TouchEvent) => {
+    setTouchStart({ x: e.touches[0].clientX, y: e.touches[0].clientY });
+  };
+
+  const onTouchEnd = (e: React.TouchEvent) => {
+    if (!touchStart) return;
+    const touchEnd = { x: e.changedTouches[0].clientX, y: e.changedTouches[0].clientY };
+    const distanceX = touchStart.x - touchEnd.x;
+    const distanceY = Math.abs(touchStart.y - touchEnd.y);
+
+    // Swipe sensitivity thresholds
+    const isHorizontalSwipe = Math.abs(distanceX) > 120 && distanceY < 60;
+    
+    if (isHorizontalSwipe) {
+      handleSwipe(distanceX > 0 ? 'left' : 'right');
+    }
+    setTouchStart(null);
+  };
+
+  // The order of swipeable tabs
+  const tabs = ['/', '/friends', '/reels', '/notifications', '/messages'];
+
+  const handleSwipe = (direction: 'left' | 'right') => {
+     // Ignore swipe navigation inside messages completely to avoid conflicts with message touch functionality
+     const currentPath = location.pathname;
+     if (currentPath.startsWith('/messages')) return;
+
+     // Wait, if users are swiping to right tab, usually that means they swipe left (finger moves left)
+     // BUT if user said "slide to the right to go to friends", if they meant finger moves right (direction: right):
+     // I'll make standard: finger left (swipe left) -> next tab.
+     // In case they want finger right -> next tab, I'll map it to standard mostly, but let's see. I'll use standard tab logic.
+     let currentIndex = tabs.findIndex(tab => currentPath === tab || (tab !== '/' && currentPath.startsWith(tab)));
+     
+     if (currentIndex === -1) {
+       if (currentPath === '/') currentIndex = 0;
+       else return;
+     }
+
+     if (direction === 'left' && currentIndex < tabs.length - 1) { // Swipe Left -> Next Tab
+        navigate(tabs[currentIndex + 1]);
+     } else if (direction === 'right' && currentIndex > 0) { // Swipe Right -> Prev Tab
+        navigate(tabs[currentIndex - 1]);
+     }
+  };
 
   return (
     <div className="min-h-screen bg-[#f0f2f5] dark:bg-[#000000] flex flex-col transition-colors duration-300">
-      <div className={`flex flex-1 pb-16 max-w-[1920px] mx-auto w-full ${currentUser ? 'pt-14' : ''}`}>
+      <div 
+        className={`flex flex-1 pb-16 max-w-[1920px] mx-auto w-full ${currentUser ? 'pt-14' : ''}`}
+        onTouchStart={onTouchStart}
+        onTouchEnd={onTouchEnd}
+      >
         {currentUser && !isMessages && <Navbar />}
         {currentUser && <div className="hidden md:block"><Sidebar /></div>}
-        <main className={`flex-1 overflow-y-auto ${currentUser ? 'p-0 md:p-4' : ''}`}>
+        <main className={`flex-1 overflow-x-hidden overflow-y-auto ${currentUser ? 'p-0 md:p-4' : ''}`}>
           <Suspense fallback={
             <div className="h-full flex items-center justify-center">
               <div className="fast-spin rounded-full h-8 w-8 border-t-2 border-b-2 border-[#1877F2]"></div>
