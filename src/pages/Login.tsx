@@ -1,6 +1,6 @@
 
 import React, { useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link, useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '@/contexts/AuthContext';
 import { supabase } from '../lib/supabase';
 import { User, Lock, Key } from 'lucide-react';
@@ -15,6 +15,10 @@ const Login: React.FC = () => {
   const [isGoogleLoading, setIsGoogleLoading] = useState(false);
   const { setCurrentUser } = useAuth();
   const navigate = useNavigate();
+  const location = useLocation();
+
+  const searchParams = new URLSearchParams(location.search);
+  const returnUrl = searchParams.get('returnUrl') || '/';
 
   const handleGoogleLogin = async () => {
     try {
@@ -22,7 +26,7 @@ const Login: React.FC = () => {
       const { data, error } = await supabase.auth.signInWithOAuth({
         provider: 'google',
         options: {
-          redirectTo: window.location.origin,
+          redirectTo: `${window.location.origin}${returnUrl !== '/' ? `?returnUrl=${encodeURIComponent(returnUrl)}` : ''}`,
           skipBrowserRedirect: true,
         },
       });
@@ -68,7 +72,7 @@ const Login: React.FC = () => {
         return;
       }
       setCurrentUser(data);
-      navigate('/');
+      navigate(returnUrl);
     } else {
       setError('Invalid password');
     }

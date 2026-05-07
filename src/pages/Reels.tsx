@@ -1,7 +1,7 @@
 
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { Plus, X, Link as LinkIcon, ThumbsUp, MessageSquare, Share2, Music, UserPlus, Send, Video, Trash2, CheckCircle, Volume2, VolumeX, Eye, Play } from 'lucide-react';
-import { Link } from 'react-router-dom';
+import { Link, useParams } from 'react-router-dom';
 import { useAuth } from '@/contexts/AuthContext';
 import { supabase } from '../lib/supabase';
 import { VerifiedBadge } from '@/components/VerifiedBadge';
@@ -17,6 +17,7 @@ import ConfirmDialog from '@/components/ConfirmDialog';
 const REELS_PER_PAGE = 5;
 
 const Reels: React.FC = () => {
+  const { id: sharedReelId } = useParams();
   const { currentUser } = useAuth();
   const { addUpload } = useUpload();
   const queryClient = useQueryClient();
@@ -48,6 +49,21 @@ const Reels: React.FC = () => {
     window.addEventListener('message', handleMessage);
     return () => window.removeEventListener('message', handleMessage);
   }, []);
+
+  const { data: sharedReel } = useQuery({
+    queryKey: ['reel', sharedReelId],
+    queryFn: async () => {
+      if (!sharedReelId) return null;
+      const { data, error } = await supabase
+        .from('posts')
+        .select('*, profiles(*), likes(*), comments(*, profiles(*))')
+        .eq('id', sharedReelId)
+        .single();
+      if (error) throw error;
+      return data;
+    },
+    enabled: !!sharedReelId,
+  });
 
   const {
     data: reelsData,
@@ -123,6 +139,10 @@ const Reels: React.FC = () => {
     
     // Shuffle the first few items to make it seem random without breaking pagination logic completely
     if (flatReels.length > 0) {
+      if (sharedReel) {
+        flatReels = flatReels.filter(r => r.id !== sharedReel.id);
+      }
+      
       const seededRandom = (seed: number) => {
         let x = Math.sin(seed++) * 10000;
         return x - Math.floor(x);
@@ -141,10 +161,16 @@ const Reels: React.FC = () => {
       }
       
       flatReels = [...toShuffle, ...rest];
+      
+      if (sharedReel) {
+        flatReels.unshift(sharedReel);
+      }
+    } else if (sharedReel) {
+      flatReels = [sharedReel];
     }
     
     return flatReels;
-  }, [reelsData?.pages, reelsRandomSeed]);
+  }, [reelsData?.pages, reelsRandomSeed, sharedReel]);
 
   useEffect(() => {
     if (reels.length > 0 && !activeReelId) {
@@ -537,7 +563,16 @@ const ReelItem: React.FC<{ reel: any, isActive: boolean, isNeighbor: boolean, on
     }
   };
 
-  const handleLike = async () => {
+  const handleLike = async (e?: React.MouseEvent) => {
+    if (e) {
+      e.stopPropagation();
+      e.preventDefault();
+    }
+    if (!currentUser) {
+      window.location.href = `/login?returnUrl=${encodeURIComponent(`/reels/${reel.id}`)}`;
+      return;
+    }
+
     if (isLiked) {
       setLikesCount(prev => prev - 1);
       setIsLiked(false);
@@ -558,10 +593,22 @@ const ReelItem: React.FC<{ reel: any, isActive: boolean, isNeighbor: boolean, on
     }
   };
 
+  const handleCommentClick = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    e.preventDefault();
+    if (!currentUser) {
+      window.location.href = `/login?returnUrl=${encodeURIComponent(`/reels/${reel.id}`)}`;
+      return;
+    }
+    setShowComments(true);
+  };
+
   const handleComment = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!commentText.trim()) return;
     
+    if (!currentUser) return;
+
     const { data, error } = await supabase
       .from('comments')
       .insert([{ post_id: reel.id, user_id: currentUser?.id, content: commentText }])
@@ -599,16 +646,21 @@ const ReelItem: React.FC<{ reel: any, isActive: boolean, isNeighbor: boolean, on
       } catch (e) {}
   }
 
-  const handleShare = async () => {
+  const handleShare = async (e?: React.MouseEvent) => {
+    if (e) {
+      e.stopPropagation();
+      e.preventDefault();
+    }
     try {
+      const shareUrl = `${window.location.origin}/reels/${reel.id}`;
       if (navigator.share) {
         await navigator.share({
           title: `Post by ${reel.profiles?.display_name}`,
           text: reel.content,
-          url: `${window.location.origin}/post/${reel.id}`,
+          url: shareUrl,
         });
       } else {
-        await navigator.clipboard.writeText(`${window.location.origin}/post/${reel.id}`);
+        await navigator.clipboard.writeText(shareUrl);
         alert('Link copied to clipboard!');
       }
     } catch (e) {

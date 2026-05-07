@@ -9,7 +9,7 @@ import VideoPlayer from '@/components/VideoPlayer';
 import EmbedPlayer from '@/components/EmbedPlayer';
 import { useAuth } from '@/contexts/AuthContext';
 import { supabase } from '../lib/supabase';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link, useNavigate, useParams } from 'react-router-dom';
 import { useQuery, useInfiniteQuery, useQueryClient } from '@tanstack/react-query';
 import { CameraCapture, MediaEditor } from '@/components/MediaTools';
 
@@ -21,6 +21,7 @@ import { redis } from '@/lib/redis';
 import { useUpload } from '@/contexts/UploadContext';
 
 const Feed: React.FC = () => {
+  const { id: sharedPostId } = useParams();
   const { currentUser } = useAuth();
   const queryClient = useQueryClient();
   const navigate = useNavigate();
@@ -151,11 +152,30 @@ const Feed: React.FC = () => {
     staleTime: 1000 * 60 * 5, // 5 minutes
   });
 
+  const { data: sharedPost } = useQuery({
+    queryKey: ['post', sharedPostId],
+    queryFn: async () => {
+      if (!sharedPostId) return null;
+      const { data, error } = await supabase
+        .from('posts')
+        .select('*, profiles(*), likes(*), comments(*, profiles(*))')
+        .eq('id', sharedPostId)
+        .single();
+      if (error) throw error;
+      return data;
+    },
+    enabled: !!sharedPostId,
+  });
+
   const [feedRandomSeed] = useState(() => Math.random());
 
   const posts = useMemo(() => {
     let flatPosts = Array.from(new Map((postsData?.pages.flat() || []).map(p => [p.id, p])).values()) as any[];
     
+    if (sharedPost) {
+      flatPosts = flatPosts.filter(p => p.id !== sharedPost.id);
+    }
+
     // Only shuffle the first few pages simply so the user gets a unique feed at the top every entry
     // without completely breaking the illusion of pagination. We only do this if ALL types are shown.
     if (flatPosts.length > 0 && selectedCategory === 'All' && contentTypeFilter === 'All') {
@@ -180,8 +200,12 @@ const Feed: React.FC = () => {
       flatPosts = [...toShuffle, ...remaining];
     }
     
+    if (sharedPost) {
+      flatPosts.unshift(sharedPost);
+    }
+
     return flatPosts;
-  }, [postsData?.pages, selectedCategory, contentTypeFilter, feedRandomSeed]);
+  }, [postsData?.pages, selectedCategory, contentTypeFilter, feedRandomSeed, sharedPost]);
 
   const handleObserve = useCallback((el: HTMLElement) => {
     observer.current?.observe(el);

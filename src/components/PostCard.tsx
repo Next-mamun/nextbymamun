@@ -1,6 +1,6 @@
 
 import React, { useState, useEffect, useRef } from 'react';
-import { ThumbsUp, MessageSquare, Trash2, Eye, Send, MessageCircle } from 'lucide-react';
+import { ThumbsUp, MessageSquare, Trash2, Eye, Send, MessageCircle, Share2 } from 'lucide-react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
 import { supabase } from '@/lib/supabase';
@@ -49,7 +49,10 @@ const PostCard = React.memo(({ post, onObserve, isProfileView = false }: PostCar
   }, [post.likes, post.comments, currentUser?.id]);
 
   const handleLike = async () => {
-    if (!currentUser) return;
+    if (!currentUser) {
+      window.location.href = `/login?returnUrl=${encodeURIComponent(`/post/${post.id}`)}`;
+      return;
+    }
     // Optimistic update
     const newIsLiked = !isLiked;
     setIsLiked(newIsLiked);
@@ -79,6 +82,40 @@ const PostCard = React.memo(({ post, onObserve, isProfileView = false }: PostCar
       setLikesCount(post.likes?.length || 0);
       console.error("Failed to toggle like", error);
     }
+  };
+
+  const handleShare = async (e?: React.MouseEvent) => {
+    if (e) {
+      e.stopPropagation();
+      e.preventDefault();
+    }
+    try {
+      const shareUrl = `${window.location.origin}/post/${post.id}`;
+      if (navigator.share) {
+        await navigator.share({
+          title: `Post by ${post.profiles?.display_name}`,
+          text: post.content,
+          url: shareUrl,
+        });
+      } else {
+        await navigator.clipboard.writeText(shareUrl);
+        alert('Link copied to clipboard!');
+      }
+    } catch (e) {
+      console.error('Error sharing', e);
+    }
+  };
+
+  const handleCommentClick = (e?: React.MouseEvent) => {
+    if (e) {
+      e.preventDefault();
+      e.stopPropagation();
+    }
+    if (!currentUser) {
+      window.location.href = `/login?returnUrl=${encodeURIComponent(`/post/${post.id}`)}`;
+      return;
+    }
+    setShowComments(!showComments);
   };
 
   const handleComment = async (e: React.FormEvent) => {
@@ -192,7 +229,8 @@ const PostCard = React.memo(({ post, onObserve, isProfileView = false }: PostCar
         </div>
         <div className="flex border-t border-gray-100 dark:border-gray-800 py-1 gap-1">
           <button onClick={handleLike} className={`flex-1 flex items-center justify-center gap-2 py-2 font-bold transition-colors rounded-lg hover:bg-gray-50 dark:hover:bg-gray-900 ${isLiked ? 'text-[#1877F2]' : 'text-gray-600 dark:text-gray-400'}`}><ThumbsUp size={20} /> Like</button>
-          <button onClick={() => setShowComments(!showComments)} className="flex-1 flex items-center justify-center gap-2 py-2 font-bold text-gray-600 dark:text-gray-400 transition-colors rounded-lg hover:bg-gray-50 dark:hover:bg-gray-900"><MessageSquare size={20} /> Comment</button>
+          <button onClick={handleCommentClick} className="flex-1 flex items-center justify-center gap-2 py-2 font-bold text-gray-600 dark:text-gray-400 transition-colors rounded-lg hover:bg-gray-50 dark:hover:bg-gray-900"><MessageSquare size={20} /> Comment</button>
+          <button onClick={handleShare} className="flex-1 flex items-center justify-center gap-2 py-2 font-bold text-gray-600 dark:text-gray-400 transition-colors rounded-lg hover:bg-gray-50 dark:hover:bg-gray-900"><Share2 size={20} /> Share</button>
           {isProfileView && (
             <button onClick={() => navigate('/')} className="flex-1 flex items-center justify-center gap-2 py-2 font-bold text-[#1877F2] transition-colors rounded-lg hover:bg-gray-50 dark:hover:bg-gray-900"><MessageCircle size={20} /> Feed</button>
           )}

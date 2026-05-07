@@ -104,6 +104,7 @@ const AppLayout: React.FC = () => {
           }>
             <Routes>
               <Route path="/" element={currentUser ? <Feed /> : <Navigate to="/login" />} />
+              <Route path="/post/:id" element={<Feed />} />
               <Route path="/login" element={!currentUser ? <Login /> : <Navigate to="/" />} />
               <Route path="/register" element={!currentUser ? <Register /> : <Navigate to="/" />} />
               <Route path="/messages" element={currentUser ? <Messages /> : <Navigate to="/login" />} />
@@ -113,6 +114,7 @@ const AppLayout: React.FC = () => {
               <Route path="/settings" element={currentUser ? <Settings /> : <Navigate to="/login" />} />
               <Route path="/create-post" element={currentUser ? <CreatePost /> : <Navigate to="/login" />} />
               <Route path="/reels" element={currentUser ? <Reels /> : <Navigate to="/login" />} />
+              <Route path="/reels/:id" element={<Reels />} />
             </Routes>
           </Suspense>
         </main>
