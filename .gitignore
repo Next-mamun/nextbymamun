@@ -13,6 +13,10 @@ dist-ssr
 *.local
 .env
 
+# Firebase config
+firebase-applet-config.json
+firebase-blueprint.json
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
