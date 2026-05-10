@@ -171,7 +171,7 @@ const Navbar: React.FC = () => {
   };
 
   return (
-    <nav className="fixed top-0 left-0 right-0 h-14 bg-white/80 dark:bg-black/80 backdrop-blur-md border-b border-transparent dark:border-transparent z-50 px-4 flex items-center justify-between shadow-sm transition-colors">
+    <nav className="fixed top-0 left-0 right-0 h-14 bg-gradient-to-r from-black to-white backdrop-blur-md border-b border-gray-100 dark:border-gray-800 z-50 px-4 flex items-center justify-between shadow-sm transition-colors">
       <div className="flex items-center gap-2">
         <Link to="/" className="flex items-center">
           <img src="https://i.postimg.cc/wxwt5tsk/retouch-2026030721254774.png" alt="Next" className="h-8 w-auto" />
@@ -181,7 +181,7 @@ const Navbar: React.FC = () => {
       <div className="flex items-center justify-end gap-1 relative">
         <button 
           onClick={handleNotificationsClick}
-          className={`p-2 rounded-full hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors relative ${showNotifications ? 'text-[#1A2933] dark:text-blue-400 bg-blue-50 dark:bg-gray-800' : 'text-gray-600 dark:text-gray-300'}`}
+          className={`p-2 rounded-full hover:bg-black/5 transition-colors relative ${showNotifications ? 'text-[#1877F2] bg-blue-50' : 'text-black'}`}
         >
           <Bell size={24} fill={showNotifications ? "currentColor" : "none"} />
           {notifications.filter(n => !n.is_seen).length > 0 && (
@@ -193,7 +193,7 @@ const Navbar: React.FC = () => {
 
         <button 
           onClick={() => { setShowDropdown(!showDropdown); setShowNotifications(false); }}
-          className={`p-2 rounded-full hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors ${showDropdown ? 'text-[#1A2933] dark:text-blue-400 bg-blue-50 dark:bg-gray-800' : 'text-gray-600 dark:text-gray-300'}`}
+          className={`p-2 rounded-full hover:bg-black/5 transition-colors ${showDropdown ? 'text-[#1877F2] bg-blue-50' : 'text-black'}`}
         >
           <Menu size={24} />
         </button>
