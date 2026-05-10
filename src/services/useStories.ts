@@ -1,41 +1,28 @@
 import { useState, useEffect } from 'react';
-import { supabase } from '../lib/supabase';
+import { db } from '../lib/firebase';
+import { collection, query, orderBy, onSnapshot, getDoc, doc } from 'firebase/firestore';
 import { Story, User } from '@/types';
 export const useStories = () => {
   const [stories, setStories] = useState<Story[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    const fetchStories = async () => {
-      setLoading(true);
-      const { data, error } = await supabase
-        .from('stories')
-        .select('*')
-        .order('created_at', { ascending: false });
-      
-      if (error) {
-        console.error('Error fetching stories:', error);
-      } else {
-        setStories(data || []);
-      }
+    setLoading(true);
+    const q = query(
+      collection(db, 'stories'),
+      orderBy('created_at', 'desc')
+    );
+    
+    const unsub = onSnapshot(q, (snapshot) => {
+      const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Story));
+      setStories(data);
       setLoading(false);
-    };
+    }, (error) => {
+      console.error('Error fetching stories:', error);
+      setLoading(false);
+    });
 
-    fetchStories();
-
-    const subscription = supabase
-      .channel('public:stories')
-      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'stories' }, (payload) => {
-        setStories(current => [payload.new as Story, ...current]);
-      })
-      .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'stories' }, (payload) => {
-        setStories(current => current.filter(s => s.id !== (payload.old as Story).id));
-      })
-      .subscribe();
-
-    return () => {
-      supabase.removeChannel(subscription);
-    };
+    return () => unsub();
   }, []);
 
   return { stories, loading };
@@ -56,15 +43,17 @@ export const useUsersWithStories = (stories: Story[]) => {
 
     const fetchUsers = async () => {
       setLoading(true);
-      const { data, error } = await supabase
-        .from('profiles')
-        .select('*')
-        .in('id', userIds);
-
-      if (error) {
-        console.error('Error fetching users for stories:', error);
-      } else {
-        setUsers(data || []);
+      try {
+        const usersData = await Promise.all(
+          userIds.map(async (userId) => {
+            const docRef = doc(db, 'profiles', userId);
+            const docSnap = await getDoc(docRef);
+            return docSnap.exists() ? { id: docSnap.id, ...docSnap.data() } as User : null;
+          })
+        );
+        setUsers(usersData.filter(Boolean) as User[]);
+      } catch (error) {
+         console.error('Error fetching users for stories:', error);
       }
       setLoading(false);
     };

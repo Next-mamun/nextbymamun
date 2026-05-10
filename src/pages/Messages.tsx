@@ -1,16 +1,18 @@
-
 import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { motion } from 'motion/react';
 import { Search, Trash2, Send, Smile, Paperclip, MessageSquare, ArrowLeft, Check, CheckCheck, Ban, RefreshCw, X, CornerUpLeft, EyeOff, Mic, Eye, Play, Pause } from 'lucide-react';
 import EmojiPicker, { Theme } from 'emoji-picker-react';
 import { useAuth } from '@/contexts/AuthContext';
-import { supabase } from '../lib/supabase';
 import { VerifiedBadge } from '@/components/VerifiedBadge';
 import ZoomableImage from '@/components/ZoomableImage';
 import VideoPlayer from '@/components/VideoPlayer';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { redis } from '@/lib/redis';
+
+// Firebase imports
+import { db } from '../lib/firebase';
+import { collection, query, where, getDocs, deleteDoc, doc, getDoc, updateDoc, setDoc, onSnapshot, orderBy, limit, addDoc, serverTimestamp, or, and } from 'firebase/firestore';
 
 import { MediaEditor } from '../components/MediaTools';
 import { useUpload } from '@/contexts/UploadContext';
@@ -50,7 +52,7 @@ const CustomAudioPlayer = ({ src, isSender }: { src: string; isSender?: boolean 
       audio.removeEventListener('loadedmetadata', updateDuration);
       audio.removeEventListener('ended', handleEnded);
     };
-  }, [src]); // add src to dependency array to handle source changes
+  }, [src]);
 
   const togglePlay = () => {
     if (audioRef.current) {
@@ -102,7 +104,6 @@ const CustomAudioPlayer = ({ src, isSender }: { src: string; isSender?: boolean 
                background: `linear-gradient(to right, ${isSender ? 'white' : '#1877F2'} ${progress}%, ${isSender ? 'rgba(0,0,0,0.1)' : 'var(--tw-colors-gray-200)'} ${progress}%)` 
              }}
            />
-           {/* Custom thumb styles are usually best done in global CSS but simple inputs work somewhat OK. We are using linear gradient track for better cross browser fill */}
         </div>
         <div className={`text-[11px] font-medium leading-none mt-0.5 flex justify-between tracking-wide ${isSender ? 'text-white/80' : 'text-gray-500 dark:text-gray-400'}`}>
           <span>{formatAudioTime(audioRef.current?.currentTime || 0)}</span>
@@ -170,11 +171,12 @@ const Messages: React.FC = () => {
   useEffect(() => {
     if (location.state?.userId) {
       const fetchUser = async () => {
-        const { data } = await supabase.from('profiles').select('*').eq('id', location.state.userId).single();
-        if (data) setSelectedChat(data);
+        const docSnap = await getDoc(doc(db, 'profiles', location.state.userId));
+        if (docSnap.exists()) {
+           setSelectedChat({ id: docSnap.id, ...docSnap.data() });
+        }
       };
       fetchUser();
-      // Clear state so it doesn't re-select on refresh
       navigate(location.pathname, { replace: true, state: {} });
     }
   }, [location.state, location.pathname, navigate]);
@@ -196,21 +198,17 @@ const Messages: React.FC = () => {
       }
       
       // 1. Fetch messages to find active conversations
-      const { data: messages, error: msgError } = await supabase
-        .from('messages')
-        .select('sender_id, receiver_id, content, media_url, media_type, created_at, id')
-        .or(`sender_id.eq.${currentUser.id},receiver_id.eq.${currentUser.id}`)
-        .order('created_at', { ascending: false })
-        .limit(200);
+      const msgQuery = query(
+        collection(db, 'messages'),
+        or(where('sender_id', '==', currentUser.id), where('receiver_id', '==', currentUser.id)),
+        orderBy('created_at', 'desc'),
+        limit(200)
+      );
+      const msgSnap = await getDocs(msgQuery);
+      const messages = msgSnap.docs.map(d => ({id: d.id, ...d.data()} as any));
       
-      if (msgError) {
-        console.error("Error fetching messages for contacts:", msgError);
-        throw msgError;
-      }
-      console.log("Fetched messages for contacts:", messages);
-
       const partnerMap = new Map<string, any>();
-      messages?.forEach(m => {
+      messages.forEach(m => {
         const partnerId = m.sender_id === currentUser.id ? m.receiver_id : m.sender_id;
         let parsedM: any = { ...m };
         if (typeof m.content === 'string' && m.content.startsWith('{"JSON_PAYLOAD":')) {
@@ -227,46 +225,35 @@ const Messages: React.FC = () => {
       });
       
       // 2. Fetch all accepted or pending friends
-      const { data: friendships } = await supabase
-        .from('friendships')
-        .select('sender_id, receiver_id, status')
-        .or(`sender_id.eq.${currentUser.id},receiver_id.eq.${currentUser.id}`);
+      const friendshipsSnap = await getDocs(query(
+        collection(db, 'friendships'),
+        or(where('sender_id', '==', currentUser.id), where('receiver_id', '==', currentUser.id))
+      ));
+      const friendships = friendshipsSnap.docs.map(d => ({id: d.id, ...d.data()} as any));
       
-      console.log("Fetched friendships:", friendships);
-
-      const friendIds = friendships?.map(f => f.sender_id === currentUser.id ? f.receiver_id : f.sender_id) || [];
+      const friendIds = friendships.map(f => f.sender_id === currentUser.id ? f.receiver_id : f.sender_id) || [];
       
       // 3. Combine partner IDs and friend IDs
-      const allContactIds = Array.from(new Set([...Array.from(partnerMap.keys()), ...friendIds]));
-      console.log("All contact IDs:", allContactIds);
+      const allContactIds = Array.from(new Set([...Array.from(partnerMap.keys()), ...friendIds])).filter(Boolean);
       
       if (allContactIds.length === 0) return [];
 
-      const { data: profiles, error: profError } = await supabase
-        .from('profiles')
-        .select('*')
-        .in('id', allContactIds);
-      
-      if (profError) {
-        console.error("Error fetching profiles for contacts:", profError);
-        throw profError;
-      }
-      console.log("Fetched profiles for contacts:", profiles);
-      if (!profiles) return [];
+      // Fetch profiles in chunks since Firestore 'in' query has a limit of 10-30 depending on structure.
+      // Better yet, just fetch 'em one by one or in small batches.
+      const profiles = await Promise.all(allContactIds.map(async (id) => {
+        const d = await getDoc(doc(db, 'profiles', id));
+        return d.exists() ? { id: d.id, ...d.data() } : null;
+      })).then(res => res.filter(Boolean));
 
-      const { data: blocks } = await supabase
-        .from('friendships')
-        .select('*')
-        .eq('status', 'blocked')
-        .or(`sender_id.eq.${currentUser.id},receiver_id.eq.${currentUser.id}`);
+      const blocks = friendships.filter(f => f.status === 'blocked');
 
-      const contactsWithMessages = profiles.map(profile => {
-        const block = blocks?.find(b => 
+      const contactsWithMessages = profiles.map((profile: any) => {
+        const block = blocks.find(b => 
           (b.sender_id === currentUser.id && b.receiver_id === profile.id) ||
           (b.sender_id === profile.id && b.receiver_id === currentUser.id)
         );
         const lastMsg = partnerMap.get(profile.id);
-        const friendship = friendships?.find(f => 
+        const friendship = friendships.find(f => 
           (f.sender_id === currentUser.id && f.receiver_id === profile.id) ||
           (f.sender_id === profile.id && f.receiver_id === currentUser.id)
         );
@@ -283,9 +270,6 @@ const Messages: React.FC = () => {
         };
       });
 
-      console.log("Contacts with messages:", contactsWithMessages);
-
-      // Sort: Active conversations at top (by time), New friends at bottom
       const sortedContacts = contactsWithMessages.sort((a, b) => {
         if (a.lastMessage && b.lastMessage) {
           return new Date(b.lastMessage.created_at).getTime() - new Date(a.lastMessage.created_at).getTime();
@@ -311,7 +295,7 @@ const Messages: React.FC = () => {
   const { data: messages = [] } = useQuery({
     queryKey: ['messages', selectedChat?.id],
     queryFn: async () => {
-      if (!selectedChat) return [];
+      if (!selectedChat || !currentUser) return [];
       const cacheKey = currentUser?.id && selectedChat?.id 
         ? `messages_cache_${[currentUser.id, selectedChat.id].sort().join('_')}`
         : null;
@@ -327,12 +311,18 @@ const Messages: React.FC = () => {
         }
       }
 
-      const { data } = await supabase
-        .from('messages')
-        .select('*')
-        .or(`and(sender_id.eq.${currentUser?.id},receiver_id.eq.${selectedChat.id}),and(sender_id.eq.${selectedChat.id},receiver_id.eq.${currentUser?.id})`)
-        .order('created_at', { ascending: false })
-        .limit(100);
+      const q = query(
+        collection(db, 'messages'),
+        or(
+          and(where('sender_id', '==', currentUser.id), where('receiver_id', '==', selectedChat.id)),
+          and(where('sender_id', '==', selectedChat.id), where('receiver_id', '==', currentUser.id))
+        ),
+        orderBy('created_at', 'desc'),
+        limit(100)
+      );
+
+      const dataSnap = await getDocs(q);
+      const data = dataSnap.docs.map(d => ({id: d.id, ...d.data()} as any));
       
       if (!data) return [];
       // Data arrives descending so newest are first. Reverse to show chronologically
@@ -353,7 +343,6 @@ const Messages: React.FC = () => {
       
       if (cacheKey) {
         try {
-          // Cache messages for 10 minutes
           await redis.setex(cacheKey, 600, JSON.stringify(finalData));
         } catch (e) {
           console.warn('Redis write failed for messages cache', e);
@@ -369,73 +358,77 @@ const Messages: React.FC = () => {
     queryKey: ['blockStatus', selectedChat?.id],
     queryFn: async () => {
       if (!selectedChat || !currentUser) return null;
-      const { data } = await supabase.from('friendships')
-        .select('*')
-        .or(`and(sender_id.eq.${currentUser.id},receiver_id.eq.${selectedChat.id}),and(sender_id.eq.${selectedChat.id},receiver_id.eq.${currentUser.id})`)
-        .eq('status', 'blocked')
-        .maybeSingle();
-      return data;
+      const q1 = query(
+        collection(db, 'friendships'),
+        where('sender_id', '==', currentUser.id),
+        where('receiver_id', '==', selectedChat.id),
+        where('status', '==', 'blocked'),
+        limit(1)
+      );
+      const q2 = query(
+        collection(db, 'friendships'),
+        where('sender_id', '==', selectedChat.id),
+        where('receiver_id', '==', currentUser.id),
+        where('status', '==', 'blocked'),
+        limit(1)
+      );
+      const snap1 = await getDocs(q1);
+      const snap2 = await getDocs(q2);
+      if (!snap1.empty) return {id: snap1.docs[0].id, ...snap1.docs[0].data()};
+      if (!snap2.empty) return {id: snap2.docs[0].id, ...snap2.docs[0].data()};
+      return null;
     },
     enabled: !!selectedChat && !!currentUser,
   });
 
   const isBlocked = !!blockData;
-  const iBlockedThem = blockData?.sender_id === currentUser?.id;
-  const theyBlockedMe = blockData?.sender_id === selectedChat?.id;
+  const iBlockedThem = (blockData as any)?.sender_id === currentUser?.id;
+  const theyBlockedMe = (blockData as any)?.sender_id === selectedChat?.id;
 
   const { data: isBlockedByMe = false } = useQuery({
     queryKey: ['isBlockedByMe', selectedChat?.id],
     queryFn: async () => {
       if (!selectedChat || !currentUser) return false;
-      const { data } = await supabase.from('friendships')
-        .select('*')
-        .eq('sender_id', currentUser.id)
-        .eq('receiver_id', selectedChat.id)
-        .eq('status', 'blocked')
-        .maybeSingle();
-      return !!data;
+      const q = query(
+        collection(db, 'friendships'),
+        where('sender_id', '==', currentUser.id),
+        where('receiver_id', '==', selectedChat.id),
+        where('status', '==', 'blocked'),
+        limit(1)
+      );
+      const snap = await getDocs(q);
+      return !snap.empty;
     },
     enabled: !!selectedChat && !!currentUser,
   });
 
+  // Realtime Listeners
   useEffect(() => {
     if (!currentUser) return;
 
-    const channel = supabase.channel('online-users', {
-      config: {
-        presence: {
-          key: currentUser?.id,
-        },
-      },
-    });
-
-    channel.on('presence', { event: 'sync' }, () => {
-      const newState = channel.presenceState();
-      const online = new Set(Object.keys(newState));
-      setOnlineUsers(online);
-    }).subscribe(async (status) => {
-      if (status === 'SUBSCRIBED') {
-        await channel.track({ online_at: new Date().toISOString(), user_id: currentUser?.id });
-      }
-    });
-
-    const globalMsgSub = supabase.channel('global_messages')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'messages', filter: `receiver_id=eq.${currentUser.id}` }, () => {
+    // Listen to all incoming messages where we are receiver
+    const unsubMessages = onSnapshot(
+      query(collection(db, 'messages'), where('receiver_id', '==', currentUser.id)),
+      () => {
         queryClient.invalidateQueries({ queryKey: ['unreadCounts'] });
         queryClient.invalidateQueries({ queryKey: ['messages'] });
         queryClient.invalidateQueries({ queryKey: ['contacts'] });
         queryClient.invalidateQueries({ queryKey: ['notifications', currentUser.id] });
-      })
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'friendships' }, () => {
+      }
+    );
+
+    const unsubFriendships = onSnapshot(
+      query(collection(db, 'friendships'), or(where('receiver_id', '==', currentUser.id), where('sender_id', '==', currentUser.id))),
+      () => {
         queryClient.invalidateQueries({ queryKey: ['blockStatus'] });
         queryClient.invalidateQueries({ queryKey: ['isBlockedByMe'] });
         queryClient.invalidateQueries({ queryKey: ['contacts'] });
-      })
-      .subscribe();
+      }
+    );
 
     return () => {
-      supabase.removeChannel(channel);
-      supabase.removeChannel(globalMsgSub);
+      unsubMessages();
+      unsubFriendships();
     };
   }, [currentUser?.id, queryClient]);
 
@@ -444,45 +437,38 @@ const Messages: React.FC = () => {
       const markAsRead = async () => {
         if (!currentUser?.id || !selectedChat?.id) return;
         
-        const { error: error1 } = await supabase
-          .from('messages')
-          .update({ is_read: true })
-          .eq('receiver_id', currentUser.id)
-          .eq('sender_id', selectedChat.id)
-          .eq('is_read', false);
+        const qUnread = query(
+          collection(db, 'messages'),
+          where('receiver_id', '==', currentUser.id),
+          where('sender_id', '==', selectedChat.id),
+          where('is_read', '==', false)
+        );
         
-        const { error: error2 } = await supabase
-          .from('messages')
-          .update({ is_read: true })
-          .eq('receiver_id', currentUser.id)
-          .eq('sender_id', selectedChat.id)
-          .is('is_read', null);
-          
-        if (error1 || error2) {
-          console.error("Error marking as read:", error1 || error2);
-        } else {
-          queryClient.invalidateQueries({ queryKey: ['unreadCounts'] });
-          queryClient.invalidateQueries({ queryKey: ['totalUnread'] });
-          queryClient.invalidateQueries({ queryKey: ['notifications', currentUser.id] });
+        const snap = await getDocs(qUnread);
+        if(!snap.empty) {
+            await Promise.all(snap.docs.map(d => updateDoc(doc(db, 'messages', d.id), { is_read: true })));
+            queryClient.invalidateQueries({ queryKey: ['unreadCounts'] });
+            queryClient.invalidateQueries({ queryKey: ['totalUnread'] });
+            queryClient.invalidateQueries({ queryKey: ['notifications', currentUser.id] });
         }
       };
       
       markAsRead();
 
-      const msgSub = supabase.channel(`msgs_${selectedChat.id}`)
-        .on('postgres_changes', { event: '*', schema: 'public', table: 'messages' }, (payload) => {
-          const { sender_id, receiver_id } = (payload.new as any);
-          if ((sender_id === currentUser?.id && receiver_id === selectedChat.id) ||
-              (sender_id === selectedChat.id && receiver_id === currentUser?.id)) {
-            queryClient.invalidateQueries({ queryKey: ['messages', selectedChat.id] });
-            if (sender_id === selectedChat.id) {
-                markAsRead();
-            }
-          }
-        })
-        .subscribe();
+      const qChat = query(
+        collection(db, 'messages'),
+        or(
+          and(where('sender_id', '==', currentUser?.id), where('receiver_id', '==', selectedChat.id)),
+          and(where('sender_id', '==', selectedChat.id), where('receiver_id', '==', currentUser?.id))
+        )
+      );
+      
+      const unsubChat = onSnapshot(qChat, () => {
+         queryClient.invalidateQueries({ queryKey: ['messages', selectedChat.id] });
+         markAsRead();
+      });
 
-      return () => { supabase.removeChannel(msgSub); };
+      return () => unsubChat();
     }
   }, [selectedChat, currentUser?.id, queryClient]);
 
@@ -490,7 +476,7 @@ const Messages: React.FC = () => {
     handleMessageTextChange(messageText + emojiData.emoji);
   };
 
-  const filteredContacts = contacts.filter(c => {
+  const filteredContacts = contacts.filter((c: any) => {
     const nameStr = c.display_name || '';
     const userStr = c.username || '';
     return nameStr.toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -531,7 +517,8 @@ const Messages: React.FC = () => {
       receiver_id: selectedChat.id,
       content: JSON.stringify(payloadExtra),
       media_url: '', // Will be updated by UploadContext
-      media_type: selectedMedia.type
+      media_type: selectedMedia.type,
+      created_at: new Date().toISOString()
     };
     
     const uploadData = selectedMedia.type === 'video' && selectedMedia.file ? selectedMedia.file : processedUrl;
@@ -603,14 +590,6 @@ const Messages: React.FC = () => {
     }
   };
 
-  const handlePointerDown = (e: React.PointerEvent) => {
-    startRecording();
-  };
-
-  const handlePointerUp = (e: React.PointerEvent) => {
-    stopRecording();
-  };
-
   const handleCancelAudio = () => {
     setRecordedAudio(null);
     setIsVoiceViewOnce(false);
@@ -626,10 +605,11 @@ const Messages: React.FC = () => {
        receiver_id: selectedChat.id,
        content: JSON.stringify(payloadExtra),
        media_url: '',
-       media_type: 'audio'
+       media_type: 'audio',
+       created_at: new Date().toISOString()
     };
     
-    // Add optimistic UI to messages immediately. The url will be blank until addUpload finishes, but we can set a temp one using the blob url!
+    // Add optimistic UI to messages immediately
     const tempId = `temp-${Date.now()}`;
     queryClient.setQueryData(['messages', selectedChat.id], (old: any) => {
       const optimisticMsg = {
@@ -662,41 +642,42 @@ const Messages: React.FC = () => {
   };
 
   const handleViewOnce = async (msg: any) => {
-    // Open full screen or do something. For now, we will simply open it in a new window/tab for viewing.
-    // Or we can just build an inline simple view. I will just render it for 10 seconds? No, usually it's clicked, viewed, and on close, it's deleted.
-    // Let's just open the URL in a new tab, and then immediately destroy it.
     window.open(msg.media_url, "_blank");
     
     // Destroy
     const payloadExtra = { JSON_PAYLOAD: true, text: 'Viewed ' + (msg.media_type || 'media'), is_view_once: false, parent_message_id: msg.parent_message_id };
-    const { error } = await supabase.from('messages').update({ media_url: null, content: JSON.stringify(payloadExtra) }).eq('id', msg.id);
-    if (!error) {
+    try {
+        await updateDoc(doc(db, 'messages', msg.id), { media_url: null, content: JSON.stringify(payloadExtra) });
         queryClient.invalidateQueries({ queryKey: ['messages', selectedChat?.id] });
-    }
+    } catch(e) {}
   };
 
   const handleBlockUser = async () => {
     if (!selectedChat) return;
     
-    const { data: existingBlock } = await supabase.from('friendships')
-        .select('*')
-        .or(`and(sender_id.eq.${currentUser?.id},receiver_id.eq.${selectedChat.id}),and(sender_id.eq.${selectedChat.id},receiver_id.eq.${currentUser?.id})`)
-        .eq('status', 'blocked')
-        .single();
+    const q1 = query(collection(db, 'friendships'), where('sender_id', '==', currentUser?.id), where('receiver_id', '==', selectedChat.id), where('status', '==', 'blocked'), limit(1));
+    const q2 = query(collection(db, 'friendships'), where('sender_id', '==', selectedChat.id), where('receiver_id', '==', currentUser?.id), where('status', '==', 'blocked'), limit(1));
+    
+    const snap1 = await getDocs(q1);
+    const snap2 = await getDocs(q2);
+    
+    const existingBlock = !snap1.empty ? snap1.docs[0] : (!snap2.empty ? snap2.docs[0] : null);
 
     if (existingBlock) {
         if (confirm(`Are you sure you want to unblock ${selectedChat.display_name}?`)) {
-            await supabase.from('friendships').delete().eq('id', existingBlock.id);
+            await deleteDoc(doc(db, 'friendships', existingBlock.id));
             queryClient.invalidateQueries({ queryKey: ['blockStatus', selectedChat.id] });
+            queryClient.invalidateQueries({ queryKey: ['isBlockedByMe', selectedChat.id] });
         }
     } else {
         if (confirm(`Are you sure you want to block ${selectedChat.display_name}?`)) {
-            await supabase.from('friendships').insert([{ 
+            await addDoc(collection(db, 'friendships'), { 
                 sender_id: currentUser?.id, 
                 receiver_id: selectedChat.id, 
                 status: 'blocked' 
-            }]);
+            });
             queryClient.invalidateQueries({ queryKey: ['blockStatus', selectedChat.id] });
+            queryClient.invalidateQueries({ queryKey: ['isBlockedByMe', selectedChat.id] });
         }
     }
   };
@@ -705,17 +686,15 @@ const Messages: React.FC = () => {
 
   const handleSendMessage = async (e: React.FormEvent) => {
     e.preventDefault();
-    console.log("Attempting to send message:", { messageText, selectedChat, isBlocked });
-    if (!messageText.trim() || !selectedChat || isBlocked) {
-      console.log("Message sending aborted: validation failed");
-      return;
-    }
+    if (!messageText.trim() || !selectedChat || isBlocked) return;
     
     const payloadExtra = { JSON_PAYLOAD: true, text: messageText, is_view_once: false, parent_message_id: replyingTo?.id || null };
     const newMessage: any = {
        sender_id: currentUser!.id,
        receiver_id: selectedChat.id,
-       content: JSON.stringify(payloadExtra)
+       content: JSON.stringify(payloadExtra),
+       created_at: new Date().toISOString(),
+       is_read: false
     };
 
     // Optimistic UI update
@@ -724,8 +703,6 @@ const Messages: React.FC = () => {
       const optimisticMsg = {
         ...newMessage,
         id: tempId,
-        created_at: new Date().toISOString(),
-        is_read: false,
         content: payloadExtra.text,
         is_view_once: payloadExtra.is_view_once,
         parent_message_id: payloadExtra.parent_message_id
@@ -737,24 +714,16 @@ const Messages: React.FC = () => {
     setReplyingTo(null);
     setShowEmojiPicker(false);
     
-    console.log("Inserting message into Supabase:", newMessage);
-    const { error } = await supabase.from('messages').insert([newMessage]);
-    if (!error) {
-      console.log("Message inserted successfully");
-      
-      try {
-        const cacheKey = `messages_cache_${[currentUser.id, selectedChat.id].sort().join('_')}`;
-        await redis.del(cacheKey);
-      } catch (e) {
-        console.warn('Redis delete failed', e);
-      }
+    try {
+      await addDoc(collection(db, 'messages'), newMessage);
+      const cacheKey = `messages_cache_${[currentUser!.id, selectedChat.id].sort().join('_')}`;
+      try { await redis.del(cacheKey); } catch (e) {}
       
       queryClient.invalidateQueries({ queryKey: ['messages', selectedChat.id] });
       queryClient.invalidateQueries({ queryKey: ['contacts'] });
       queryClient.invalidateQueries({ queryKey: ['notifications', selectedChat.id] });
-    } else {
-      console.error("Error sending message:", error);
-      // Optional: on error rollback the optimistic update if needed, but since invalidateQueries happens on sub, it might correct itself
+    } catch(e) {
+      console.error(e);
     }
   };
 
@@ -775,18 +744,16 @@ const Messages: React.FC = () => {
       });
     }
 
-    const { error } = await supabase.from('messages').delete().eq('id', id);
-    if (error && selectedChat) {
-      console.error(error);
-      queryClient.invalidateQueries({ queryKey: ['messages', selectedChat.id] });
-    } else if (!error && selectedChat && currentUser) {
-      try {
-        const cacheKey = `messages_cache_${[currentUser.id, selectedChat.id].sort().join('_')}`;
-        await redis.del(cacheKey);
-      } catch (e) {
-        console.warn('Redis delete failed', e);
-      }
-      queryClient.invalidateQueries({ queryKey: ['messages', selectedChat.id] });
+    try {
+        await deleteDoc(doc(db, 'messages', id));
+        if (selectedChat && currentUser) {
+          const cacheKey = `messages_cache_${[currentUser.id, selectedChat.id].sort().join('_')}`;
+          try { await redis.del(cacheKey); } catch (e) {}
+          queryClient.invalidateQueries({ queryKey: ['messages', selectedChat.id] });
+        }
+    } catch(error) {
+       console.error(error);
+       queryClient.invalidateQueries({ queryKey: ['messages', selectedChat?.id] });
     }
   };
 
@@ -830,7 +797,7 @@ const Messages: React.FC = () => {
                 </div>
               ))}
             </div>
-          ) : (showNewFriends ? filteredContacts.filter(c => c.isNewFriend) : filteredContacts.filter(c => !c.isNewFriend)).map(c => {
+          ) : (showNewFriends ? filteredContacts.filter((c: any) => c.isNewFriend) : filteredContacts.filter((c: any) => !c.isNewFriend)).map((c: any) => {
             const isOnline = onlineUsers.has(c.id);
             const lastMsg = c.lastMessage;
             
@@ -882,10 +849,10 @@ const Messages: React.FC = () => {
               </div>
             );
           })}
-          {showNewFriends && filteredContacts.filter(c => c.isNewFriend).length === 0 && (
+          {showNewFriends && filteredContacts.filter((c: any) => c.isNewFriend).length === 0 && (
             <div className="text-center py-10 text-gray-400 text-xs font-bold uppercase tracking-widest">No new friends to show</div>
           )}
-          {!showNewFriends && filteredContacts.filter(c => !c.isNewFriend).length === 0 && (
+          {!showNewFriends && filteredContacts.filter((c: any) => !c.isNewFriend).length === 0 && (
             <div className="text-center py-10 text-gray-400 text-xs font-bold uppercase tracking-widest">No active chats</div>
           )}
         </div>
@@ -954,8 +921,8 @@ const Messages: React.FC = () => {
                     <p className="text-gray-500 font-bold bg-white dark:bg-black px-3 py-1 rounded-full border border-gray-100 dark:border-gray-800 shadow-sm mt-2 text-xs">@{selectedChat.username}</p>
                   </div>
 
-                  {messages.map(msg => {
-                    const parentMsg = msg.parent_message_id ? messages.find(m => m.id === msg.parent_message_id) : null;
+                  {messages.map((msg: any) => {
+                    const parentMsg = msg.parent_message_id ? messages.find((m: any) => m.id === msg.parent_message_id) : null;
                     return (
                     <motion.div 
                       key={msg.id} 
@@ -1007,7 +974,7 @@ const Messages: React.FC = () => {
                              {formatTime(msg.created_at)}
                           </p>
                           {msg.sender_id === currentUser?.id && (
-                            msg.id.toString().startsWith('temp-') ? (
+                            msg.id?.toString().startsWith('temp-') ? (
                               <Check size={12} className="opacity-50 animate-pulse" />
                             ) : (
                               <CheckCheck size={12} className={msg.is_read ? "text-blue-400" : "text-blue-200 opacity-60"} />

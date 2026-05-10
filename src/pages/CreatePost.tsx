@@ -1,7 +1,8 @@
 import React, { useState, useCallback } from 'react';
 import { UploadCloud, X, RefreshCw, Link as LinkIcon, Clapperboard, Image } from 'lucide-react';
 import { useDropzone } from 'react-dropzone';
-import { supabase } from '../lib/supabase';
+import { db } from '../lib/firebase';
+import { collection, addDoc } from 'firebase/firestore';
 import { useAuth } from '@/contexts/AuthContext';
 import { useNavigate } from 'react-router-dom';
 import { useUpload } from '@/contexts/UploadContext';
@@ -157,12 +158,12 @@ const CreatePost = () => {
         onSuccess: () => navigate('/')
       });
     } else {
-      const { error } = await supabase.from('posts').insert([postData]);
-      if (error) {
-        alert(error.message || 'Failed to create post');
-      } else {
+      try {
+        await addDoc(collection(db, 'posts'), { ...postData, created_at: new Date().toISOString() });
         await invalidatePostsCache();
         navigate('/');
+      } catch (error: any) {
+        alert(error.message || 'Failed to create post');
       }
     }
     

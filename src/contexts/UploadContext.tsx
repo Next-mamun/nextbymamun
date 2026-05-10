@@ -1,5 +1,7 @@
 import React, { createContext, useContext, useState, useCallback, useEffect, useRef } from 'react';
-import { supabase } from '../lib/supabase';
+import { db, storage } from '../lib/firebase';
+import { collection, addDoc, updateDoc, doc } from 'firebase/firestore';
+import { ref, uploadBytesResumable, getDownloadURL } from 'firebase/storage';
 import Draggable from 'react-draggable';
 import { Pause, Play, X, RefreshCw } from 'lucide-react';
 import * as idb from 'idb-keyval';
@@ -60,6 +62,7 @@ export const UploadProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   }, [uploads]);
 
   const abortControllers = useRef<{ [key: string]: AbortController }>({});
+  const uploadTasks = useRef<{ [key: string]: any }>({}); // To store Firebase upload tasks
 
   const simulateProgress = (id: string, startProgress: number = 0, max: number = 90, speed: number = 5) => {
     if (intervals.current[id]) clearInterval(intervals.current[id]);
@@ -113,7 +116,7 @@ export const UploadProvider: React.FC<{ children: React.ReactNode }> = ({ childr
             }
 
             if (type === 'profile') {
-              console.log(`Uploading ${mediaType} to Supabase Storage (Profile Picture)...`);
+              console.log(`Uploading ${mediaType} to Firebase Storage (Profile Picture)...`);
               setUploads(prev => prev.map(x => x.id === id ? { ...x, status: 'uploading', progress: 0 } : x));
               clearInterval(interval);
               
@@ -132,21 +135,34 @@ export const UploadProvider: React.FC<{ children: React.ReactNode }> = ({ childr
               }
 
               const fileName = `${Date.now()}_${Math.random().toString(36).substring(7)}.${fileExt}`;
-              const filePath = `${metadata.userId}/${fileName}`;
+              const filePath = `profiles/${metadata.userId}/${fileName}`;
+              
+              const storageRef = ref(storage, filePath);
+              const uploadTask = uploadBytesResumable(storageRef, fileBody);
+              uploadTasks.current[id] = uploadTask;
 
-              simulateProgress(id, 0, 95, 10);
-              const { error: uploadError } = await supabase.storage.from('media').upload(filePath, fileBody, {
-                upsert: true
+              mediaUrl = await new Promise((resolve, reject) => {
+                uploadTask.on('state_changed', 
+                  (snapshot) => {
+                    const progress = (snapshot.bytesTransferred / snapshot.totalBytes) * 100;
+                    setUploads(prev => prev.map(x => x.id === id ? { ...x, progress } : x));
+                  }, 
+                  (error) => {
+                    reject(error);
+                  }, 
+                  async () => {
+                    const downloadURL = await getDownloadURL(uploadTask.snapshot.ref);
+                    resolve(downloadURL);
+                  }
+                );
+                
+                controller.signal.addEventListener('abort', () => {
+                  uploadTask.cancel();
+                  reject(new Error('Aborted'));
+                });
               });
 
-              if (uploadError) {
-                console.error('Supabase upload failed:', uploadError);
-                throw uploadError;
-              }
-
-              const { data: { publicUrl } } = supabase.storage.from('media').getPublicUrl(filePath);
-              mediaUrl = publicUrl;
-              console.log('Upload to Supabase successful:', mediaUrl);
+              console.log('Upload to Firebase successful:', mediaUrl);
               setUploads(prev => prev.map(x => x.id === id ? { ...x, progress: 100 } : x));
 
             } else {
@@ -210,16 +226,18 @@ export const UploadProvider: React.FC<{ children: React.ReactNode }> = ({ childr
             }
             
           } catch (storageError: any) {
-            console.warn('Failed to use Cloudinary Storage. Falling back to base64 encoding (not recommended for large files).', storageError);
+             if (storageError.message === 'Aborted') throw storageError;
+
+            console.warn('Failed to upload. Falling back to base64 encoding (not recommended for large files).', storageError);
             
             if (mediaType === 'video' || mediaType === 'audio') {
-              throw new Error(`${mediaType} upload to Cloudinary failed. ${storageError.message || storageError}`);
+              throw new Error(`${mediaType} upload failed. ${storageError.message || storageError}`);
             }
             
             // Fallback to base64 if storage fails for images
             if (file instanceof File) {
               if (file.size > 1024 * 1024 * 50) { // 50MB limit for base64 fallback
-                throw new Error("File is too large for base64 fallback. Please check Cloudinary config.");
+                throw new Error("File is too large for base64 fallback.");
               }
               mediaUrl = await new Promise<string>((resolve, reject) => {
                 const reader = new FileReader();
@@ -266,48 +284,25 @@ export const UploadProvider: React.FC<{ children: React.ReactNode }> = ({ childr
           if (metadata.category) postData.category = metadata.category;
         }
 
-        let insertError;
-        const { error } = await supabase.from('posts').insert([postData]);
-        insertError = error;
-        
-        // Fallback for missing thumbnail_url column in posts
-        if (insertError && insertError.message.includes('thumbnail_url')) {
-          delete postData.thumbnail_url;
-          const { error: retryError } = await supabase.from('posts').insert([postData]);
-          insertError = retryError;
-        }
-
-        if (insertError) throw insertError;
-        
+        postData.created_at = new Date().toISOString();
+        const postDoc = await addDoc(collection(db, 'posts'), postData);
         await invalidatePostsCache();
       } else if (type === 'story') {
-         const { error } = await supabase.from('stories').insert([{
+        await addDoc(collection(db, 'stories'), {
           user_id: metadata.userId,
           media_url: mediaUrl,
           media_type: mediaType,
-          expires_at: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString()
-        }]);
-        if (error) throw error;
+          expires_at: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
+          created_at: new Date().toISOString()
+        });
       } else if (type === 'reel') {
-        const payload = { ...metadata.payload };
+        const payload = { ...metadata.payload, created_at: new Date().toISOString() };
         if (mediaUrl) payload.video_url = mediaUrl;
-        
-        let insertError;
-        const { error } = await supabase.from('reels').insert([payload]);
-        insertError = error;
-        
-        if (insertError && insertError.message.includes('thumbnail_url')) {
-          delete payload.thumbnail_url;
-          const { error: retryError } = await supabase.from('reels').insert([payload]);
-          insertError = retryError;
-        }
-
-        if (insertError) throw insertError;
+        await addDoc(collection(db, 'reels'), payload);
       } else if (type === 'message') {
-        const payload = { ...metadata.payload };
+        const payload = { ...metadata.payload, created_at: new Date().toISOString() };
         if (mediaUrl) payload.media_url = mediaUrl;
-        const { error } = await supabase.from('messages').insert([payload]);
-        if (error) throw error;
+        await addDoc(collection(db, 'messages'), payload);
         
         try {
           const cacheKey = `messages_cache_${[metadata.payload.sender_id, metadata.payload.receiver_id].sort().join('_')}`;
@@ -316,21 +311,20 @@ export const UploadProvider: React.FC<{ children: React.ReactNode }> = ({ childr
           console.warn('Redis delete failed', e);
         }
 
-        await supabase.from('notifications').insert([{
+        await addDoc(collection(db, 'notifications'), {
           user_id: metadata.payload.receiver_id,
           sender_id: metadata.payload.sender_id,
           type: 'message',
           is_read: false,
           created_at: new Date().toISOString()
-        }]);
+        });
       } else if (type === 'profile') {
         const payload = { ...metadata.payload };
         if (mediaUrl) {
           if ('cover_url' in payload) payload.cover_url = mediaUrl;
           else payload.avatar_url = mediaUrl;
         }
-        const { error } = await supabase.from('profiles').update(payload).eq('id', metadata.userId);
-        if (error) throw error;
+        await updateDoc(doc(db, 'profiles', metadata.userId), payload);
       }
 
       clearInterval(interval);
@@ -377,12 +371,13 @@ export const UploadProvider: React.FC<{ children: React.ReactNode }> = ({ childr
    const pauseUpload = useCallback((id: string) => {
     console.log('Pausing upload:', id);
     if (intervals.current[id]) {
-      console.log('Clearing interval for:', id);
       clearInterval(intervals.current[id]);
       delete intervals.current[id];
     }
+    if (uploadTasks.current[id]) {
+       uploadTasks.current[id].pause();
+    }
     if (abortControllers.current[id]) {
-      console.log('Aborting controller for:', id);
       abortControllers.current[id].abort();
       delete abortControllers.current[id];
     }
@@ -409,7 +404,11 @@ export const UploadProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       }
       
       if (file) {
-        processAndUpload(id, file, upload.type, upload.metadata, upload.progress);
+        if (uploadTasks.current[id] && typeof uploadTasks.current[id].resume === 'function') {
+            uploadTasks.current[id].resume();
+        } else {
+           processAndUpload(id, file, upload.type, upload.metadata, upload.progress);
+        }
       } else {
         setUploads(prev => {
           const next = prev.map(u => u.id === id ? { ...u, status: 'error' as const } : u);
@@ -423,12 +422,14 @@ export const UploadProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   const removeUpload = useCallback((id: string) => {
     console.log('Removing upload:', id);
     if (intervals.current[id]) {
-      console.log('Clearing interval for:', id);
       clearInterval(intervals.current[id]);
       delete intervals.current[id];
     }
+    if (uploadTasks.current[id]) {
+       uploadTasks.current[id].cancel();
+       delete uploadTasks.current[id];
+    }
     if (abortControllers.current[id]) {
-      console.log('Aborting controller for:', id);
       abortControllers.current[id].abort();
       delete abortControllers.current[id];
     }
@@ -447,8 +448,6 @@ export const UploadProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       addUpload(upload.file!, upload.type, upload.metadata);
     }
   }, [addUpload, removeUpload]);
-
-  const nodeRefs = useRef<{ [key: string]: React.RefObject<HTMLDivElement> }>({});
 
   return (
     <UploadContext.Provider value={{ uploads, addUpload, removeUpload, retryUpload, pauseUpload, resumeUpload }}>

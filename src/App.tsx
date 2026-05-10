@@ -6,7 +6,9 @@ import Sidebar from '@/components/Sidebar';
 import BottomNav from '@/components/BottomNav';
 import NextoRobot from '@/components/NextoRobot';
 import { UserProfile as User } from '@/types';
-import { supabase } from '@/lib/supabase';
+import { auth, db } from '@/lib/firebase';
+import { onAuthStateChanged, signOut } from 'firebase/auth';
+import { doc, getDoc, onSnapshot, collection, query, where } from 'firebase/firestore';
 import { useWakeLock } from '@/hooks/useWakeLock';
 import { requestNotificationPermission } from '@/services/notificationService';
 import { toast } from 'sonner';
@@ -69,10 +71,6 @@ const AppLayout: React.FC = () => {
      const currentPath = location.pathname;
      if (currentPath.startsWith('/messages')) return;
 
-     // Wait, if users are swiping to right tab, usually that means they swipe left (finger moves left)
-     // BUT if user said "slide to the right to go to friends", if they meant finger moves right (direction: right):
-     // I'll make standard: finger left (swipe left) -> next tab.
-     // In case they want finger right -> next tab, I'll map it to standard mostly, but let's see. I'll use standard tab logic.
      let currentIndex = tabs.findIndex(tab => currentPath === tab || (tab !== '/' && currentPath.startsWith(tab)));
      
      if (currentIndex === -1) {
@@ -191,7 +189,7 @@ const App: React.FC = () => {
   };
 
   const logout = async () => {
-    await supabase.auth.signOut();
+    await signOut(auth);
     localStorage.removeItem('next_media_user');
     setCurrentUser(null);
   };
@@ -201,15 +199,12 @@ const App: React.FC = () => {
       localStorage.setItem('next_media_user', JSON.stringify(currentUser));
       requestNotificationPermission();
 
-      // Global Real-time Listeners for Notifications
-      const messageSub = supabase.channel('global_notifications')
-        .on('postgres_changes', { 
-          event: '*', 
-          schema: 'public', 
-          table: 'messages',
-          filter: `receiver_id=eq.${currentUser.id}`
-        }, async (payload) => {
-          // Invalidate unread counts globally
+      // Firebase Real-time Listeners for Notifications
+      if (!auth.currentUser) return;
+
+      const qMessages = query(collection(db, 'messages'), where('receiver_id', '==', currentUser.id), where('is_read', '==', false));
+      const unsubMessages = onSnapshot(qMessages, (snapshot) => {
+          // Handle message notifications
           const queryClient = (window as any).queryClient;
           if (queryClient) {
             queryClient.invalidateQueries({ queryKey: ['totalUnread'] });
@@ -217,177 +212,69 @@ const App: React.FC = () => {
             queryClient.invalidateQueries({ queryKey: ['contacts'] });
             queryClient.invalidateQueries({ queryKey: ['notifications', currentUser.id] });
           }
-
-          // Don't show notification if already in messages with this sender
-          const isAtMessages = window.location.pathname.startsWith('/messages');
-          if (isAtMessages || payload.eventType !== 'INSERT') return;
-
-          // Fetch sender info for better notification
-          const { data: sender } = await supabase
-            .from('profiles')
-            .select('display_name')
-            .eq('id', payload.new.sender_id)
-            .single();
           
-          toast(`New message from ${sender?.display_name || 'Someone'}`, {
-            description: payload.new.content,
-            id: 'message-' + payload.new.sender_id
+          snapshot.docChanges().forEach(async (change) => {
+             if (change.type === 'added') {
+               const data = change.doc.data();
+               const isAtMessages = window.location.pathname.startsWith('/messages');
+               if (isAtMessages) return;
+               
+               const senderDoc = await getDoc(doc(db, 'profiles', data.sender_id));
+               const sender = senderDoc.data();
+               
+               toast(`New message from ${sender?.display_name || 'Someone'}`, {
+                 description: data.content,
+                 id: 'message-' + data.sender_id
+               });
+             }
           });
-        })
-        .on('postgres_changes', {
-          event: 'INSERT',
-          schema: 'public',
-          table: 'notifications',
-          filter: `user_id=eq.${currentUser.id}`
-        }, async (payload) => {
-          const queryClient = (window as any).queryClient;
-          if (queryClient) {
-            queryClient.invalidateQueries({ queryKey: ['notifications', currentUser.id] });
-          }
-
-          // Fetch sender info
-          const { data: sender } = await supabase
-            .from('profiles')
-            .select('display_name')
-            .eq('id', payload.new.sender_id)
-            .single();
-
-          let title = 'New Notification';
-          let body = '';
-
-          switch (payload.new.type) {
-            case 'like':
-              title = `${sender?.display_name || 'Someone'} liked your post`;
-              break;
-            case 'comment':
-              title = `${sender?.display_name || 'Someone'} commented on your post`;
-              break;
-            case 'friend_request':
-              title = `New friend request from ${sender?.display_name || 'Someone'}`;
-              break;
-            case 'friend_accept':
-              title = `${sender?.display_name || 'Someone'} accepted your friend request`;
-              break;
-            case 'mention':
-              title = `${sender?.display_name || 'Someone'} mentioned you`;
-              break;
-          }
-
-          toast(title, {
-            description: body,
-            id: 'notif-' + payload.new.id
-          });
-        })
-        .on('postgres_changes', {
-          event: 'INSERT',
-          schema: 'public',
-          table: 'posts'
-        }, async (payload) => {
-          const content = payload.new.content || '';
-          const mentionPattern = new RegExp(`@${currentUser.username}\\b`, 'i');
-          
-          if (mentionPattern.test(content)) {
-            const { data: author } = await supabase
-              .from('profiles')
-              .select('display_name')
-              .eq('id', payload.new.user_id)
-              .single();
-
-            toast(`${author?.display_name || 'Someone'} mentioned you`, {
-              description: content.substring(0, 100) + (content.length > 100 ? '...' : ''),
-              id: 'mention-' + payload.new.id
-            });
-          }
-        })
-        .subscribe();
+      });
 
       return () => {
-        supabase.removeChannel(messageSub);
+        unsubMessages();
       };
     }
   }, [currentUser]);
 
   useEffect(() => {
-    // Check active session
-    const fetchSession = async () => {
-      const { data: { session } } = await supabase.auth.getSession();
-      if (session?.user) {
-        fetchUserProfile(session.user.id);
+    const unsubscribe = onAuthStateChanged(auth, async (user) => {
+      if (user) {
+         fetchUserProfile(user.uid);
       } else {
-        const saved = localStorage.getItem('next_media_user');
-        if (saved) {
-          setCurrentUser(JSON.parse(saved));
-        } else {
-          setCurrentUser(null);
-        }
-        setLoadingAuth(false);
+         const saved = localStorage.getItem('next_media_user');
+         if (saved) {
+           setCurrentUser(JSON.parse(saved));
+         } else {
+           setCurrentUser(null);
+         }
+         setLoadingAuth(false);
       }
-    };
+    });
 
-    fetchSession();
-
-    // Listen for auth changes (like OAuth redirect)
-    const { data: { subscription } } = supabase.auth.onAuthStateChange(
-      async (event, session) => {
-        if (event === 'SIGNED_IN' && session?.user) {
-          if (window.opener) {
-            window.opener.postMessage({ type: 'OAUTH_AUTH_SUCCESS' }, '*');
-            window.close();
-            return;
-          }
-          fetchUserProfile(session.user.id);
-        } else if (event === 'SIGNED_OUT') {
-          setCurrentUser(null);
-          localStorage.removeItem('next_media_user');
-        }
-      }
-    );
-
-    const handleMessage = async (event: MessageEvent) => {
-      if (event.data?.type === 'OAUTH_AUTH_SUCCESS') {
-        const { data: { session } } = await supabase.auth.getSession();
-        if (session?.user) {
-          fetchUserProfile(session.user.id);
-        }
-      }
-    };
-    window.addEventListener('message', handleMessage);
-
-    return () => {
-      subscription.unsubscribe();
-      window.removeEventListener('message', handleMessage);
-    };
+    return () => unsubscribe();
   }, []);
 
   const fetchUserProfile = async (userId: string) => {
     try {
-      // Poll for the profile since the database trigger might take a few milliseconds
       let data = null;
       let error = null;
       let attempts = 0;
       
-      while (attempts < 3) {
-        const result = await supabase
-          .from('profiles')
-          .select('*')
-          .eq('id', userId)
-          .single();
-          
-        data = result.data;
-        error = result.error;
-        
-        if (data) break;
-        
-        // Wait 100ms before retrying
-        await new Promise(resolve => setTimeout(resolve, 100));
+      while (attempts < 10) {
+        const userDoc = await getDoc(doc(db, 'profiles', userId));
+        if (userDoc.exists()) {
+           data = { id: userDoc.id, ...userDoc.data() };
+           break;
+        }
+        await new Promise(resolve => setTimeout(resolve, 1000));
         attempts++;
       }
         
       if (data) {
-        setCurrentUser(data);
+        setCurrentUser(data as User);
         localStorage.setItem('next_media_user', JSON.stringify(data));
-      } else if (error) {
-        console.error("Error fetching profile:", error);
+      } else {
+        console.warn("Profile not found after retries. This is expected during registration.");
       }
     } catch (err) {
       console.error("Failed to fetch user profile:", err);
@@ -425,3 +312,4 @@ const App: React.FC = () => {
 };
 
 export default App;
+

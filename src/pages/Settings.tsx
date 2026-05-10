@@ -11,7 +11,9 @@ import {
 import { useAuth, useTheme } from '@/contexts/AuthContext';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 
-import { supabase } from '../lib/supabase';
+import { db, auth } from '../lib/firebase';
+import { collection, query, where, getDocs, deleteDoc, doc, getDoc, updateDoc } from 'firebase/firestore';
+import { updatePassword } from 'firebase/auth';
 import { VerifiedBadge } from '@/components/VerifiedBadge';
 
 // Reusable Toggle Component
@@ -42,33 +44,39 @@ const BlockedUsersSection: React.FC = () => {
     queryKey: ['blockedUsers'],
     queryFn: async () => {
       if (!currentUser) return [];
-      const { data: blockedFriendships } = await supabase
-        .from('friendships')
-        .select('receiver_id, profiles!friendships_receiver_id_fkey(*)')
-        .eq('sender_id', currentUser.id)
-        .eq('status', 'blocked');
       
-      const profiles = blockedFriendships?.map((f: any) => f.profiles) || [];
+      const q = query(
+        collection(db, 'friendships'),
+        where('sender_id', '==', currentUser.id),
+        where('status', '==', 'blocked')
+      );
+      const snap = await getDocs(q);
+      
+      const profiles = await Promise.all(snap.docs.map(async d => {
+        const f = d.data();
+        const pDoc = await getDoc(doc(db, 'profiles', f.receiver_id));
+        if (pDoc.exists()) {
+           return { id: pDoc.id, ...pDoc.data(), friendshipId: d.id };
+        }
+        return null;
+      }));
+
       // Filter out nulls and duplicates
       return Array.from(new Map(profiles.filter(Boolean).map((p: any) => [p.id, p])).values());
     },
     enabled: !!currentUser,
   });
 
-  const handleUnblock = async (userId: string) => {
+  const handleUnblock = async (user: any) => {
     if (!currentUser) return;
     if (confirm('Are you sure you want to unblock this user?')) {
-      const { error } = await supabase
-        .from('friendships')
-        .delete()
-        .eq('sender_id', currentUser.id)
-        .eq('receiver_id', userId)
-        .eq('status', 'blocked');
-      
-      if (!error) {
+      try {
+        await deleteDoc(doc(db, 'friendships', user.friendshipId));
         queryClient.invalidateQueries({ queryKey: ['blockedUsers'] });
         queryClient.invalidateQueries({ queryKey: ['blockStatus'] });
         queryClient.invalidateQueries({ queryKey: ['isBlockedByMe'] });
+      } catch(e) {
+        toast.error('Failed to unblock user.');
       }
     }
   };
@@ -103,7 +111,7 @@ const BlockedUsersSection: React.FC = () => {
                 </div>
               </div>
               <button 
-                onClick={() => handleUnblock(user.id)}
+                onClick={() => handleUnblock(user)}
                 className="px-4 py-1.5 bg-gray-100 dark:bg-gray-700 hover:bg-red-50 dark:hover:bg-red-900/20 text-gray-700 dark:text-gray-300 hover:text-red-500 dark:hover:text-red-400 font-bold text-sm rounded-lg transition-all"
               >
                 Unblock
@@ -154,8 +162,11 @@ const Settings: React.FC = () => {
   }, [currentUser]);
 
   const fetchProfile = async () => {
-    const { data } = await supabase.from('profiles').select('*').eq('id', currentUser?.id).single();
-    if (data) setProfile(data);
+    if (!currentUser?.id) return;
+    const docSnap = await getDoc(doc(db, 'profiles', currentUser.id));
+    if (docSnap.exists()) {
+       setProfile(docSnap.data());
+    }
   };
 
   const [editingField, setEditingField] = useState<string | null>(null);
@@ -173,16 +184,16 @@ const Settings: React.FC = () => {
     
     try {
       if (editingField === 'password') {
-        const { error } = await supabase.auth.updateUser({ password: editValue });
-        if (error) throw error;
+        const user = auth.currentUser;
+        if (!user) throw new Error("Not logged in");
+        await updatePassword(user, editValue);
         alert('Password updated successfully!');
       } else {
         const updates = { [editingField]: editValue };
-        const { error } = await supabase.from('profiles').update(updates).eq('id', currentUser.id);
-        if (error) throw error;
+        await updateDoc(doc(db, 'profiles', currentUser.id), updates);
         
         // Update local profile state
-        setProfile(prev => ({ ...prev, ...updates }));
+        setProfile((prev: any) => ({ ...prev, ...updates }));
         
         // Update currentUser in localStorage (partial update)
         const savedUser = JSON.parse(localStorage.getItem('next_media_user') || '{}');
@@ -231,6 +242,7 @@ const Settings: React.FC = () => {
     { id: 'privacy', icon: <Shield size={20} />, label: 'Privacy & Safety', keywords: ['blocked', 'privacy', 'security', 'visibility'] },
     { id: 'notifications', icon: <Bell size={20} />, label: 'Notifications', keywords: ['alerts', 'push', 'messages', 'mentions'] },
     { id: 'account', icon: <User size={20} />, label: 'Account Center', keywords: ['password', 'security', 'logout'] },
+    { id: 'legal', icon: <FileText size={20} />, label: 'Legal & Support', keywords: ['privacy policy', 'terms', 'conditions', 'contact us', 'help'] },
   ];
 
   const filteredTabs = useMemo(() => {
@@ -482,6 +494,68 @@ const Settings: React.FC = () => {
 
               <Section title="Security">
                 <Row icon={<Lock size={20}/>} title="Password" description="Change your password" action={renderAction('password', '', true)} border={false} />
+              </Section>
+            </div>
+          )}
+
+          {/* Legal & Support Settings */}
+          {activeTab === 'legal' && (
+            <div className="animate-in fade-in slide-in-from-bottom-4 duration-300">
+              <h2 className="text-3xl font-black mb-2 text-gray-900 dark:text-white">Legal & Support</h2>
+              <p className="text-gray-500 dark:text-gray-400 font-medium mb-8">View policies and contact us.</p>
+              
+              <Section title="Legal">
+                <div className="p-4 border-b border-gray-100 dark:border-gray-700">
+                  <h3 className="font-bold text-gray-900 dark:text-white text-lg">Privacy Policy</h3>
+                  <div className="mt-2 text-sm text-gray-600 dark:text-gray-400 max-h-40 overflow-y-auto pr-2 custom-scrollbar">
+                    <p className="mb-2">Your privacy is critically important to us.</p>
+                    <p className="mb-2">We collect the minimum possible data necessary to run our platform. We securely store your email, username, and profile data in our databases.</p>
+                    <p>We do not share your personal information with third parties without your explicit consent.</p>
+                  </div>
+                </div>
+                <div className="p-4">
+                  <h3 className="font-bold text-gray-900 dark:text-white text-lg">Terms & Conditions</h3>
+                  <div className="mt-2 text-sm text-gray-600 dark:text-gray-400 max-h-40 overflow-y-auto pr-2 custom-scrollbar">
+                    <p className="mb-2">By using Next, you agree to our terms of service.</p>
+                    <p className="mb-2">You are responsible for the content you post and agree not to engage in harassing, bullying, or illegal activities.</p>
+                    <p>We reserve the right to ban or restrict users who violate these terms.</p>
+                  </div>
+                </div>
+              </Section>
+
+              <Section title="Contact Us">
+                <div className="p-6">
+                  <p className="mb-4 text-sm text-gray-600 dark:text-gray-400">If you have any questions or need help, please contact us using the information below:</p>
+                  <div className="space-y-3">
+                    <div className="flex items-center gap-3">
+                      <div className="w-10 h-10 bg-blue-50 dark:bg-blue-900/30 rounded-xl flex items-center justify-center text-blue-500">
+                        <User size={20} />
+                      </div>
+                      <div>
+                         <p className="text-xs text-gray-500 font-bold uppercase tracking-wider">Name</p>
+                        <p className="font-bold text-gray-900 dark:text-white">Abdullah Al Mamun</p>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-3">
+                      <div className="w-10 h-10 bg-green-50 dark:bg-green-900/30 rounded-xl flex items-center justify-center text-green-500">
+                        <Smartphone size={20} />
+                      </div>
+                      <div>
+                        <p className="text-xs text-gray-500 font-bold uppercase tracking-wider">Phone</p>
+                        <a href="tel:+8801307072293" className="font-bold text-gray-900 dark:text-white hover:text-green-500">+8801307072293</a>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-3">
+                      <div className="w-10 h-10 bg-red-50 dark:bg-red-900/30 rounded-xl flex items-center justify-center text-red-500">
+                        <MessageSquare size={20} />
+                      </div>
+                      <div>
+                        <p className="text-xs text-gray-500 font-bold uppercase tracking-wider">Email</p>
+                        <a href="mailto:abdullahalmamun.next@gmail.com" className="font-bold text-gray-900 dark:text-white hover:text-red-500">abdullahalmamun.next@gmail.com</a>
+                      </div>
+                    </div>
+                  </div>
+                </div>
               </Section>
             </div>
           )}

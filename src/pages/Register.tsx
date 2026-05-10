@@ -4,7 +4,9 @@ import { Link, useNavigate } from 'react-router-dom';
 import { User, Lock, Shield, UserCircle, Key } from 'lucide-react';
 import { useAuth } from '@/contexts/AuthContext';
 import { generateBio } from '../services/geminiService';
-import { supabase } from '../lib/supabase';
+import { auth, db } from '../lib/firebase';
+import { createUserWithEmailAndPassword, signInWithPopup, GoogleAuthProvider } from 'firebase/auth';
+import { doc, getDoc, setDoc, query, collection, where, getDocs } from 'firebase/firestore';
 
 const Register: React.FC = () => {
   const [formData, setFormData] = useState({
@@ -23,17 +25,30 @@ const Register: React.FC = () => {
   const handleGoogleLogin = async () => {
     try {
       setIsGoogleLoading(true);
-      const { data, error } = await supabase.auth.signInWithOAuth({
-        provider: 'google',
-        options: {
-          redirectTo: window.location.origin,
-          skipBrowserRedirect: true,
-        },
-      });
-      if (error) throw error;
-      if (data?.url) {
-        window.open(data.url, 'oauth_popup', 'width=500,height=600');
+      setError('');
+      const provider = new GoogleAuthProvider();
+      const result = await signInWithPopup(auth, provider);
+      
+      const userDoc = await getDoc(doc(db, 'profiles', result.user.uid));
+      if (!userDoc.exists()) {
+        // Create new user profile
+        const emailUser = result.user.email?.split('@')[0] || result.user.uid.substring(0, 8);
+        const bio = await generateBio(emailUser);
+        const newProfile = {
+           username: emailUser,
+           display_name: result.user.displayName || emailUser,
+           email: result.user.email,
+           bio: bio,
+           avatar_url: result.user.photoURL || `https://api.dicebear.com/7.x/avataaars/svg?seed=${emailUser}`,
+           created_at: new Date().toISOString()
+        };
+        await setDoc(doc(db, 'profiles', result.user.uid), newProfile);
+        setCurrentUser({ id: result.user.uid, ...newProfile } as any);
+      } else {
+        setCurrentUser({ id: userDoc.id, ...userDoc.data() } as any);
       }
+      
+      navigate('/');
     } catch (error: any) {
       setError(error.message);
     } finally {
@@ -55,29 +70,38 @@ const Register: React.FC = () => {
     const usernameLower = formData.username.toLowerCase();
 
     // Check for existing user
-    const { data: existing } = await supabase.from('profiles').select('id').eq('username', usernameLower).single();
-    if (existing) {
+    const q = query(collection(db, 'profiles'), where('username', '==', usernameLower));
+    const querySnapshot = await getDocs(q);
+    
+    if (!querySnapshot.empty) {
       setError('Username already taken');
       setLoading(false);
       return;
     }
 
     try {
+      // In Firebase email auth is required. We'll construct a mock email if they don't provide one, or throw error.
+      // Easiest is to construct a mock email for purely username based accounts:
+      const fakeEmail = `${usernameLower}@nextmedia.app`;
+      
+      const result = await createUserWithEmailAndPassword(auth, fakeEmail, formData.password);
+
       const bio = await generateBio(usernameLower);
-      const { data, error: insertError } = await supabase.from('profiles').insert([
-        {
+      
+      const newProfile = {
           username: usernameLower,
-          password: formData.password,
+          password: formData.password, // Optional backup for legacy reasons
           backup_pin: formData.pin || null,
+          email: fakeEmail,
           display_name: `${formData.firstName} ${formData.lastName}`,
           bio: bio,
-          avatar_url: `https://api.dicebear.com/7.x/avataaars/svg?seed=${usernameLower}`
-        }
-      ]).select().single();
-
-      if (insertError) throw insertError;
+          avatar_url: `https://api.dicebear.com/7.x/avataaars/svg?seed=${usernameLower}`,
+          created_at: new Date().toISOString()
+      };
+        
+      await setDoc(doc(db, 'profiles', result.user.uid), newProfile);
       
-      setCurrentUser(data);
+      setCurrentUser({ id: result.user.uid, ...newProfile } as any);
       navigate('/');
     } catch (err: any) {
       setError(err.message || 'Registration failed');

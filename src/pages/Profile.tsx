@@ -1,9 +1,9 @@
-
 import React, { useState, useEffect, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { Camera, Edit2, Plus, Save, X, MessageCircle, UserPlus, Check, Users, RefreshCw, Calendar, CheckCircle } from 'lucide-react';
 import { useAuth } from '@/contexts/AuthContext';
-import { supabase } from '../lib/supabase';
+import { db } from '../lib/firebase';
+import { doc, getDoc, updateDoc, collection, query, where, getDocs, addDoc, deleteDoc, orderBy } from 'firebase/firestore';
 import { VerifiedBadge } from '@/components/VerifiedBadge';
 import ZoomableImage from '@/components/ZoomableImage';
 import { Link } from 'react-router-dom';
@@ -29,35 +29,28 @@ const Profile: React.FC = () => {
   const { data: profile, isLoading: profileLoading } = useQuery({
     queryKey: ['profile', username],
     queryFn: async () => {
-      let { data } = await supabase.from('profiles').select('*').ilike('username', username || '').single();
+      if (!username) return null;
+      let userData = null;
       
-      if (!data && username && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(username)) {
-         const { data: byId } = await supabase.from('profiles').select('*').eq('id', username).single();
-         data = byId;
+      const q = query(collection(db, 'profiles'), where('username', '==', username));
+      const snap = await getDocs(q);
+      
+      if (!snap.empty) {
+         userData = { id: snap.docs[0].id, ...snap.docs[0].data() };
+      } else {
+         const docRef = doc(db, 'profiles', username);
+         const docSnap = await getDoc(docRef);
+         if (docSnap.exists()) {
+             userData = { id: docSnap.id, ...docSnap.data() };
+         }
       }
-      return data;
+      return userData;
     },
     staleTime: 1000 * 60 * 5,
   });
 
   const avatarInputRef = React.useRef<HTMLInputElement>(null);
-  const isOwnProfile = currentUser?.username === username;
-
-  useEffect(() => {
-    if (!profile?.id) return;
-
-    const sub = supabase
-      .channel('profile_changes')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'profiles', filter: `id=eq.${profile.id}` }, () => {
-        queryClient.invalidateQueries({ queryKey: ['profile', username] });
-      })
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'posts', filter: `user_id=eq.${profile.id}` }, () => {
-        queryClient.invalidateQueries({ queryKey: ['userPosts', profile.id] });
-      })
-      .subscribe();
-
-    return () => { supabase.removeChannel(sub); };
-  }, [profile?.id, username, queryClient]);
+  const isOwnProfile = currentUser?.username === username || currentUser?.id === username;
 
   useEffect(() => {
     if (profile) {
@@ -70,16 +63,39 @@ const Profile: React.FC = () => {
     }
   }, [profile]);
 
+  const getProfile = async (userId: string) => {
+     if (!userId) return null;
+     const userDoc = await getDoc(doc(db, 'profiles', userId));
+     return userDoc.exists() ? userDoc.data() : null;
+  };
+
   const { data: userPosts = [], isLoading: postsLoading } = useQuery({
     queryKey: ['userPosts', profile?.id],
     queryFn: async () => {
       if (!profile?.id) return [];
-      const { data } = await supabase
-        .from('posts')
-        .select('*, profiles(*), comments(*, profiles(*)), likes(*)')
-        .eq('user_id', profile.id)
-        .order('created_at', { ascending: false });
-      return data || [];
+      const q = query(collection(db, 'posts'), where('user_id', '==', profile.id), orderBy('created_at', 'desc'));
+      const snapshot = await getDocs(q);
+      
+      return await Promise.all(snapshot.docs.map(async d => {
+        const postData = d.data();
+        const profiles = profile; // We already have the profile
+        
+        // Fetch comments
+        const commentsQuery = query(collection(db, 'comments'), where('post_id', '==', d.id));
+        const commentsSnap = await getDocs(commentsQuery);
+        const comments = await Promise.all(commentsSnap.docs.map(async cd => {
+           const cdData = cd.data();
+           const commentProfile = await getProfile(cdData.user_id);
+           return { id: cd.id, ...cdData, profiles: commentProfile };
+        }));
+
+        // Fetch likes
+        const likesQuery = query(collection(db, 'likes'), where('post_id', '==', d.id));
+        const likesSnap = await getDocs(likesQuery);
+        const likes = likesSnap.docs.map(ld => ({ id: ld.id, ...ld.data() }));
+
+        return { id: d.id, ...postData, profiles, comments, likes };
+      }));
     },
     enabled: !!profile?.id,
     staleTime: 1000 * 60 * 5, // 5 minutes
@@ -88,14 +104,22 @@ const Profile: React.FC = () => {
   const { data: friendship } = useQuery({
     queryKey: ['friendship', currentUser?.id, profile?.id],
     queryFn: async () => {
-      if (!profile?.id || isOwnProfile) return null;
-      const { data } = await supabase.from('friendships')
-        .select('*')
-        .or(`and(sender_id.eq.${currentUser?.id},receiver_id.eq.${profile.id}),and(sender_id.eq.${profile.id},receiver_id.eq.${currentUser?.id})`)
-        .single();
-      return data;
+      if (!profile?.id || !currentUser?.id || isOwnProfile) return null;
+      let fData = null;
+      
+      const q1 = query(collection(db, 'friendships'), where('sender_id', '==', currentUser.id), where('receiver_id', '==', profile.id));
+      const s1 = await getDocs(q1);
+      if (!s1.empty) fData = { id: s1.docs[0].id, ...s1.docs[0].data() };
+      
+      if (!fData) {
+         const q2 = query(collection(db, 'friendships'), where('sender_id', '==', profile.id), where('receiver_id', '==', currentUser.id));
+         const s2 = await getDocs(q2);
+         if (!s2.empty) fData = { id: s2.docs[0].id, ...s2.docs[0].data() };
+      }
+      
+      return fData;
     },
-    enabled: !!profile?.id && !isOwnProfile,
+    enabled: !!profile?.id && !isOwnProfile && !!currentUser?.id,
   });
 
   const friendStatus = friendship?.status || 'none';
@@ -104,11 +128,15 @@ const Profile: React.FC = () => {
     queryKey: ['friendsCount', profile?.id],
     queryFn: async () => {
       if (!profile?.id) return 0;
-      const { count } = await supabase.from('friendships')
-        .select('*', { count: 'exact', head: true })
-        .eq('status', 'accepted')
-        .or(`sender_id.eq.${profile.id},receiver_id.eq.${profile.id}`);
-      return count || 0;
+      let count = 0;
+      const q1 = query(collection(db, 'friendships'), where('status', '==', 'accepted'), where('sender_id', '==', profile.id));
+      const s1 = await getDocs(q1);
+      count += s1.size;
+      
+      const q2 = query(collection(db, 'friendships'), where('status', '==', 'accepted'), where('receiver_id', '==', profile.id));
+      const s2 = await getDocs(q2);
+      count += s2.size;
+      return count;
     },
     enabled: !!profile?.id,
   });
@@ -140,9 +168,11 @@ const Profile: React.FC = () => {
 
   const incrementViewCount = async (postId: string) => {
     try {
-      const { data } = await supabase.from('posts').select('views').eq('id', postId).single();
-      if (data) {
-        await supabase.from('posts').update({ views: (data.views || 0) + 1 }).eq('id', postId);
+      const postRef = doc(db, 'posts', postId);
+      const postDoc = await getDoc(postRef);
+      if (postDoc.exists()) {
+        const data = postDoc.data();
+        await updateDoc(postRef, { views: (data.views || 0) + 1 });
         queryClient.invalidateQueries({ queryKey: ['userPosts', profile?.id] });
       }
     } catch (err) {
@@ -157,9 +187,9 @@ const Profile: React.FC = () => {
         userId: currentUser?.id,
         payload: { avatar_url: '' }, // URL will be added by UploadContext
         onSuccess: async () => {
-          const { data } = await supabase.from('profiles').select('*').eq('id', currentUser?.id).single();
-          if (data) {
-            setCurrentUser(data);
+          const uDoc = await getDoc(doc(db, 'profiles', currentUser?.id as string));
+          if (uDoc.exists()) {
+            setCurrentUser({ id: uDoc.id, ...uDoc.data() } as any);
             queryClient.invalidateQueries({ queryKey: ['profile', username] });
           }
         }
@@ -169,25 +199,26 @@ const Profile: React.FC = () => {
 
   const handleSendRequest = async () => {
     if (!friendship) {
-        const { error } = await supabase.from('friendships').insert([{ sender_id: currentUser?.id, receiver_id: profile.id, status: 'pending' }]);
-        if (!error) {
-            await supabase.from('notifications').insert([{
+        try {
+            await addDoc(collection(db, 'friendships'), { sender_id: currentUser?.id, receiver_id: profile.id, status: 'pending', created_at: new Date().toISOString() });
+            await addDoc(collection(db, 'notifications'), {
               user_id: profile.id,
               sender_id: currentUser?.id,
               type: 'friend_request',
-              created_at: new Date().toISOString()
-            }]);
+              created_at: new Date().toISOString(),
+              is_read: false
+            });
             queryClient.invalidateQueries({ queryKey: ['friendship', currentUser?.id, profile?.id] });
             setFeedback({ type: 'success', msg: 'Friend request sent successfully!' });
-        } else {
+        } catch(e) {
             setFeedback({ type: 'error', msg: 'Failed to send friend request.' });
         }
     } else if (friendship.status === 'pending') {
-        const { error } = await supabase.from('friendships').delete().eq('id', friendship.id);
-        if (!error) {
+        try {
+            await deleteDoc(doc(db, 'friendships', friendship.id));
             queryClient.invalidateQueries({ queryKey: ['friendship', currentUser?.id, profile?.id] });
             setFeedback({ type: 'success', msg: 'Friend request cancelled.' });
-        } else {
+        } catch(e) {
             setFeedback({ type: 'error', msg: 'Failed to cancel friend request.' });
         }
     }
@@ -196,68 +227,18 @@ const Profile: React.FC = () => {
 
   const handleUpdate = async () => {
     setIsUploading(true);
-    const { data, error } = await supabase.from('profiles').update(editData).eq('id', currentUser?.id).select().single();
-    if (!error) { 
-      setCurrentUser(data); 
-      setIsEditing(false); 
-      queryClient.invalidateQueries({ queryKey: ['profile', username] });
+    try {
+       await updateDoc(doc(db, 'profiles', currentUser?.id as string), editData);
+       const uDoc = await getDoc(doc(db, 'profiles', currentUser?.id as string));
+       if (uDoc.exists()) {
+           setCurrentUser({ id: uDoc.id, ...uDoc.data() } as any);
+           setIsEditing(false); 
+           queryClient.invalidateQueries({ queryKey: ['profile', username] });
+       }
+    } catch(e) {
+       console.error("Failed to update profile", e);
     }
     setIsUploading(false);
-  };
-
-  const deletePost = async (id: string) => {
-    if (!confirm('Delete this post?')) return;
-    // Optimistic delete
-    queryClient.setQueriesData({ queryKey: ['userPosts'] }, (oldData: any) => {
-      if (!oldData) return oldData;
-      if (Array.isArray(oldData)) {
-        return oldData.filter((p: any) => p.id !== id);
-      }
-      return oldData;
-    });
-    // Also remove from main feed if present
-    queryClient.setQueriesData({ queryKey: ['posts'] }, (oldData: any) => {
-      if (!oldData || !oldData.pages) return oldData;
-      return {
-        ...oldData,
-        pages: oldData.pages.map((page: any[]) => page.filter((p: any) => p.id !== id))
-      };
-    });
-    
-    try {
-      await supabase.from('posts').delete().eq('id', id);
-    } catch(e) {
-      console.error('Failed to delete user post:', e);
-      queryClient.invalidateQueries({ queryKey: ['userPosts'] });
-      queryClient.invalidateQueries({ queryKey: ['posts'] });
-    }
-  };
-
-  const getYoutubeId = (url: string | null | undefined) => {
-    if (!url) return null;
-    const regExp = /^.*(youtu.be\/|v\/|u\/\w\/|embed\/|watch\?v=|&v=|shorts\/)([^#&?]*).*/;
-    const match = url.match(regExp);
-    return (match && match[2].length === 11) ? match[2] : null;
-  };
-
-  const getFacebookEmbedUrl = (url: string | null | undefined) => {
-    if (!url) return null;
-    // Handle various FB URL formats including m.facebook.com
-    if (url.match(/(?:https?:\/\/)?(?:www\.|m\.|web\.)?(?:facebook\.com|fb\.watch)/i)) {
-      if (url.includes('plugins/video.php')) return url;
-      return `https://www.facebook.com/plugins/video.php?href=${encodeURIComponent(url)}&show_text=0&width=560`;
-    }
-    return null;
-  };
-
-  const getEmbedUrl = (url: string) => {
-    if (url.includes('/embed/') || url.includes('plugins/video.php')) return url;
-
-    const ytId = getYoutubeId(url);
-    const fbUrl = getFacebookEmbedUrl(url);
-    if (ytId) return `https://www.youtube.com/embed/${ytId}`;
-    if (fbUrl) return fbUrl;
-    return null;
   };
 
   if (profileLoading) return <div className="flex flex-col items-center justify-center p-40 gap-4"><div className="w-10 h-10 border-4 border-[#1877F2] border-t-transparent rounded-full animate-spin"></div><p className="font-bold text-gray-500">Loading profile data...</p></div>;
@@ -349,7 +330,7 @@ const Profile: React.FC = () => {
               )}
               <div className="mt-6 space-y-4">
                 <div className="flex items-center gap-3 text-gray-600 dark:text-gray-400 font-medium"><Users className="text-gray-400" size={20} /> <span className="font-bold text-gray-900 dark:text-white">{friendsCount}</span> Friends</div>
-                <div className="flex items-center gap-3 text-gray-600 dark:text-gray-400 font-medium"><Calendar className="text-gray-400" size={20} /> Member since {new Date(profile.created_at).getFullYear()}</div>
+                <div className="flex items-center gap-3 text-gray-600 dark:text-gray-400 font-medium"><Calendar className="text-gray-400" size={20} /> Member since {profile.created_at ? new Date(profile.created_at).getFullYear() : '2023'}</div>
                 <div className="flex items-center gap-3 text-gray-600 dark:text-gray-400 font-medium"><CheckCircle className="text-gray-400" size={20} /> Active Next User</div>
               </div>
               <button onClick={() => setIsEditing(true)} className="w-full bg-[#f0f2f5] dark:bg-gray-800 hover:bg-gray-200 dark:hover:bg-gray-700 py-2.5 rounded-xl font-bold mt-6 text-gray-800 dark:text-white transition-colors">Edit Bio</button>

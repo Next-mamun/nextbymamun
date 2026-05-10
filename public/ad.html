@@ -20,7 +20,7 @@
   </head>
   <body>
     <!-- Fallback text to ensure iframe is loading -->
-    <div style="text-align: center; padding: 20px; color: #666; font-family: sans-serif; font-size: 14px;">
+    <div id="loading-text" style="text-align: center; padding: 20px; color: #666; font-family: sans-serif; font-size: 14px;">
       Advertisement Loading...
     </div>
     
@@ -35,10 +35,40 @@
     </script>
     
     <script>
+      // Notify parent about ad status
+      window.onload = function() {
+        const ins = document.querySelector('ins.adsbygoogle');
+        if (!ins) return;
+        
+        // Setup observer to check for ad-status
+        const observer = new MutationObserver(mutations => {
+          mutations.forEach(mutation => {
+            if (mutation.attributeName === 'data-ad-status') {
+              const status = ins.getAttribute('data-ad-status');
+              window.parent.postMessage({ type: 'ad-status', status: status }, '*');
+            }
+          });
+        });
+        
+        observer.observe(ins, { attributes: true });
+        
+        // Check if AdSense script is blocked by checking if adsbygoogle is still an array after some time
+        setTimeout(() => {
+           if (typeof window.adsbygoogle === 'undefined' || Array.isArray(window.adsbygoogle)) {
+               window.parent.postMessage({ type: 'ad-status', status: 'blocked' }, '*');
+           }
+        }, 3000);
+      };
+
       // Send height to parent to auto-adjust
       const resizeObserver = new ResizeObserver(entries => {
         for (let entry of entries) {
-          window.parent.postMessage({ type: 'ad-resize', height: Math.max(document.body.scrollHeight, 250) }, '*');
+            // Remove the Loading text if height changed
+            const loadingText = document.getElementById('loading-text');
+            if (loadingText && document.body.scrollHeight > 100) {
+              loadingText.style.display = 'none';
+            }
+            window.parent.postMessage({ type: 'ad-resize', height: document.body.scrollHeight }, '*');
         }
       });
       resizeObserver.observe(document.body);

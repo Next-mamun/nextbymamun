@@ -1,8 +1,8 @@
-
 import React, { useState, useEffect } from 'react';
 import { UserMinus, MessageSquare, Check, X, UserPlus, Search, Users, Ban, UserCheck } from 'lucide-react';
 import { useAuth } from '@/contexts/AuthContext';
-import { supabase } from '../lib/supabase';
+import { db } from '../lib/firebase';
+import { collection, query, where, getDocs, updateDoc, doc, getDoc, deleteDoc, addDoc, onSnapshot, or, and, limit } from 'firebase/firestore';
 import { useNavigate } from 'react-router-dom';
 import { VerifiedBadge } from '@/components/VerifiedBadge';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
@@ -18,14 +18,12 @@ const Friends: React.FC = () => {
   useEffect(() => {
     if (!currentUser) return;
 
-    const sub = supabase
-      .channel('friendships_changes')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'friendships', filter: `sender_id=eq.${currentUser.id},receiver_id=eq.${currentUser.id}` }, () => {
-        queryClient.invalidateQueries({ queryKey: ['friends'] });
-      })
-      .subscribe();
+    const q = query(collection(db, 'friendships'), or(where('sender_id', '==', currentUser.id), where('receiver_id', '==', currentUser.id)));
+    const unsub = onSnapshot(q, () => {
+      queryClient.invalidateQueries({ queryKey: ['friends'] });
+    });
 
-    return () => { supabase.removeChannel(sub); };
+    return () => unsub();
   }, [currentUser, queryClient]);
 
   const { data: friendsData, isLoading: loading } = useQuery({
@@ -44,39 +42,43 @@ const Friends: React.FC = () => {
       }
 
       // 1. Fetch relationships
-      const { data: allRel, error: relError } = await supabase
-        .from('friendships')
-        .select('*')
-        .or(`sender_id.eq.${currentUser.id},receiver_id.eq.${currentUser.id}`);
-
-      if (relError) throw relError;
+      const qRel = query(
+        collection(db, 'friendships'),
+        or(where('sender_id', '==', currentUser.id), where('receiver_id', '==', currentUser.id))
+      );
+      const relSnap = await getDocs(qRel);
+      const allRel = relSnap.docs.map(d => ({id: d.id, ...d.data()}) as any);
 
       // 2. Fetch profiles based on search query or default
-      let profQuery = supabase.from('profiles').select('*').neq('id', currentUser.id);
-      
+      // In Firestore, searching by ilike is hard. We just fetch 50 profiles and filter client side.
+      let qProf = query(collection(db, 'profiles'), limit(100));
+      const profSnap = await getDocs(qProf);
+      const allProfTemp = profSnap.docs.map(d => ({id: d.id, ...d.data()}) as any).filter(p => p.id !== currentUser.id);
+
+      let allProf = allProfTemp;
       if (searchQuery.trim()) {
-        profQuery = profQuery.or(`display_name.ilike.%${searchQuery}%,username.ilike.%${searchQuery}%`);
+         const sq = searchQuery.toLowerCase();
+         allProf = allProfTemp.filter(p => 
+            p.display_name?.toLowerCase().includes(sq) || p.username?.toLowerCase().includes(sq)
+         );
       }
-      
-      const { data: allProf, error: profError } = await profQuery.limit(searchQuery.trim() ? 100 : 500);
-      
-      if (profError) throw profError;
 
       // Map profiles for quick access
-      const profMap = new Map(allProf.map(p => [p.id, p]));
+      const profMap = new Map(allProf.map((p: any) => [p.id, p]));
       
       // We also need profiles for existing relationships that might not be in the search results
-      const missingProfIds = (allRel || [])
+      const missingProfIds = allRel
         .map(rel => rel.sender_id === currentUser.id ? rel.receiver_id : rel.sender_id)
         .filter(id => !profMap.has(id));
 
       if (missingProfIds.length > 0) {
-        const { data: missingProfs } = await supabase
-          .from('profiles')
-          .select('*')
-          .in('id', missingProfIds);
+        // Fetch missing profiles individually to avoid `in` limits.
+        const missingProfs = await Promise.all(missingProfIds.map(async (id: string) => {
+            const d = await getDoc(doc(db, 'profiles', id));
+            return d.exists() ? { id: d.id, ...d.data() } : null;
+        })).then(res => res.filter(Boolean));
         
-        missingProfs?.forEach(p => profMap.set(p.id, p));
+        missingProfs.forEach((p: any) => profMap.set(p.id, p));
       }
 
       const reqs: any[] = [];
@@ -86,7 +88,7 @@ const Friends: React.FC = () => {
       
       const relatedIds = new Set<string>([currentUser.id]);
 
-      (allRel || []).forEach(rel => {
+      allRel.forEach(rel => {
         const otherId = rel.sender_id === currentUser.id ? rel.receiver_id : rel.sender_id;
         const otherProf = profMap.get(otherId);
         if (!otherProf) return;
@@ -107,13 +109,13 @@ const Friends: React.FC = () => {
       });
 
       // Add users from search/default profiles to discovery if not already related
-      allProf.forEach(p => {
+      allProf.forEach((p: any) => {
         if (!relatedIds.has(p.id)) {
           disc.push(p);
         }
       });
 
-      // Final client-side filter to be safe and handle the search query across all tabs
+      // Final client-side filter
       const filterList = (list: any[]) => {
         if (!searchQuery.trim()) return list;
         const q = searchQuery.toLowerCase();
@@ -155,23 +157,6 @@ const Friends: React.FC = () => {
 
   const { requests = [], friends = [], discovery = [], blockedUsers = [] } = friendsData || {};
 
-  useEffect(() => {
-    // Subscribe to friendship updates (requests, accepts, blocks)
-    const friendshipSub = supabase.channel('friendship_updates')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'friendships' }, () => queryClient.invalidateQueries({ queryKey: ['friends'] }))
-      .subscribe();
-
-    // Subscribe to profile updates (new users joining)
-    const profileSub = supabase.channel('profile_updates')
-      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'profiles' }, () => queryClient.invalidateQueries({ queryKey: ['friends'] }))
-      .subscribe();
-
-    return () => { 
-      supabase.removeChannel(friendshipSub); 
-      supabase.removeChannel(profileSub);
-    };
-  }, [queryClient]);
-
   const handleStatus = async (id: string, status: 'accepted' | 'delete' | 'blocked') => {
     // Optimistic Update
     const previousData = queryClient.getQueryData(['friends', searchQuery]);
@@ -198,21 +183,22 @@ const Friends: React.FC = () => {
 
     try {
       if (status === 'delete') {
-          await supabase.from('friendships').delete().eq('id', id);
+          await deleteDoc(doc(db, 'friendships', id));
       } else {
-          await supabase.from('friendships').update({ status }).eq('id', id);
+          await updateDoc(doc(db, 'friendships', id), { status });
           
           if (status === 'accepted') {
-            const { data: friendship } = await supabase.from('friendships').select('*').eq('id', id).single();
-            if (friendship) {
+            const docSnap = await getDoc(doc(db, 'friendships', id));
+            if (docSnap.exists()) {
+              const friendship = docSnap.data();
               const otherId = friendship.sender_id === currentUser?.id ? friendship.receiver_id : friendship.sender_id;
-              await supabase.from('notifications').insert([{
+              await addDoc(collection(db, 'notifications'), {
                 user_id: otherId,
                 sender_id: currentUser?.id,
                 type: 'friend_accept',
                 is_read: false,
                 created_at: new Date().toISOString()
-              }]);
+              });
               queryClient.invalidateQueries({ queryKey: ['notifications', otherId] });
             }
           }
@@ -238,19 +224,15 @@ const Friends: React.FC = () => {
     });
 
     try {
-      const { data, error } = await supabase.from('friendships').insert([{ sender_id: currentUser?.id, receiver_id: targetId, status: 'pending' }]).select().single();
-      if (!error) {
-        await supabase.from('notifications').insert([{
-          user_id: targetId,
-          sender_id: currentUser?.id,
-          type: 'friend_request',
-          is_read: false,
-          created_at: new Date().toISOString()
-        }]);
-        queryClient.invalidateQueries({ queryKey: ['notifications', targetId] });
-      } else {
-          throw error;
-      }
+      await addDoc(collection(db, 'friendships'), { sender_id: currentUser?.id, receiver_id: targetId, status: 'pending' });
+      await addDoc(collection(db, 'notifications'), {
+        user_id: targetId,
+        sender_id: currentUser?.id,
+        type: 'friend_request',
+        is_read: false,
+        created_at: new Date().toISOString()
+      });
+      queryClient.invalidateQueries({ queryKey: ['notifications', targetId] });
     } catch (err) {
       console.error("Error sending request:", err);
       queryClient.setQueryData(['friends', searchQuery], previousData);
@@ -259,25 +241,28 @@ const Friends: React.FC = () => {
   };
 
   const cancelRequest = async (friendshipId: string) => {
-    const { error } = await supabase.from('friendships').delete().eq('id', friendshipId);
-    if (error) {
-        console.error("Error canceling request:", error);
-    }
-    queryClient.invalidateQueries({ queryKey: ['friends'] });
+    try {
+        await deleteDoc(doc(db, 'friendships', friendshipId));
+        queryClient.invalidateQueries({ queryKey: ['friends'] });
+    } catch(e) {}
   };
 
   const blockUser = async (targetId: string, friendshipId?: string) => {
-    if (friendshipId) {
-        await supabase.from('friendships').update({ status: 'blocked', sender_id: currentUser?.id, receiver_id: targetId }).eq('id', friendshipId);
-    } else {
-        await supabase.from('friendships').insert([{ sender_id: currentUser?.id, receiver_id: targetId, status: 'blocked' }]);
-    }
-    queryClient.invalidateQueries({ queryKey: ['friends'] });
+    try {
+        if (friendshipId) {
+            await updateDoc(doc(db, 'friendships', friendshipId), { status: 'blocked', sender_id: currentUser?.id, receiver_id: targetId });
+        } else {
+            await addDoc(collection(db, 'friendships'), { sender_id: currentUser?.id, receiver_id: targetId, status: 'blocked' });
+        }
+        queryClient.invalidateQueries({ queryKey: ['friends'] });
+    } catch(e) {}
   };
 
   const unblockUser = async (friendshipId: string) => {
-      await supabase.from('friendships').delete().eq('id', friendshipId);
-      queryClient.invalidateQueries({ queryKey: ['friends'] });
+      try {
+          await deleteDoc(doc(db, 'friendships', friendshipId));
+          queryClient.invalidateQueries({ queryKey: ['friends'] });
+      } catch(e) {}
   }
 
   return (
@@ -330,7 +315,7 @@ const Friends: React.FC = () => {
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 animate-in fade-in duration-300">
                     {requests.length === 0 ? (
                         <div className="col-span-full text-center py-20 text-gray-400 font-medium">No pending friend requests.</div>
-                    ) : requests.map(r => (
+                    ) : requests.map((r: any) => (
                     <div key={r.id} className="bg-white dark:bg-black border border-gray-100 dark:border-gray-800 rounded-2xl shadow-sm p-5 flex flex-col items-center transition-all hover:shadow-md">
                         <img src={r.profiles.avatar_url} onClick={() => navigate(`/profile/${r.profiles.username}`)} className="w-24 h-24 rounded-full object-cover shadow-lg border-2 border-white dark:border-gray-700 mb-4 cursor-pointer" />
                         <p className="font-bold text-gray-900 dark:text-white text-lg mb-4 flex items-center gap-1">
@@ -350,7 +335,7 @@ const Friends: React.FC = () => {
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 animate-in fade-in duration-300">
                     {discovery.length === 0 ? (
                         <div className="col-span-full text-center py-20 text-gray-400 font-medium">No new users found. Try searching!</div>
-                    ) : discovery.map(p => (
+                    ) : discovery.map((p: any) => (
                     <div key={p.id} className="bg-white dark:bg-black border border-gray-100 dark:border-gray-800 rounded-2xl p-4 flex flex-col items-center text-center transition-all hover:shadow-md relative group">
                         <img src={p.avatar_url} onClick={() => navigate(`/profile/${p.username}`)} className="w-20 h-20 rounded-full object-cover shadow-md mb-3 cursor-pointer border-2 border-white dark:border-gray-700" />
                         <p className="font-bold text-gray-900 dark:text-white truncate w-full flex items-center justify-center gap-1">
@@ -379,7 +364,7 @@ const Friends: React.FC = () => {
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 animate-in fade-in duration-300">
                     {friends.length === 0 ? (
                         <div className="col-span-full text-center py-20 text-gray-400 font-medium">You haven't added any friends yet.</div>
-                    ) : friends.map(f => (
+                    ) : friends.map((f: any) => (
                     <div key={f.id} className="bg-white dark:bg-black border border-gray-100 dark:border-gray-800 rounded-2xl p-4 flex items-center justify-between shadow-sm hover:shadow-md transition-all group">
                         <div className="flex items-center gap-4 cursor-pointer" onClick={() => navigate(`/profile/${f.username}`)}>
                         <img src={f.avatar_url} className="w-16 h-16 rounded-full border shadow-sm object-cover" />
@@ -405,7 +390,7 @@ const Friends: React.FC = () => {
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 animate-in fade-in duration-300">
                     {blockedUsers.length === 0 ? (
                         <div className="col-span-full text-center py-20 text-gray-400 font-medium">No blocked users.</div>
-                    ) : blockedUsers.map(f => (
+                    ) : blockedUsers.map((f: any) => (
                     <div key={f.id} className="bg-white dark:bg-black border border-gray-100 dark:border-gray-800 rounded-2xl p-4 flex items-center justify-between shadow-sm hover:shadow-md transition-all">
                         <div className="flex items-center gap-4 opacity-50">
                         <img src={f.avatar_url} className="w-12 h-12 rounded-full border shadow-sm object-cover grayscale" />

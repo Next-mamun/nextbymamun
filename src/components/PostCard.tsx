@@ -3,7 +3,8 @@ import React, { useState, useEffect, useRef } from 'react';
 import { ThumbsUp, MessageSquare, Trash2, Eye, Send, MessageCircle, Share2 } from 'lucide-react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
-import { supabase } from '@/lib/supabase';
+import { db } from '@/lib/firebase';
+import { doc, getDoc, setDoc, deleteDoc, updateDoc, collection, query, where, getDocs, addDoc } from 'firebase/firestore';
 import { useAuth } from '@/contexts/AuthContext';
 import { VerifiedBadge } from '@/components/VerifiedBadge';
 import ZoomableImage from '@/components/ZoomableImage';
@@ -59,18 +60,28 @@ const PostCard = React.memo(({ post, onObserve, isProfileView = false }: PostCar
     setLikesCount(prev => newIsLiked ? prev + 1 : prev - 1);
 
     try {
+      const likesRef = collection(db, 'likes');
+      const q = query(likesRef, where('post_id', '==', post.id), where('user_id', '==', currentUser.id));
+      const snap = await getDocs(q);
+
       if (isLiked) {
-        await supabase.from('likes').delete().match({ post_id: post.id, user_id: currentUser.id });
+        // Delete like
+        snap.forEach(async (d) => {
+           await deleteDoc(doc(db, 'likes', d.id));
+        });
       } else {
-        await supabase.from('likes').insert([{ post_id: post.id, user_id: currentUser.id }]);
+        // Insert like
+        if (snap.empty) {
+           await addDoc(likesRef, { post_id: post.id, user_id: currentUser.id, created_at: new Date().toISOString() });
+        }
         if (post.user_id !== currentUser.id) {
-          await supabase.from('notifications').insert([{
+          await addDoc(collection(db, 'notifications'), {
             user_id: post.user_id,
             sender_id: currentUser.id,
             type: 'like',
             is_read: false,
             created_at: new Date().toISOString()
-          }]);
+          });
           queryClient.invalidateQueries({ queryKey: ['notifications', post.user_id] });
         }
       }
@@ -137,15 +148,15 @@ const PostCard = React.memo(({ post, onObserve, isProfileView = false }: PostCar
     setComment('');
 
     try {
-      await supabase.from('comments').insert([{ post_id: post.id, user_id: currentUser.id, content: commentText }]);
+      await addDoc(collection(db, 'comments'), { post_id: post.id, user_id: currentUser.id, content: commentText, created_at: new Date().toISOString() });
       if (post.user_id !== currentUser.id) {
-        await supabase.from('notifications').insert([{
+        await addDoc(collection(db, 'notifications'), {
           user_id: post.user_id,
           sender_id: currentUser.id,
           type: 'comment',
           is_read: false,
           created_at: new Date().toISOString()
-        }]);
+        });
         queryClient.invalidateQueries({ queryKey: ['notifications', post.user_id] });
       }
       queryClient.invalidateQueries({ queryKey: ['posts'] });
@@ -169,12 +180,24 @@ const PostCard = React.memo(({ post, onObserve, isProfileView = false }: PostCar
       if (!oldData || !oldData.pages) return oldData;
       return {
         ...oldData,
-        pages: oldData.pages.map((page: any[]) => page.filter((p: any) => p.id !== postId))
+        pages: oldData.pages.map((page: any) => ({
+             ...page,
+             data: page.data ? page.data.filter((p: any) => p.id !== postId) : page.filter((p: any) => p.id !== postId)
+        }))
       };
     });
     // Update userPosts cache
     queryClient.setQueriesData({ queryKey: ['userPosts'] }, (oldData: any) => {
        if (!oldData) return oldData;
+       if (oldData.pages) {
+          return {
+             ...oldData,
+             pages: oldData.pages.map((page: any) => ({
+                ...page,
+                data: page.data ? page.data.filter((p: any) => p.id !== postId) : page.filter((p: any) => p.id !== postId)
+             }))
+          };
+       }
        if (Array.isArray(oldData)) {
          return oldData.filter((p: any) => p.id !== postId);
        }
@@ -182,7 +205,7 @@ const PostCard = React.memo(({ post, onObserve, isProfileView = false }: PostCar
     });
 
     try {
-      await supabase.from('posts').delete().eq('id', postId);
+      await deleteDoc(doc(db, 'posts', postId));
     } catch (error) {
       console.error('Failed to delete post:', error);
       // Re-invalidate on failure
@@ -202,7 +225,7 @@ const PostCard = React.memo(({ post, onObserve, isProfileView = false }: PostCar
               {post.profiles?.is_verified && <VerifiedBadge />}
               {post.category && <span className="text-[10px] bg-orange-50 dark:bg-orange-900/20 text-orange-600 dark:text-orange-400 px-2 py-0.5 rounded-full border border-orange-100 dark:border-orange-800">{post.category}</span>}
             </p>
-            <p className="text-[12px] text-gray-500 dark:text-gray-400 font-medium">{formatTime(post.created_at, { showYear: true })}</p>
+            <p className="text-[12px] text-gray-500 dark:text-gray-400 font-medium">{formatTime(post.created_at || new Date().toISOString(), { showYear: true })}</p>
           </div>
         </Link>
         {post.user_id === currentUser?.id && <button onClick={triggerDelete} className="p-2 text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-full transition-colors"><Trash2 size={18} /></button>}

@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Image as LucideImage, Video, ThumbsUp, Send, X, CheckCircle, Clapperboard, Link as LinkIcon, Search, Camera, Pencil } from 'lucide-react';
@@ -8,7 +7,8 @@ import ProfilePhoto from '@/components/ProfilePhoto';
 import VideoPlayer from '@/components/VideoPlayer';
 import EmbedPlayer from '@/components/EmbedPlayer';
 import { useAuth } from '@/contexts/AuthContext';
-import { supabase } from '../lib/supabase';
+import { db } from '../lib/firebase';
+import { collection, query, where, orderBy, limit, getDocs, doc, getDoc, updateDoc, startAfter } from 'firebase/firestore';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { useQuery, useInfiniteQuery, useQueryClient } from '@tanstack/react-query';
 import { CameraCapture, MediaEditor } from '@/components/MediaTools';
@@ -63,15 +63,49 @@ const Feed: React.FC = () => {
   const { data: reels = [] } = useQuery({
     queryKey: ['reels'],
     queryFn: async () => {
-      const { data } = await supabase
-        .from('reels')
-        .select('*, profiles(*)')
-        .limit(5)
-        .order('created_at', { ascending: false });
-      return data || [];
+      const q = query(collection(db, 'reels'), orderBy('created_at', 'desc'), limit(5));
+      const snapshot = await getDocs(q);
+      const docs = await Promise.all(snapshot.docs.map(async d => {
+        const data = d.data() as any;
+        let profiles = null;
+        if (data.user_id) {
+           const pDoc = await getDoc(doc(db, 'profiles', data.user_id));
+           if (pDoc.exists()) profiles = pDoc.data();
+        }
+        return { id: d.id, ...data, profiles } as any;
+      }));
+      return docs || [];
     },
     staleTime: 1000 * 60 * 5, // 5 minutes
   });
+
+  const getProfile = async (userId: string) => {
+     if (!userId) return null;
+     const userDoc = await getDoc(doc(db, 'profiles', userId));
+     return userDoc.exists() ? userDoc.data() : null;
+  };
+
+  const getPopulatedPost = async (d: any) => {
+    const postData = d.data ? d.data() : d; // Handle both DocumentSnapshots and raw data
+    const id = d.id || d.post_id;
+    const profiles = await getProfile(postData.user_id);
+    
+    // Fetch comments
+    const commentsQuery = query(collection(db, 'comments'), where('post_id', '==', id));
+    const commentsSnap = await getDocs(commentsQuery);
+    const comments = await Promise.all(commentsSnap.docs.map(async cd => {
+       const cdData = cd.data();
+       const commentProfile = await getProfile(cdData.user_id);
+       return { id: cd.id, ...cdData, profiles: commentProfile };
+    }));
+
+    // Fetch likes
+    const likesQuery = query(collection(db, 'likes'), where('post_id', '==', id));
+    const likesSnap = await getDocs(likesQuery);
+    const likes = likesSnap.docs.map(ld => ({ id: ld.id, ...ld.data() }));
+
+    return { id, ...postData, profiles, comments, likes };
+  };
 
   // Fetch Posts with Infinite Scroll
   const {
@@ -80,74 +114,37 @@ const Feed: React.FC = () => {
     hasNextPage,
     isFetchingNextPage,
     isLoading: postsLoading,
-    refetch: refetchPosts,
     error: postsError
   } = useInfiniteQuery({
     queryKey: ['posts', selectedCategory, contentTypeFilter],
-    queryFn: async ({ pageParam = 0 }) => {
-      const cacheKey = `posts_cache_${selectedCategory}_${contentTypeFilter}_${pageParam}`;
+    queryFn: async ({ pageParam = undefined }: { pageParam: any }) => {
+      const cacheKey = `posts_cache_${selectedCategory}_${contentTypeFilter}_${pageParam ? pageParam.id : 0}`;
       
-      // Attempt to load from localStorage first in case of offline
-      if (!navigator.onLine) {
-        try {
-          const localCache = localStorage.getItem(cacheKey);
-          if (localCache) return JSON.parse(localCache);
-        } catch (e) {}
-      }
-
-      try {
-        const cachedStr = await redis.get(cacheKey);
-        if (cachedStr) {
-          // Check if it's already an object or a string
-          const data = typeof cachedStr === 'string' ? JSON.parse(cachedStr) : cachedStr;
-          // Store locally for offline
-          try { localStorage.setItem(cacheKey, JSON.stringify(data)); } catch (e) {}
-          return data;
-        }
-      } catch (e) {
-        console.warn('Redis read failed frontend cache', e);
-      }
-
-      let query = supabase
-        .from('posts')
-        .select('*, profiles(*), comments(*, profiles(*)), likes(*)')
-        .order('created_at', { ascending: false });
+      let q = query(collection(db, 'posts'), orderBy('created_at', 'desc'), limit(POSTS_PER_PAGE));
 
       if (selectedCategory !== 'All') {
-        query = query.eq('category', selectedCategory);
+        q = query(q, where('category', '==', selectedCategory));
       }
       
       if (contentTypeFilter !== 'All') {
         const type = contentTypeFilter === 'Video' ? 'video' : contentTypeFilter.toLowerCase();
-        query = query.eq('media_type', type);
+        q = query(q, where('media_type', '==', type));
       }
 
-      const { data, error } = await query.range(pageParam * POSTS_PER_PAGE, (pageParam + 1) * POSTS_PER_PAGE - 1);
-      
-      if (error && !navigator.onLine) {
-         try {
-           const localCache = localStorage.getItem(cacheKey);
-           if (localCache) return JSON.parse(localCache);
-         } catch (e) {}
-      } else if (error) {
-        console.error("Error fetching posts:", error);
-        throw error;
+      if (pageParam) {
+         q = query(q, startAfter(pageParam));
       }
+
+      const snapshot = await getDocs(q);
+      const lastVisible = snapshot.docs[snapshot.docs.length - 1];
+
+      const populatedPosts = await Promise.all(snapshot.docs.map(getPopulatedPost));
       
-      const responseData = data || [];
-      try {
-        // Cache in redis for 10 minutes (600s)
-        await redis.setex(cacheKey, 600, JSON.stringify(responseData));
-        // Cache locally for offline
-        localStorage.setItem(cacheKey, JSON.stringify(responseData));
-      } catch (e) {
-        console.warn('Redis write failed frontend cache', e);
-      }
-      return responseData;
+      return { data: populatedPosts, lastVisible };
     },
-    initialPageParam: 0,
-    getNextPageParam: (lastPage, allPages) => {
-      return lastPage.length === POSTS_PER_PAGE ? allPages.length : undefined;
+    initialPageParam: undefined as any,
+    getNextPageParam: (lastPage) => {
+      return lastPage.data.length === POSTS_PER_PAGE ? lastPage.lastVisible : undefined;
     },
     staleTime: 1000 * 60 * 5, // 5 minutes
   });
@@ -156,13 +153,9 @@ const Feed: React.FC = () => {
     queryKey: ['post', sharedPostId],
     queryFn: async () => {
       if (!sharedPostId) return null;
-      const { data, error } = await supabase
-        .from('posts')
-        .select('*, profiles(*), likes(*), comments(*, profiles(*))')
-        .eq('id', sharedPostId)
-        .single();
-      if (error) throw error;
-      return data;
+      const postDoc = await getDoc(doc(db, 'posts', sharedPostId));
+      if (!postDoc.exists()) return null;
+      return await getPopulatedPost(postDoc);
     },
     enabled: !!sharedPostId,
   });
@@ -170,24 +163,19 @@ const Feed: React.FC = () => {
   const [feedRandomSeed] = useState(() => Math.random());
 
   const posts = useMemo(() => {
-    let flatPosts = Array.from(new Map((postsData?.pages.flat() || []).map(p => [p.id, p])).values()) as any[];
+    let flatPosts = Array.from(new Map((postsData?.pages.flatMap(p => p.data) || []).map(p => [p.id, p])).values()) as any[];
     
     if (sharedPost) {
       flatPosts = flatPosts.filter(p => p.id !== sharedPost.id);
     }
 
-    // Only shuffle the first few pages simply so the user gets a unique feed at the top every entry
-    // without completely breaking the illusion of pagination. We only do this if ALL types are shown.
     if (flatPosts.length > 0 && selectedCategory === 'All' && contentTypeFilter === 'All') {
-      // Create a deterministic shuffle based on the mount seed
       const seededRandom = (seed: number) => {
         let x = Math.sin(seed++) * 10000;
         return x - Math.floor(x);
       };
       
       let currentSeed = feedRandomSeed;
-      
-      // We'll shuffle the top 20 items so the very latest ones get mixed up.
       const toShuffle = flatPosts.slice(0, 20);
       const remaining = flatPosts.slice(20);
       
@@ -230,28 +218,16 @@ const Feed: React.FC = () => {
 
   const incrementViewCount = async (postId: string) => {
     try {
-      const { data } = await supabase.from('posts').select('views').eq('id', postId).single();
-      if (data) {
-        await supabase.from('posts').update({ views: (data.views || 0) + 1 }).eq('id', postId);
+      const postRef = doc(db, 'posts', postId);
+      const postDoc = await getDoc(postRef);
+      if (postDoc.exists()) {
+        const data = postDoc.data();
+        await updateDoc(postRef, { views: (data.views || 0) + 1 });
       }
     } catch (err) {
       console.error('Error updating views:', err);
     }
   };
-
-  useEffect(() => {
-    const sub = supabase
-      .channel('feed_complex')
-      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'posts' }, () => {
-        queryClient.invalidateQueries({ queryKey: ['posts'] });
-      })
-      .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'posts' }, () => {
-        queryClient.invalidateQueries({ queryKey: ['posts'] });
-      })
-      .subscribe();
-
-    return () => { supabase.removeChannel(sub); };
-  }, [queryClient]);
 
   const filteredPosts = useMemo(() => {
     const baseFiltered = posts.filter(p => {
@@ -262,7 +238,6 @@ const Feed: React.FC = () => {
       return matchesSearch;
     });
 
-    // Implement Algorithm: 3 Videos -> 3 Images -> 3 Text -> Repeat
     const videos = baseFiltered.filter(p => p.media_type === 'video' || (p.media_url && (p.media_url.includes('youtube.com') || p.media_url.includes('facebook.com'))));
     const images = baseFiltered.filter(p => p.media_type === 'image');
     const texts = baseFiltered.filter(p => !videos.includes(p) && !images.includes(p));
@@ -271,15 +246,12 @@ const Feed: React.FC = () => {
     let vIdx = 0, iIdx = 0, tIdx = 0;
 
     while (vIdx < videos.length || iIdx < images.length || tIdx < texts.length) {
-      // Add 3 videos
       for (let i = 0; i < 3 && vIdx < videos.length; i++) {
         result.push(videos[vIdx++]);
       }
-      // Add 3 images
       for (let i = 0; i < 3 && iIdx < images.length; i++) {
         result.push(images[iIdx++]);
       }
-      // Add 3 texts
       for (let i = 0; i < 3 && tIdx < texts.length; i++) {
         result.push(texts[tIdx++]);
       }
@@ -307,12 +279,6 @@ const Feed: React.FC = () => {
       }
     };
   }, [hasNextPage, isFetchingNextPage, fetchNextPage]);
-
-  const loadMore = () => {
-    if (hasNextPage && !isFetchingNextPage) {
-      fetchNextPage();
-    }
-  };
 
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -355,9 +321,7 @@ const Feed: React.FC = () => {
 
   const getFacebookEmbedUrl = (url: string | null | undefined) => {
     if (!url) return null;
-    // Handle various FB URL formats including m.facebook.com
     if (url.match(/(?:https?:\/\/)?(?:www\.|m\.|web\.)?(?:facebook\.com|fb\.watch)/i)) {
-      // If it's already an embed URL, return it
       if (url.includes('plugins/video.php')) return url;
       return `https://www.facebook.com/plugins/video.php?href=${encodeURIComponent(url)}&show_text=0&width=560`;
     }
@@ -368,10 +332,6 @@ const Feed: React.FC = () => {
     if (!url) return null;
     const ytId = getYoutubeId(url);
     const fbUrl = getFacebookEmbedUrl(url);
-    // rel=0: show related videos from same channel only
-    // modestbranding=1: hide youtube logo
-    // iv_load_policy=3: hide annotations
-    // disablekb=1: disable keyboard shortcuts
     if (ytId) return `https://www.youtube.com/embed/${ytId}?rel=0&modestbranding=1&iv_load_policy=3&controls=1&disablekb=1&autoplay=0`;
     if (fbUrl) return fbUrl;
     return null;
@@ -384,12 +344,9 @@ const Feed: React.FC = () => {
       let mediaUrl = selectedFile;
       let mType = selectedFile ? fileType : 'text';
       
-      // Check for YouTube/Facebook link in ytLink field OR content if no media selected
       let targetLink = ytLink;
       
-      // If no explicit link provided, scan the content
       if (!targetLink && !selectedFile) {
-        // Improved regex to catch more URL variations
         const urlMatch = newPostContent.match(/https?:\/\/(?:www\.|m\.|web\.)?(?:youtube\.com|youtu\.be|facebook\.com|fb\.watch)\/[^\s]+/i);
         if (urlMatch) targetLink = urlMatch[0];
       }
@@ -443,7 +400,7 @@ const Feed: React.FC = () => {
       setShowYoutube(false);
       setShowCategoryInput(false);
       setCustomCategory('');
-      setIsUploading(false); // Reset immediately so they can post again
+      setIsUploading(false);
 
     } catch (error: any) {
       setIsUploading(false);
@@ -758,8 +715,6 @@ const Feed: React.FC = () => {
           )}
         </>
       )}
-
-      {/* Story Viewer Modal Removed */}
 
       {/* Camera & Editor Modals */}
       {showCamera && (

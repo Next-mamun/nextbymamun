@@ -1,7 +1,8 @@
 import React, { useEffect } from 'react';
 import { Bell, Heart, MessageSquare, UserPlus, Eye, MessageCircle, Check, CheckCircle } from 'lucide-react';
 import { useAuth } from '@/contexts/AuthContext';
-import { supabase } from '../lib/supabase';
+import { db } from '../lib/firebase';
+import { collection, query, where, getDocs, updateDoc, doc, getDoc, deleteDoc, onSnapshot, orderBy, limit, documentId } from 'firebase/firestore';
 import { useNavigate } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { formatTime } from '@/lib/utils';
@@ -16,24 +17,24 @@ const Notifications: React.FC = () => {
     queryFn: async () => {
       if (!currentUser) return [];
       
-      const { data: notifs, error } = await supabase
-        .from('notifications')
-        .select('*')
-        .eq('user_id', currentUser?.id)
-        .order('created_at', { ascending: false })
-        .limit(50);
-        
-      if (error) {
-        console.error("Error fetching notifications:", error);
-      }
+      const qNotifs = query(
+        collection(db, 'notifications'),
+        where('user_id', '==', currentUser.id),
+        orderBy('created_at', 'desc'),
+        limit(50)
+      );
+      const notifsSnap = await getDocs(qNotifs);
+      const notifs = notifsSnap.docs.map(d => ({id: d.id, ...d.data()}) as any);
       
-      const { data: unreadMsgs } = await supabase
-        .from('messages')
-        .select('*')
-        .eq('receiver_id', currentUser.id)
-        .or('is_read.eq.false,is_read.is.null')
-        .order('created_at', { ascending: false })
-        .limit(50);
+      const qMsgs = query(
+        collection(db, 'messages'),
+        where('receiver_id', '==', currentUser.id),
+        where('is_read', '==', false),
+        orderBy('created_at', 'desc'),
+        limit(50)
+      );
+      const unreadMsgsSnap = await getDocs(qMsgs);
+      const unreadMsgs = unreadMsgsSnap.docs.map(d => ({id: d.id, ...d.data()}) as any);
         
       const validNotifs = notifs || [];
       const validMsgs = unreadMsgs || [];
@@ -41,7 +42,7 @@ const Notifications: React.FC = () => {
       const msgSenders = new Set();
       const msgNotifs: any[] = [];
       
-      validMsgs.forEach(msg => {
+      validMsgs.forEach((msg: any) => {
         if (!msgSenders.has(msg.sender_id)) {
           msgSenders.add(msg.sender_id);
           msgNotifs.push({
@@ -61,13 +62,12 @@ const Notifications: React.FC = () => {
       
       if (combined.length === 0) return [];
 
-      // Fetch sender profiles manually to avoid foreign key syntax issues
       const senderIds = [...new Set(combined.map(n => n.sender_id).filter(Boolean))];
       if (senderIds.length > 0) {
-        const { data: profiles } = await supabase
-          .from('profiles')
-          .select('*')
-          .in('id', senderIds);
+        const profiles = await Promise.all(senderIds.map(async (id: string) => {
+            const d = await getDoc(doc(db, 'profiles', id));
+            return d.exists() ? { id: d.id, ...d.data() } : null;
+        })).then(res => res.filter(Boolean));
           
         if (profiles) {
           const profileMap = profiles.reduce((acc: any, p: any) => {
@@ -92,25 +92,28 @@ const Notifications: React.FC = () => {
   useEffect(() => {
     if (!currentUser) return;
 
-    const sub = supabase
-      .channel('notifications')
-      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'notifications', filter: `user_id=eq.${currentUser?.id}` }, (payload) => {
-        console.log('New notification:', payload);
+    const q = query(collection(db, 'notifications'), where('user_id', '==', currentUser.id));
+    const unsub = onSnapshot(q, () => {
         queryClient.invalidateQueries({ queryKey: ['notifications', currentUser?.id] });
-      })
-      .subscribe();
+    });
 
-    return () => { supabase.removeChannel(sub); };
+    return () => unsub();
   }, [currentUser, queryClient]);
 
   const markAsRead = async (id: string) => {
-    await supabase.from('notifications').update({ is_read: true }).eq('id', id);
-    queryClient.invalidateQueries({ queryKey: ['notifications', currentUser?.id] });
+    try {
+        await updateDoc(doc(db, 'notifications', id), { is_read: true });
+        queryClient.invalidateQueries({ queryKey: ['notifications', currentUser?.id] });
+    } catch(e) {}
   };
 
   const markAllAsRead = async () => {
-    await supabase.from('notifications').update({ is_read: true }).eq('user_id', currentUser?.id);
-    queryClient.invalidateQueries({ queryKey: ['notifications', currentUser?.id] });
+    const qNotifs = query(collection(db, 'notifications'), where('user_id', '==', currentUser?.id), where('is_read', '==', false));
+    const snap = await getDocs(qNotifs);
+    if (!snap.empty) {
+        await Promise.all(snap.docs.map(d => updateDoc(doc(db, 'notifications', d.id), { is_read: true })));
+        queryClient.invalidateQueries({ queryKey: ['notifications', currentUser?.id] });
+    }
   };
 
   const getIcon = (type: string) => {
@@ -140,7 +143,9 @@ const Notifications: React.FC = () => {
 
   const handleNotificationClick = async (n: any) => {
     if (!n.id.toString().startsWith('msg-')) {
-      await supabase.from('notifications').delete().eq('id', n.id);
+        try {
+            await deleteDoc(doc(db, 'notifications', n.id));
+        } catch(e) {}
     }
     queryClient.invalidateQueries({ queryKey: ['notifications', currentUser?.id] });
     
@@ -154,7 +159,7 @@ const Notifications: React.FC = () => {
     <div className="max-w-[800px] mx-auto py-8 px-4">
       <div className="flex items-center justify-between mb-8">
         <h1 className="text-3xl font-black text-gray-900 dark:text-white">Notifications</h1>
-        {notifications.some(n => !n.is_read) && (
+        {notifications.some((n: any) => !n.is_read) && (
           <button onClick={markAllAsRead} className="text-[#1877F2] font-bold hover:underline flex items-center gap-1">
             <Check size={18} /> Mark all as read
           </button>
@@ -170,7 +175,7 @@ const Notifications: React.FC = () => {
         </div>
       ) : (
         <div className="bg-white dark:bg-black rounded-2xl shadow-sm border border-gray-100 dark:border-gray-800 overflow-hidden">
-          {notifications.map(n => (
+          {notifications.map((n: any) => (
             <div 
               key={n.id} 
               onClick={() => handleNotificationClick(n)}
