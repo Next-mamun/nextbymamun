@@ -3,7 +3,8 @@ import { Link, useLocation } from 'react-router-dom';
 import { Home, PlusSquare, MessageCircle, User, Users } from 'lucide-react';
 import { useAuth } from '@/contexts/AuthContext';
 import { useQuery } from '@tanstack/react-query';
-import { supabase } from '../lib/supabase';
+import { db } from '../lib/firebase';
+import { collection, query, where, getDocs } from 'firebase/firestore';
 
 const BottomNav: React.FC = () => {
   const location = useLocation();
@@ -11,17 +12,17 @@ const BottomNav: React.FC = () => {
   const isActive = (path: string) => location.pathname === path;
 
   const { data: totalUnread = 0 } = useQuery({
-    queryKey: ['totalUnread', currentUser?.id],
+    queryKey: ['totalUnread_firestore_bottom'],
     queryFn: async () => {
       if (!currentUser) return 0;
-      const { data } = await supabase
-        .from('messages')
-        .select('sender_id')
-        .eq('receiver_id', currentUser.id)
-        .or('is_read.eq.false,is_read.is.null');
+      const q = query(
+        collection(db, 'messages'), 
+        where('receiver_id', '==', currentUser.id),
+        where('is_read', '==', false)
+      );
+      const snap = await getDocs(q);
       
-      if (!data) return 0;
-      const uniqueSenders = new Set(data.map(msg => msg.sender_id));
+      const uniqueSenders = new Set(snap.docs.map(doc => doc.data().sender_id));
       return uniqueSenders.size;
     },
     enabled: !!currentUser,

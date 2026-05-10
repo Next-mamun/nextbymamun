@@ -1,10 +1,10 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { X, ChevronLeft, ChevronRight } from 'lucide-react';
+import { X, ChevronLeft, ChevronRight, Eye } from 'lucide-react';
 import { Story, User } from '@/types';
 import { Link } from 'react-router-dom';
-import { supabase } from '../lib/supabase';
+import { db } from '../lib/firebase';
+import { collection, query, where, getDocs, addDoc, doc, getDoc } from 'firebase/firestore';
 import { useAuth } from '@/contexts/AuthContext';
-import { Eye } from 'lucide-react';
 interface StoryViewerProps {
   stories: Story[];
   users: User[];
@@ -30,18 +30,35 @@ const StoryViewer: React.FC<StoryViewerProps> = ({ stories, users, initialStoryI
       
       // Record view
       if (story.user_id !== currentUser.id) {
-        await supabase.from('story_views').insert([{ story_id: story.id, viewer_id: currentUser.id }]).select().single();
+        const qExisting = query(
+          collection(db, 'story_views'), 
+          where('story_id', '==', story.id),
+          where('viewer_id', '==', currentUser.id)
+        );
+        const existingSnap = await getDocs(qExisting);
+        
+        if (existingSnap.empty) {
+          await addDoc(collection(db, 'story_views'), { 
+            story_id: story.id, 
+            viewer_id: currentUser.id,
+            created_at: new Date().toISOString()
+          });
+        }
       }
 
       // Fetch views if owner
       if (story.user_id === currentUser.id) {
-        const { data, count } = await supabase
-          .from('story_views')
-          .select('*, profiles(*)', { count: 'exact' })
-          .eq('story_id', story.id);
+        const qViews = query(collection(db, 'story_views'), where('story_id', '==', story.id));
+        const viewsSnap = await getDocs(qViews);
         
-        setViewCount(count || 0);
-        setViewers(data?.map(v => v.profiles) || []);
+        const viewersData = await Promise.all(viewsSnap.docs.map(async d => {
+           const vData = d.data();
+           const pDoc = await getDoc(doc(db, 'profiles', vData.viewer_id));
+           return pDoc.exists() ? pDoc.data() : null;
+        })).then(res => res.filter(Boolean));
+        
+        setViewCount(viewsSnap.size);
+        setViewers(viewersData);
       }
     };
 

@@ -61,23 +61,45 @@ const Feed: React.FC = () => {
 
   // Fetch Reels
   const { data: reels = [] } = useQuery({
-    queryKey: ['reels'],
+    queryKey: ['reels_ribbon'],
     queryFn: async () => {
-      const q = query(collection(db, 'reels'), orderBy('created_at', 'desc'), limit(5));
-      const snapshot = await getDocs(q);
-      const docs = await Promise.all(snapshot.docs.map(async d => {
-        const data = d.data() as any;
-        let profiles = null;
-        if (data.user_id) {
-           const pDoc = await getDoc(doc(db, 'profiles', data.user_id));
-           if (pDoc.exists()) profiles = pDoc.data();
-        }
-        return { id: d.id, ...data, profiles } as any;
-      }));
-      return docs || [];
+      // Try fetching from 'reels' collection first as it's the primary source
+      const qReels = query(collection(db, 'reels'), orderBy('created_at', 'desc'), limit(20));
+      const reelsSnap = await getDocs(qReels).catch(() => ({ docs: [] }));
+      
+      // Also try 'posts' with media_type 'video'
+      const qPosts = query(collection(db, 'posts'), where('media_type', '==', 'video'), orderBy('created_at', 'desc'), limit(20));
+      const postsSnap = await getDocs(qPosts).catch(() => ({ docs: [] }));
+      
+      const allDocs = [...(reelsSnap as any).docs, ...(postsSnap as any).docs];
+      let docs = await Promise.all(allDocs.map(getPopulatedReel));
+      
+      // Deduplicate by ID
+      const uniqueDocs = Array.from(new Map(docs.map(d => [d.id, d])).values());
+      
+      // Shuffle
+      return uniqueDocs.sort(() => Math.random() - 0.5).slice(0, 8);
     },
-    staleTime: 1000 * 60 * 5, // 5 minutes
+    staleTime: 1000 * 60 * 5,
   });
+
+  const getPopulatedReel = async (d: any) => {
+    try {
+      const data = d.data ? d.data() : d;
+      const id = d.id;
+      const profiles = await getProfile(data.user_id);
+      
+      // Fetch likes
+      const likesQuery = query(collection(db, 'likes'), where('post_id', '==', id));
+      const likesSnap = await getDocs(likesQuery).catch(() => ({ docs: [] }));
+      const likes = (likesSnap as any).docs.map((ld: any) => ({ id: ld.id, ...ld.data() }));
+
+      return { id, ...data, profiles, likes };
+    } catch (e) {
+      console.error("Error populating reel:", e);
+      return { id: d.id, ...d.data ? d.data() : d };
+    }
+  };
 
   const getProfile = async (userId: string) => {
      if (!userId) return null;
@@ -86,25 +108,28 @@ const Feed: React.FC = () => {
   };
 
   const getPopulatedPost = async (d: any) => {
-    const postData = d.data ? d.data() : d; // Handle both DocumentSnapshots and raw data
-    const id = d.id || d.post_id;
-    const profiles = await getProfile(postData.user_id);
-    
-    // Fetch comments
-    const commentsQuery = query(collection(db, 'comments'), where('post_id', '==', id));
-    const commentsSnap = await getDocs(commentsQuery);
-    const comments = await Promise.all(commentsSnap.docs.map(async cd => {
-       const cdData = cd.data();
-       const commentProfile = await getProfile(cdData.user_id);
-       return { id: cd.id, ...cdData, profiles: commentProfile };
-    }));
+    try {
+      const postData = d.data ? d.data() : d;
+      const id = d.id || d.post_id;
+      const profiles = await getProfile(postData.user_id);
+      
+      const commentsQuery = query(collection(db, 'comments'), where('post_id', '==', id));
+      const commentsSnap = await getDocs(commentsQuery).catch(() => ({ docs: [] }));
+      const comments = await Promise.all((commentsSnap as any).docs.map(async (cd: any) => {
+         const cdData = cd.data();
+         const commentProfile = await getProfile(cdData.user_id);
+         return { id: cd.id, ...cdData, profiles: commentProfile };
+      }));
 
-    // Fetch likes
-    const likesQuery = query(collection(db, 'likes'), where('post_id', '==', id));
-    const likesSnap = await getDocs(likesQuery);
-    const likes = likesSnap.docs.map(ld => ({ id: ld.id, ...ld.data() }));
+      const likesQuery = query(collection(db, 'likes'), where('post_id', '==', id));
+      const likesSnap = await getDocs(likesQuery).catch(() => ({ docs: [] }));
+      const likes = (likesSnap as any).docs.map((ld: any) => ({ id: ld.id, ...ld.data() }));
 
-    return { id, ...postData, profiles, comments, likes };
+      return { id, ...postData, profiles, comments, likes };
+    } catch (e) {
+      console.error("Error populating post:", e);
+      return { id: d.id, ...d.data ? d.data() : d };
+    }
   };
 
   // Fetch Posts with Infinite Scroll
@@ -138,7 +163,18 @@ const Feed: React.FC = () => {
       const snapshot = await getDocs(q);
       const lastVisible = snapshot.docs[snapshot.docs.length - 1];
 
-      const populatedPosts = await Promise.all(snapshot.docs.map(getPopulatedPost));
+      let populatedPosts = await Promise.all(snapshot.docs.map(getPopulatedPost));
+      
+      // If we are on the first page and results are low, try fetching from 'reels' collection as well
+      if (!pageParam && populatedPosts.length < POSTS_PER_PAGE && selectedCategory === 'All' && contentTypeFilter !== 'Text') {
+        const qReels = query(collection(db, 'reels'), orderBy('created_at', 'desc'), limit(POSTS_PER_PAGE));
+        const reelsSnap = await getDocs(qReels).catch(() => ({ docs: [] }));
+        const populatedReels = await Promise.all((reelsSnap as any).docs.map(getPopulatedPost));
+        
+        populatedPosts = [...populatedPosts, ...populatedReels];
+        // Remove duplicates potentially if some were in both
+        populatedPosts = Array.from(new Map(populatedPosts.map(p => [p.id, p])).values());
+      }
       
       return { data: populatedPosts, lastVisible };
     },
@@ -169,23 +205,19 @@ const Feed: React.FC = () => {
       flatPosts = flatPosts.filter(p => p.id !== sharedPost.id);
     }
 
-    if (flatPosts.length > 0 && selectedCategory === 'All' && contentTypeFilter === 'All') {
+    if (flatPosts.length > 0) {
       const seededRandom = (seed: number) => {
         let x = Math.sin(seed++) * 10000;
         return x - Math.floor(x);
       };
       
       let currentSeed = feedRandomSeed;
-      const toShuffle = flatPosts.slice(0, 20);
-      const remaining = flatPosts.slice(20);
-      
-      for (let i = toShuffle.length - 1; i > 0; i--) {
+      // Shuffle the entire list of currently loaded posts
+      for (let i = flatPosts.length - 1; i > 0; i--) {
         const j = Math.floor(seededRandom(currentSeed) * (i + 1));
         currentSeed += 1;
-        [toShuffle[i], toShuffle[j]] = [toShuffle[j], toShuffle[i]];
+        [flatPosts[i], flatPosts[j]] = [flatPosts[j], flatPosts[i]];
       }
-      
-      flatPosts = [...toShuffle, ...remaining];
     }
     
     if (sharedPost) {
@@ -230,34 +262,12 @@ const Feed: React.FC = () => {
   };
 
   const filteredPosts = useMemo(() => {
-    const baseFiltered = posts.filter(p => {
+    return posts.filter(p => {
       const contentStr = p.content || '';
       const nameStr = p.profiles?.display_name || '';
-      const matchesSearch = contentStr.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        nameStr.toLowerCase().includes(searchQuery.toLowerCase());
-      return matchesSearch;
+      return contentStr.toLowerCase().includes(searchQuery.toLowerCase()) ||
+             nameStr.toLowerCase().includes(searchQuery.toLowerCase());
     });
-
-    const videos = baseFiltered.filter(p => p.media_type === 'video' || (p.media_url && (p.media_url.includes('youtube.com') || p.media_url.includes('facebook.com'))));
-    const images = baseFiltered.filter(p => p.media_type === 'image');
-    const texts = baseFiltered.filter(p => !videos.includes(p) && !images.includes(p));
-
-    const result: any[] = [];
-    let vIdx = 0, iIdx = 0, tIdx = 0;
-
-    while (vIdx < videos.length || iIdx < images.length || tIdx < texts.length) {
-      for (let i = 0; i < 3 && vIdx < videos.length; i++) {
-        result.push(videos[vIdx++]);
-      }
-      for (let i = 0; i < 3 && iIdx < images.length; i++) {
-        result.push(images[iIdx++]);
-      }
-      for (let i = 0; i < 3 && tIdx < texts.length; i++) {
-        result.push(texts[tIdx++]);
-      }
-    }
-
-    return result;
   }, [posts, searchQuery]);
 
   const loadMoreRef = useRef<HTMLDivElement>(null);
@@ -604,11 +614,11 @@ const Feed: React.FC = () => {
         </div>
       </div>
 
-      {/* Quick Videos Ribbon */}
+      {/* Quick Reels Ribbon */}
       {reels.length > 0 && (
         <div className="bg-white dark:bg-black rounded-xl shadow-sm border border-gray-200 dark:border-gray-800 p-4">
           <div className="flex items-center justify-between mb-3 px-1">
-            <h3 className="font-black flex items-center gap-2 text-gray-900 dark:text-white"><Clapperboard size={20} className="text-[#1877F2]" /> Next Videos</h3>
+            <h3 className="font-black flex items-center gap-2 text-gray-900 dark:text-white"><Clapperboard size={20} className="text-[#1877F2]" /> Next Reels</h3>
             <Link to="/reels" className="text-[#1877F2] text-xs font-bold hover:underline">View All</Link>
           </div>
           <div className="flex gap-3 overflow-x-auto pb-2 scrollbar-hide">
@@ -617,9 +627,9 @@ const Feed: React.FC = () => {
                 {reel.source_type === 'youtube' ? (
                    <img src={`https://img.youtube.com/vi/${reel.youtube_id}/mqdefault.jpg`} className="w-full h-full object-cover" />
                 ) : (
-                   <img src={getPosterUrl(reel.video_url)} onError={(e) => { e.currentTarget.style.display='none'; e.currentTarget.nextElementSibling?.classList.remove('hidden'); }} className="w-full h-full object-cover" />
+                   <img src={getPosterUrl(reel.media_url)} onError={(e) => { e.currentTarget.style.display='none'; e.currentTarget.nextElementSibling?.classList.remove('hidden'); }} className="w-full h-full object-cover" />
                 )}
-                <video src={reel.video_url} className={`w-full h-full object-cover ${getPosterUrl(reel.video_url) ? 'hidden' : ''}`} muted playsInline />
+                <video src={reel.media_url} className={`w-full h-full object-cover ${getPosterUrl(reel.media_url) ? 'hidden' : ''}`} muted playsInline />
                 <div className="absolute inset-0 flex items-center justify-center bg-black/10">
                   <div className="bg-black/50 p-2 rounded-full backdrop-blur-sm">
                     <Clapperboard size={20} className="text-white" />

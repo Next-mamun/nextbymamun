@@ -5,7 +5,8 @@ import { Users, Settings, UserCircle, Home, MessageCircle } from 'lucide-react';
 import { useAuth } from '@/contexts/AuthContext';
 import { VerifiedBadge } from './VerifiedBadge';
 import { useQuery } from '@tanstack/react-query';
-import { supabase } from '../lib/supabase';
+import { db } from '../lib/firebase';
+import { collection, query, where, getDocs } from 'firebase/firestore';
 
 const SidebarItem = React.memo<{ icon: React.ReactNode, label: string | React.ReactNode, to: string, badge?: number }>(({ icon, label, to, badge }) => {
   const location = useLocation();
@@ -29,17 +30,17 @@ const Sidebar: React.FC = () => {
   const { currentUser } = useAuth();
 
   const { data: totalUnread = 0 } = useQuery({
-    queryKey: ['totalUnread'],
+    queryKey: ['totalUnread_firestore'],
     queryFn: async () => {
       if (!currentUser) return 0;
-      const { data } = await supabase
-        .from('messages')
-        .select('sender_id')
-        .eq('receiver_id', currentUser.id)
-        .or('is_read.eq.false,is_read.is.null');
+      const q = query(
+        collection(db, 'messages'), 
+        where('receiver_id', '==', currentUser.id),
+        where('is_read', '==', false)
+      );
+      const snap = await getDocs(q);
       
-      if (!data) return 0;
-      const uniqueSenders = new Set(data.map(msg => msg.sender_id));
+      const uniqueSenders = new Set(snap.docs.map(doc => doc.data().sender_id));
       return uniqueSenders.size;
     },
     enabled: !!currentUser,

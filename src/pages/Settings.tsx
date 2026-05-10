@@ -6,10 +6,11 @@ import {
   Monitor, Database, Briefcase, Smartphone, Key, UserX, EyeOff, 
   MessageSquare, Minimize2, Maximize2, Moon, Sun, Type, HardDrive, Download, 
   BarChart3, DollarSign, AlertTriangle, FileText, RefreshCw, CheckCircle, Upload, Bot, Trash2, UserMinus, BarChart, Users,
-  BellRing
+  BellRing, Camera
 } from 'lucide-react';
 import { useAuth, useTheme } from '@/contexts/AuthContext';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useUpload } from '@/contexts/UploadContext';
 
 import { db, auth } from '../lib/firebase';
 import { collection, query, where, getDocs, deleteDoc, doc, getDoc, updateDoc } from 'firebase/firestore';
@@ -141,8 +142,10 @@ const Row: React.FC<{ icon?: React.ReactNode, title: string, description?: strin
 );
 
 const Settings: React.FC = () => {
-  const { currentUser } = useAuth();
+  const { currentUser, setCurrentUser } = useAuth();
   const { darkMode, toggleDarkMode, desktopMode, toggleDesktopMode, nextoEnabled, toggleNexto, robotSize, setRobotSize } = useTheme();
+  const { addUpload } = useUpload();
+  const avatarInputRef = React.useRef<HTMLInputElement>(null);
   const [textSize, setTextSize] = useState<'normal' | 'large' | 'extra-large'>('normal');
   const [activeTab, setActiveTab] = useState('display');
   const [searchQuery, setSearchQuery] = useState('');
@@ -488,6 +491,53 @@ const Settings: React.FC = () => {
               <p className="text-gray-500 dark:text-gray-400 font-medium mb-8">Manage your account details.</p>
               
               <Section title="Profile Information">
+                <div className="flex items-center justify-between p-4 border-b border-gray-100 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors">
+                  <div className="flex items-center gap-4">
+                    <div className="relative">
+                      <img src={profile?.avatar_url || currentUser?.avatar_url} className="w-16 h-16 rounded-full object-cover border-2 border-gray-100 dark:border-gray-800 shadow-sm" />
+                      <button 
+                        onClick={() => avatarInputRef.current?.click()}
+                        className="absolute -bottom-1 -right-1 bg-[#1877F2] text-white p-1.5 rounded-full border-2 border-white dark:border-gray-800 shadow-md hover:bg-blue-600 transition-colors"
+                      >
+                        <Camera size={14} />
+                      </button>
+                      <input 
+                        type="file" 
+                        ref={avatarInputRef} 
+                        hidden 
+                        accept="image/*" 
+                        onChange={(e) => {
+                          const file = e.target.files?.[0];
+                          if (file && currentUser) {
+                            addUpload(file, 'profile', {
+                              userId: currentUser.id,
+                              payload: { avatar_url: '' },
+                              onSuccess: async () => {
+                                const docSnap = await getDoc(doc(db, 'profiles', currentUser.id));
+                                if (docSnap.exists()) {
+                                  const fresh = docSnap.data();
+                                  setProfile(fresh);
+                                  setCurrentUser({ id: docSnap.id, ...fresh } as any);
+                                  toast.success('Profile photo updated!');
+                                }
+                              }
+                            });
+                          }
+                        }} 
+                      />
+                    </div>
+                    <div>
+                      <p className="font-bold text-gray-900 dark:text-gray-100">Profile Photo</p>
+                      <p className="text-xs text-gray-500 font-medium mt-0.5">Change your public profile picture</p>
+                    </div>
+                  </div>
+                  <button 
+                    onClick={() => avatarInputRef.current?.click()} 
+                    className="text-blue-500 hover:text-blue-600 font-bold text-sm"
+                  >
+                    Change
+                  </button>
+                </div>
                 <Row icon={<User size={20}/>} title="Display Name" description={profile?.display_name || currentUser?.display_name} action={renderAction('display_name', profile?.display_name || currentUser?.display_name || '')} />
                 <Row icon={<Smartphone size={20}/>} title="Username" description={`@${profile?.username || currentUser?.username}`} action={renderAction('username', profile?.username || currentUser?.username || '')} border={false} />
               </Section>

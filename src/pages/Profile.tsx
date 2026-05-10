@@ -9,6 +9,7 @@ import ZoomableImage from '@/components/ZoomableImage';
 import { Link } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useUpload } from '@/contexts/UploadContext';
+import { toast } from 'sonner';
 
 import PostCard from '@/components/PostCard';
 
@@ -50,6 +51,7 @@ const Profile: React.FC = () => {
   });
 
   const avatarInputRef = React.useRef<HTMLInputElement>(null);
+  const coverInputRef = React.useRef<HTMLInputElement>(null);
   const isOwnProfile = currentUser?.username === username || currentUser?.id === username;
 
   useEffect(() => {
@@ -180,17 +182,25 @@ const Profile: React.FC = () => {
     }
   };
 
-  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>, type: 'avatar') => {
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>, type: 'avatar' | 'cover') => {
     const file = e.target.files?.[0];
     if (file) {
       addUpload(file, 'profile', {
         userId: currentUser?.id,
-        payload: { avatar_url: '' }, // URL will be added by UploadContext
+        payload: type === 'avatar' ? { avatar_url: '' } : { cover_url: '' }, // URL will be added by UploadContext
         onSuccess: async () => {
           const uDoc = await getDoc(doc(db, 'profiles', currentUser?.id as string));
           if (uDoc.exists()) {
-            setCurrentUser({ id: uDoc.id, ...uDoc.data() } as any);
+            const freshData = { id: uDoc.id, ...uDoc.data() } as any;
+            setCurrentUser(freshData);
+            setEditData({
+              display_name: freshData.display_name,
+              bio: freshData.bio || '',
+              avatar_url: freshData.avatar_url,
+              cover_url: freshData.cover_url || ''
+            });
             queryClient.invalidateQueries({ queryKey: ['profile', username] });
+            toast.success(`${type === 'avatar' ? 'Profile picture' : 'Cover photo'} updated!`);
           }
         }
       });
@@ -261,9 +271,21 @@ const Profile: React.FC = () => {
       )}
       <div className="w-full max-w-[1100px] mx-auto">
         <div className="relative mb-24">
-          <div className="h-[200px] md:h-[300px] bg-[#60A5FA] rounded-b-xl overflow-hidden shadow-sm relative z-0">
+          <div className="h-[200px] md:h-[300px] bg-gradient-to-r from-blue-400 to-blue-600 rounded-b-xl overflow-hidden shadow-sm relative z-0 group">
             {(isEditing ? editData.cover_url : profile.cover_url) && (
-              <img src={isEditing ? editData.cover_url : profile.cover_url} className="w-full h-full object-cover" />
+              <img src={isEditing ? editData.cover_url : profile.cover_url} className="w-full h-full object-cover transition-transform duration-700 group-hover:scale-105" />
+            )}
+            {isOwnProfile && (
+              <>
+                <input type="file" ref={coverInputRef} hidden onChange={(e) => handleFileUpload(e, 'cover')} accept="image/*" />
+                <button 
+                  onClick={() => coverInputRef.current?.click()}
+                  className="absolute bottom-4 right-4 bg-black/50 hover:bg-black/70 text-white p-2.5 rounded-full backdrop-blur-md border border-white/20 shadow-xl transition-all opacity-0 group-hover:opacity-100 flex items-center gap-2"
+                >
+                  <Camera size={20} />
+                  <span className="text-sm font-bold pr-1">Update Cover</span>
+                </button>
+              </>
             )}
           </div>
           

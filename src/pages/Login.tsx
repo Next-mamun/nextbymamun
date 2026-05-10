@@ -4,7 +4,8 @@ import { Link, useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '@/contexts/AuthContext';
 import { auth, db } from '../lib/firebase';
 import { signInWithEmailAndPassword, signInWithPopup, GoogleAuthProvider } from 'firebase/auth';
-import { doc, getDoc, collection, query, where, getDocs } from 'firebase/firestore';
+import { doc, getDoc, setDoc, collection, query, where, getDocs } from 'firebase/firestore';
+import { generateBio } from '../services/geminiService';
 import { User, Lock, Key } from 'lucide-react';
 import { toast } from 'sonner';
 
@@ -32,13 +33,22 @@ const Login: React.FC = () => {
       
       const userDoc = await getDoc(doc(db, 'profiles', result.user.uid));
       if (!userDoc.exists()) {
-        await auth.signOut();
-        setError('No account found for this Google email. Please register first.');
-        setIsGoogleLoading(false);
-        return;
+        const emailUser = result.user.email?.split('@')[0] || result.user.uid.substring(0, 8);
+        const bio = await generateBio(emailUser);
+        const newProfile = {
+           username: emailUser,
+           display_name: result.user.displayName || emailUser,
+           email: result.user.email,
+           bio: bio,
+           avatar_url: result.user.photoURL || `https://api.dicebear.com/7.x/avataaars/svg?seed=${emailUser}`,
+           created_at: new Date().toISOString()
+        };
+        await setDoc(doc(db, 'profiles', result.user.uid), newProfile);
+        setCurrentUser({ id: result.user.uid, ...newProfile } as any);
+      } else {
+        setCurrentUser({ id: userDoc.id, ...userDoc.data() } as any);
       }
       
-      setCurrentUser({ id: userDoc.id, ...userDoc.data() } as any);
       navigate(returnUrl);
     } catch (error: any) {
       setError(error.message);

@@ -115,7 +115,7 @@ export const UploadProvider: React.FC<{ children: React.ReactNode }> = ({ childr
               fileBody = await res.blob();
             }
 
-            if (type === 'profile') {
+            if (type === 'profile' && false) { // Disabling direct Firebase Storage for profile for now, use Cloudinary fallback or main path below
               console.log(`Uploading ${mediaType} to Firebase Storage (Profile Picture)...`);
               setUploads(prev => prev.map(x => x.id === id ? { ...x, status: 'uploading', progress: 0 } : x));
               clearInterval(interval);
@@ -296,9 +296,17 @@ export const UploadProvider: React.FC<{ children: React.ReactNode }> = ({ childr
           created_at: new Date().toISOString()
         });
       } else if (type === 'reel') {
-        const payload = { ...metadata.payload, created_at: new Date().toISOString() };
-        if (mediaUrl) payload.video_url = mediaUrl;
-        await addDoc(collection(db, 'reels'), payload);
+        const payload = {
+          user_id: metadata.userId,
+          content: metadata.payload.content || metadata.payload.caption || '',
+          media_url: mediaUrl,
+          media_type: 'video',
+          created_at: new Date().toISOString(),
+          source_type: metadata.payload.source_type || 'local',
+          youtube_id: metadata.payload.youtube_id || null,
+          views: 0
+        };
+        await addDoc(collection(db, 'posts'), payload);
       } else if (type === 'message') {
         const payload = { ...metadata.payload, created_at: new Date().toISOString() };
         if (mediaUrl) payload.media_url = mediaUrl;

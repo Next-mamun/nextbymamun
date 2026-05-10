@@ -3,7 +3,8 @@ import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { Plus, X, Link as LinkIcon, ThumbsUp, MessageSquare, Share2, Music, UserPlus, Send, Video, Trash2, CheckCircle, Volume2, VolumeX, Eye, Play } from 'lucide-react';
 import { Link, useParams } from 'react-router-dom';
 import { useAuth } from '@/contexts/AuthContext';
-import { supabase } from '../lib/supabase';
+import { db, auth as firebaseAuth } from '../lib/firebase';
+import { collection, query, where, orderBy, limit, getDocs, doc, getDoc, updateDoc, deleteDoc, addDoc, onSnapshot, startAfter } from 'firebase/firestore';
 import { VerifiedBadge } from '@/components/VerifiedBadge';
 import { useQuery, useInfiniteQuery, useQueryClient } from '@tanstack/react-query';
 import { Reel } from '@/types';
@@ -13,6 +14,7 @@ import { redis } from '@/lib/redis';
 
 import { useUpload } from '@/contexts/UploadContext';
 import ConfirmDialog from '@/components/ConfirmDialog';
+import { toast } from 'sonner';
 
 const REELS_PER_PAGE = 5;
 
@@ -50,17 +52,43 @@ const Reels: React.FC = () => {
     return () => window.removeEventListener('message', handleMessage);
   }, []);
 
+  const getProfile = async (userId: string) => {
+     if (!userId) return null;
+     const userDoc = await getDoc(doc(db, 'profiles', userId));
+     return userDoc.exists() ? userDoc.data() : null;
+  };
+
+  const getPopulatedReel = async (d: any) => {
+    const data = d.data ? d.data() : d;
+    const id = d.id;
+    const profiles = await getProfile(data.user_id);
+    
+    // Fetch comments
+    const commentsQuery = query(collection(db, 'comments'), where('post_id', '==', id));
+    const commentsSnap = await getDocs(commentsQuery);
+    const comments = await Promise.all(commentsSnap.docs.map(async cd => {
+       const cdData = cd.data();
+       const commentProfile = await getProfile(cdData.user_id);
+       return { id: cd.id, ...cdData, profiles: commentProfile };
+    }));
+
+    // Fetch likes
+    const likesQuery = query(collection(db, 'likes'), where('post_id', '==', id));
+    const likesSnap = await getDocs(likesQuery);
+    const likes = likesSnap.docs.map(ld => ({ id: ld.id, ...ld.data() }));
+
+    return { id, ...data, profiles, comments, likes };
+  };
+
   const { data: sharedReel } = useQuery({
-    queryKey: ['reel', sharedReelId],
     queryFn: async () => {
       if (!sharedReelId) return null;
-      const { data, error } = await supabase
-        .from('posts')
-        .select('*, profiles(*), likes(*), comments(*, profiles(*))')
-        .eq('id', sharedReelId)
-        .single();
-      if (error) throw error;
-      return data;
+      let reelDoc = await getDoc(doc(db, 'posts', sharedReelId));
+      if (!reelDoc.exists()) {
+        reelDoc = await getDoc(doc(db, 'reels', sharedReelId));
+      }
+      if (!reelDoc.exists()) return null;
+      return await getPopulatedReel(reelDoc);
     },
     enabled: !!sharedReelId,
   });
@@ -72,9 +100,9 @@ const Reels: React.FC = () => {
     isFetchingNextPage,
     isLoading: reelsLoading,
   } = useInfiniteQuery({
-    queryKey: ['reels_infinite'],
-    queryFn: async ({ pageParam = 0 }) => {
-      const cacheKey = `reels_page_${pageParam}`;
+    queryKey: ['reels_infinite_firestore_v2'],
+    queryFn: async ({ pageParam = undefined }: { pageParam: any }) => {
+      const cacheKey = `reels_page_firestore_v2_${pageParam ? pageParam.id : 0}`;
       
       // Attempt to load from localStorage first in case of offline
       if (!navigator.onLine) {
@@ -89,45 +117,42 @@ const Reels: React.FC = () => {
         if (cached) {
           const data = typeof cached === 'string' ? JSON.parse(cached) : cached;
           try { localStorage.setItem(cacheKey, JSON.stringify(data)); } catch(e) {}
-          return data;
+          return { data, lastVisible: null };
         }
       } catch (e) {
         console.warn('Redis cache error', e);
       }
 
-      const { data, error } = await supabase
-        .from('posts')
-        .select('*, profiles(*), likes(*), comments(*, profiles(*))')
-        .eq('media_type', 'video')
-        .not('media_url', 'ilike', '%youtube.com/embed%')
-        .not('media_url', 'ilike', '%youtu.be%')
-        .not('media_url', 'ilike', '%facebook.com%')
-        .not('media_url', 'ilike', '%fb.watch%')
-        .order('created_at', { ascending: false })
-        .range(pageParam * REELS_PER_PAGE, (pageParam + 1) * REELS_PER_PAGE - 1);
+      let q = query(
+        collection(db, 'posts'), 
+        where('media_type', '==', 'video'),
+        orderBy('created_at', 'desc'), 
+        limit(REELS_PER_PAGE)
+      );
       
-      if (error && !navigator.onLine) {
-         try {
-           const localCache = localStorage.getItem(cacheKey);
-           if (localCache) return JSON.parse(localCache);
-         } catch (e) {}
-      } else if (error) {
-         throw error;
+      if (pageParam) {
+        q = query(q, startAfter(pageParam));
       }
 
-      try {
-        const responseData = data || [];
-        if (responseData.length > 0) {
-          await redis.set(cacheKey, responseData, { ex: 30 }); // 30 sec cache for fresh content but fast load
-          localStorage.setItem(cacheKey, JSON.stringify(responseData));
-        }
-      } catch (e) {}
+      const snapshot = await getDocs(q);
+      const lastVisible = snapshot.docs[snapshot.docs.length - 1];
+      let data = await Promise.all(snapshot.docs.map(getPopulatedReel));
 
-      return data || [];
+      // If results are low on first page, fallback to 'reels' collection
+      if (!pageParam && data.length < REELS_PER_PAGE) {
+        const qReels = query(collection(db, 'reels'), orderBy('created_at', 'desc'), limit(REELS_PER_PAGE));
+        const reelsSnap = await getDocs(qReels).catch(() => ({ docs: [] }));
+        const legacyReels = await Promise.all((reelsSnap as any).docs.map(getPopulatedReel));
+        data = [...data, ...legacyReels];
+        // Dedupe
+        data = Array.from(new Map(data.map(r => [r.id, r])).values());
+      }
+
+      return { data, lastVisible };
     },
-    initialPageParam: 0,
-    getNextPageParam: (lastPage, allPages) => {
-      return lastPage.length === REELS_PER_PAGE ? allPages.length : undefined;
+    initialPageParam: undefined as any,
+    getNextPageParam: (lastPage) => {
+      return lastPage.data.length === REELS_PER_PAGE ? lastPage.lastVisible : undefined;
     },
     staleTime: 1000 * 60 * 5, // 5 minutes
   });
@@ -135,9 +160,8 @@ const Reels: React.FC = () => {
   const [reelsRandomSeed] = useState(() => Math.random());
 
   const reels = useMemo(() => {
-    let flatReels = Array.from(new Map((reelsData?.pages.flat() || []).map(r => [r.id, r])).values());
+    let flatReels = Array.from(new Map((reelsData?.pages.flatMap(p => p.data) || []).map(r => [r.id, r])).values());
     
-    // Shuffle the first few items to make it seem random without breaking pagination logic completely
     if (flatReels.length > 0) {
       if (sharedReel) {
         flatReels = flatReels.filter(r => r.id !== sharedReel.id);
@@ -149,18 +173,13 @@ const Reels: React.FC = () => {
       };
       
       let currentSeed = reelsRandomSeed;
-      const shuffleCount = Math.min(flatReels.length, 25);
-      const toShuffle = flatReels.slice(0, shuffleCount);
-      const rest = flatReels.slice(shuffleCount);
-      
-      for (let i = toShuffle.length - 1; i > 0; i--) {
+      // Shuffle the entire list of currently loaded reels
+      for (let i = flatReels.length - 1; i > 0; i--) {
         const rand = seededRandom(currentSeed);
         currentSeed += 1;
         const j = Math.floor(rand * (i + 1));
-        [toShuffle[i], toShuffle[j]] = [toShuffle[j], toShuffle[i]];
+        [flatReels[i], flatReels[j]] = [flatReels[j], flatReels[i]];
       }
-      
-      flatReels = [...toShuffle, ...rest];
       
       if (sharedReel) {
         flatReels.unshift(sharedReel);
@@ -179,16 +198,12 @@ const Reels: React.FC = () => {
   }, [reels, activeReelId]);
 
   useEffect(() => {
-    const channel = supabase.channel('reels_realtime_changes')
-      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'posts', filter: 'media_type=eq.video' }, () => {
-        queryClient.invalidateQueries({ queryKey: ['reels_infinite'] });
-      })
-      .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'posts' }, () => {
-        queryClient.invalidateQueries({ queryKey: ['reels_infinite'] });
-      })
-      .subscribe();
+    const q = query(collection(db, 'posts'), where('media_type', '==', 'video'), orderBy('created_at', 'desc'), limit(1));
+    const unsubscribe = onSnapshot(q, () => {
+      queryClient.invalidateQueries({ queryKey: ['reels_infinite_firestore_v2'] });
+    });
 
-    return () => { supabase.removeChannel(channel); };
+    return () => unsubscribe();
   }, [queryClient]);
 
   // Intersection Observer for Auto-Play and Infinite Scroll
@@ -256,9 +271,9 @@ const Reels: React.FC = () => {
 
     let payload: any = {
       user_id: currentUser?.id,
-      caption,
+      content: caption,
       source_type: 'local',
-      video_url: '' // Will be updated by UploadContext
+      media_url: '' // Will be updated by UploadContext
     };
 
     const ytId = getYoutubeId(targetLink);
@@ -302,24 +317,27 @@ const Reels: React.FC = () => {
     setDeleteConfirmId(null);
 
     // Optimistic delete
-    queryClient.setQueriesData({ queryKey: ['reels_infinite'] }, (oldData: any) => {
+    queryClient.setQueriesData({ queryKey: ['reels_infinite_firestore_v2'] }, (oldData: any) => {
       if (!oldData || !oldData.pages) return oldData;
       return {
         ...oldData,
-        pages: oldData.pages.map((page: any[]) => page.filter((r: any) => r.id !== id))
+        pages: oldData.pages.map((page: any) => ({
+          ...page,
+          data: page.data.filter((r: any) => r.id !== id)
+        }))
       };
     });
     try {
-      await supabase.from('posts').delete().eq('id', id);
+      await deleteDoc(doc(db, 'posts', id));
     } catch (e) {
       console.error(e);
-      queryClient.invalidateQueries({ queryKey: ['reels_infinite'] });
+      queryClient.invalidateQueries({ queryKey: ['reels_infinite_firestore_v2'] });
     }
   };
 
   const activeIndex = useMemo(() => reels.findIndex(r => r.id === activeReelId), [reels, activeReelId]);
 
-  if (reelsLoading && reels.length === 0) return <div className="h-screen flex items-center justify-center text-[#1877F2] font-black">Loading Videos...</div>;
+  if (reelsLoading && reels.length === 0) return <div className="h-screen flex items-center justify-center text-[#1877F2] font-black">Loading Reels...</div>;
 
   return (
     <div className="fixed inset-0 z-40 bg-black overflow-y-scroll snap-y snap-mandatory scroll-smooth hide-scrollbar flex flex-col md:items-center">
@@ -328,7 +346,7 @@ const Reels: React.FC = () => {
       {reels.length === 0 ? (
         <div className="h-full w-full flex flex-col items-center justify-center text-white/50 px-10 text-center shrink-0 mix-blend-screen">
           <Video size={80} strokeWidth={1} className="mb-4 opacity-20" />
-          <p className="text-xl font-bold">No Videos Yet</p>
+          <p className="text-xl font-bold">No Reels Yet</p>
           <p className="text-sm">Be the first to share a moment on Next!</p>
         </div>
       ) : reels.map((reel, index) => {
@@ -371,8 +389,8 @@ const Reels: React.FC = () => {
 
       <ConfirmDialog
         isOpen={!!deleteConfirmId}
-        title="Delete Video"
-        message="Are you sure you want to delete this video? This action cannot be undone."
+        title="Delete Reel"
+        message="Are you sure you want to delete this reel? This action cannot be undone."
         onConfirm={executeDelete}
         onCancel={() => setDeleteConfirmId(null)}
       />
@@ -382,7 +400,7 @@ const Reels: React.FC = () => {
         <div className="fixed inset-0 z-[100] bg-black/90 flex items-center justify-center p-4 backdrop-blur-sm animate-in fade-in duration-200">
           <div className="bg-white dark:bg-gray-900 rounded-3xl w-full max-w-md overflow-hidden shadow-2xl flex flex-col max-h-[90vh]">
             <div className="p-4 border-b border-gray-100 dark:border-gray-800 flex justify-between items-center bg-gray-50 dark:bg-gray-800">
-              <h2 className="font-black text-xl text-gray-900 dark:text-white">Create Video</h2>
+              <h2 className="font-black text-xl text-gray-900 dark:text-white">Create Reel</h2>
               <button onClick={() => setIsUploadModalOpen(false)} className="p-2 hover:bg-gray-200 dark:hover:bg-gray-700 rounded-full transition-colors"><X size={20} className="text-gray-600 dark:text-gray-300" /></button>
             </div>
             
@@ -499,9 +517,10 @@ const ReelItem: React.FC<{ reel: any, isActive: boolean, isNeighbor: boolean, on
       if (!hasViewed.current) {
         const incrementView = async () => {
           try {
-            const { data } = await supabase.from('posts').select('views').eq('id', reel.id).single();
-            if (data) {
-              await supabase.from('posts').update({ views: (data.views || 0) + 1 }).eq('id', reel.id);
+            const reelRef = doc(db, 'posts', reel.id);
+            const reelSnap = await getDoc(reelRef);
+            if (reelSnap.exists()) {
+              await updateDoc(reelRef, { views: (reelSnap.data().views || 0) + 1 });
               setViews(prev => prev + 1);
             }
           } catch (err) {
@@ -576,19 +595,24 @@ const ReelItem: React.FC<{ reel: any, isActive: boolean, isNeighbor: boolean, on
     if (isLiked) {
       setLikesCount(prev => prev - 1);
       setIsLiked(false);
-      await supabase.from('likes').delete().match({ post_id: reel.id, user_id: currentUser?.id });
+      const q = query(collection(db, 'likes'), where('post_id', '==', reel.id), where('user_id', '==', currentUser.id));
+      const snap = await getDocs(q);
+      snap.forEach(async (d) => {
+        await deleteDoc(doc(db, 'likes', d.id));
+      });
     } else {
       setLikesCount(prev => prev + 1);
       setIsLiked(true);
-      await supabase.from('likes').insert([{ post_id: reel.id, user_id: currentUser?.id }]);
+      await addDoc(collection(db, 'likes'), { post_id: reel.id, user_id: currentUser.id, created_at: new Date().toISOString() });
       
       if (reel.user_id !== currentUser?.id) {
-        await supabase.from('notifications').insert([{
+        await addDoc(collection(db, 'notifications'), {
           user_id: reel.user_id,
           sender_id: currentUser?.id,
           type: 'like',
+          is_read: false,
           created_at: new Date().toISOString()
-        }]);
+        });
       }
     }
   };
@@ -609,23 +633,24 @@ const ReelItem: React.FC<{ reel: any, isActive: boolean, isNeighbor: boolean, on
     
     if (!currentUser) return;
 
-    const { data, error } = await supabase
-      .from('comments')
-      .insert([{ post_id: reel.id, user_id: currentUser?.id, content: commentText }])
-      .select('*, profiles(*)')
-      .single();
+    const commentData = { post_id: reel.id, user_id: currentUser?.id, content: commentText, created_at: new Date().toISOString() };
+    const docRef = await addDoc(collection(db, 'comments'), commentData);
+    
+    // We don't have the profile in the return normally so we construct it
+    const newComment = { id: docRef.id, ...commentData, profiles: currentUser };
 
-    if (data) {
-      setComments(prev => [data, ...prev]);
+    if (newComment) {
+      setComments(prev => [newComment, ...prev]);
       setCommentText('');
       
       if (reel.user_id !== currentUser?.id) {
-        await supabase.from('notifications').insert([{
+        await addDoc(collection(db, 'notifications'), {
           user_id: reel.user_id,
           sender_id: currentUser?.id,
           type: 'comment',
+          is_read: false,
           created_at: new Date().toISOString()
-        }]);
+        });
       }
     }
   };
@@ -654,17 +679,23 @@ const ReelItem: React.FC<{ reel: any, isActive: boolean, isNeighbor: boolean, on
     try {
       const shareUrl = `${window.location.origin}/reels/${reel.id}`;
       if (navigator.share) {
-        await navigator.share({
-          title: `Post by ${reel.profiles?.display_name}`,
-          text: reel.content,
-          url: shareUrl,
-        });
-      } else {
-        await navigator.clipboard.writeText(shareUrl);
-        alert('Link copied to clipboard!');
+        try {
+          await navigator.share({
+            title: `Post by ${reel.profiles?.display_name}`,
+            text: reel.content,
+            url: shareUrl,
+          });
+          return;
+        } catch (shareErr: any) {
+          if (shareErr.name === 'AbortError') return;
+          console.warn('Navigator share failed, falling back to clipboard', shareErr);
+        }
       }
+      
+      await navigator.clipboard.writeText(shareUrl);
+      toast.success('Link copied to clipboard!');
     } catch (e) {
-      console.error('Error sharing', e);
+      console.error('Final fallback share error', e);
     }
   };
 

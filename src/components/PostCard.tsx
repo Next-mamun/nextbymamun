@@ -13,6 +13,7 @@ import VideoPlayer from '@/components/VideoPlayer';
 import EmbedPlayer from '@/components/EmbedPlayer';
 import ConfirmDialog from '@/components/ConfirmDialog';
 import { formatTime } from '@/lib/utils';
+import { toast } from 'sonner';
 
 interface PostCardProps {
   post: any;
@@ -103,17 +104,25 @@ const PostCard = React.memo(({ post, onObserve, isProfileView = false }: PostCar
     try {
       const shareUrl = `${window.location.origin}/post/${post.id}`;
       if (navigator.share) {
-        await navigator.share({
-          title: `Post by ${post.profiles?.display_name}`,
-          text: post.content,
-          url: shareUrl,
-        });
-      } else {
-        await navigator.clipboard.writeText(shareUrl);
-        alert('Link copied to clipboard!');
+        try {
+          await navigator.share({
+            title: `Post by ${post.profiles?.display_name}`,
+            text: post.content,
+            url: shareUrl,
+          });
+          return;
+        } catch (shareErr: any) {
+          // If the user cancelled, don't show an error or fallback
+          if (shareErr.name === 'AbortError') return;
+          console.warn('Navigator share failed, falling back to clipboard', shareErr);
+        }
       }
+      
+      // Fallback for no navigator.share OR if it failed (e.g. iframe permission)
+      await navigator.clipboard.writeText(shareUrl);
+      toast.success('Link copied to clipboard!');
     } catch (e) {
-      console.error('Error sharing', e);
+      console.error('Final fallback share error', e);
     }
   };
 
