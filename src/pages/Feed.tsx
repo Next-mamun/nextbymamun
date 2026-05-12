@@ -469,7 +469,7 @@ const Feed: React.FC = () => {
 
       <div className="bg-white dark:bg-black rounded-xl shadow-sm border border-gray-100 dark:border-gray-800 overflow-hidden mb-4">
         <div className="p-4 flex gap-3">
-          <ProfilePhoto src={currentUser?.avatar_url || ''} alt="user" size="medium" />
+          <ProfilePhoto src={currentUser?.avatar_url || undefined} alt="user" size="medium" />
           <div className="flex-1">
             <textarea 
               value={newPostContent} 
@@ -527,7 +527,7 @@ const Feed: React.FC = () => {
             ) && (
               <div className="relative mt-3 bg-black rounded-xl overflow-hidden aspect-video flex justify-center shadow-inner">
                 <iframe 
-                  src={getEmbedUrl(ytLink) || getEmbedUrl(newPostContent.match(/https?:\/\/(?:www\.|m\.|web\.)?(?:youtube\.com|youtu\.be|facebook\.com|fb\.watch)\/[^\s]+/i)?.[0] || '') || ''} 
+                  src={getEmbedUrl(ytLink) || getEmbedUrl(newPostContent.match(/https?:\/\/(?:www\.|m\.|web\.)?(?:youtube\.com|youtu\.be|facebook\.com|fb\.watch)\/[^\s]+/i)?.[0] || '') || undefined} 
                   className="w-full h-full border-none"
                   allowFullScreen
                 />
@@ -627,9 +627,9 @@ const Feed: React.FC = () => {
                 {reel.source_type === 'youtube' ? (
                    <img src={`https://img.youtube.com/vi/${reel.youtube_id}/mqdefault.jpg`} className="w-full h-full object-cover" />
                 ) : (
-                   <img src={getPosterUrl(reel.media_url)} onError={(e) => { e.currentTarget.style.display='none'; e.currentTarget.nextElementSibling?.classList.remove('hidden'); }} className="w-full h-full object-cover" />
+                   <img src={getPosterUrl(reel.media_url) || undefined} onError={(e) => { e.currentTarget.style.display='none'; e.currentTarget.nextElementSibling?.classList.remove('hidden'); }} className={`w-full h-full object-cover ${!getPosterUrl(reel.media_url) ? 'hidden' : ''}`} />
                 )}
-                <video src={reel.media_url} className={`w-full h-full object-cover ${getPosterUrl(reel.media_url) ? 'hidden' : ''}`} muted playsInline />
+                <video src={reel.media_url ? `${reel.media_url}#t=0.1` : undefined} preload="metadata" className={`w-full h-full object-cover ${getPosterUrl(reel.media_url) ? 'hidden' : ''}`} muted playsInline />
                 <div className="absolute inset-0 flex items-center justify-center bg-black/10">
                   <div className="bg-black/50 p-2 rounded-full backdrop-blur-sm">
                     <Clapperboard size={20} className="text-white" />
@@ -677,7 +677,7 @@ const Feed: React.FC = () => {
           {uploads.filter(u => u.type === 'post').map(upload => (
             <div key={upload.id} className={`bg-white dark:bg-black rounded-xl shadow-sm border ${upload.status === 'error' ? 'border-red-500' : 'border-[#1877F2] animate-pulse'} p-4`}>
               <div className="flex items-center gap-3 mb-3">
-                <ProfilePhoto src={currentUser?.avatar_url || ''} alt="me" size="medium" />
+                <ProfilePhoto src={currentUser?.avatar_url || undefined} alt="me" size="medium" />
                 <div>
                   <h4 className="font-bold text-gray-900 dark:text-white">{currentUser?.display_name}</h4>
                   <p className={`text-xs font-bold ${upload.status === 'error' ? 'text-red-500' : 'text-[#1877F2]'}`}>

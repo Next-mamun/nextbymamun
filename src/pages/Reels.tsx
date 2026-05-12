@@ -81,6 +81,7 @@ const Reels: React.FC = () => {
   };
 
   const { data: sharedReel } = useQuery({
+    queryKey: ['shared_reel', sharedReelId],
     queryFn: async () => {
       if (!sharedReelId) return null;
       let reelDoc = await getDoc(doc(db, 'posts', sharedReelId));
@@ -160,7 +161,7 @@ const Reels: React.FC = () => {
   const [reelsRandomSeed] = useState(() => Math.random());
 
   const reels = useMemo(() => {
-    let flatReels = Array.from(new Map((reelsData?.pages.flatMap(p => p.data) || []).map(r => [r.id, r])).values());
+    let flatReels: any[] = Array.from(new Map((reelsData?.pages.flatMap(p => p.data) || []).map(r => [r.id, r])).values());
     
     if (flatReels.length > 0) {
       if (sharedReel) {
@@ -424,7 +425,7 @@ const Reels: React.FC = () => {
                 ) : (getYoutubeId(ytLink) || getFacebookEmbedUrl(ytLink)) ? (
                   <div className="relative w-full h-full flex flex-col items-center justify-center">
                       <iframe 
-                        src={getYoutubeId(ytLink) ? `https://www.youtube.com/embed/${getYoutubeId(ytLink)}?rel=0&modestbranding=1&iv_load_policy=3&controls=1&disablekb=1` : (getFacebookEmbedUrl(ytLink) || '')} 
+                        src={getYoutubeId(ytLink) ? `https://www.youtube.com/embed/${getYoutubeId(ytLink)}?rel=0&modestbranding=1&iv_load_policy=3&controls=1&disablekb=1` : (getFacebookEmbedUrl(ytLink) || undefined)} 
                         className="w-full h-full"
                         allowFullScreen
                         sandbox="allow-scripts allow-same-origin allow-presentation allow-forms"
@@ -765,7 +766,7 @@ const ReelItem: React.FC<{ reel: any, isActive: boolean, isNeighbor: boolean, on
         <div className="flex items-end justify-between w-full md:w-[450px] mx-auto pointer-events-auto pb-16 md:pb-4">
           <div className="space-y-3 max-w-[80%]">
             <Link to={`/profile/${reel.profiles?.username}`} className="flex items-center gap-3 group">
-              <ProfilePhoto src={reel.profiles?.avatar_url || ''} alt="profile" size="medium" />
+              <ProfilePhoto src={reel.profiles?.avatar_url || undefined} alt="profile" size="medium" />
               <div className="flex flex-col">
                 <span className="text-white font-bold text-sm drop-shadow-md group-hover:underline flex items-center gap-1">
                   {reel.profiles?.display_name}
@@ -843,7 +844,7 @@ const ReelItem: React.FC<{ reel: any, isActive: boolean, isNeighbor: boolean, on
                ) : Array.from(new Map(comments.map((c: any) => [c.id, c])).values()).map((c: any) => (
                  <div key={c.id} className="flex gap-3 text-white group">
                     <Link to={`/profile/${c.profiles?.username}`}>
-                      <ProfilePhoto src={c.profiles?.avatar_url || ''} alt="commenter" size="small" />
+                      <ProfilePhoto src={c.profiles?.avatar_url || undefined} alt="commenter" size="small" />
                     </Link>
                     <div className="flex-1">
                        <div className="flex items-baseline gap-2">
@@ -860,7 +861,7 @@ const ReelItem: React.FC<{ reel: any, isActive: boolean, isNeighbor: boolean, on
             </div>
             
             <form onSubmit={handleComment} className="p-3 bg-black border-t border-white/10 flex gap-2 items-center">
-              <ProfilePhoto src={currentUser?.avatar_url || ''} alt="me" size="small" />
+              <ProfilePhoto src={currentUser?.avatar_url || undefined} alt="me" size="small" />
               <div className="flex-1 relative">
                 <input 
                    value={commentText}

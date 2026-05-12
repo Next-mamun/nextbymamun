@@ -120,7 +120,10 @@ export const UploadProvider: React.FC<{ children: React.ReactNode }> = ({ childr
               setUploads(prev => prev.map(x => x.id === id ? { ...x, status: 'uploading', progress: 0 } : x));
               clearInterval(interval);
               
-              let fileExt = file instanceof File ? (file.name.split('.').pop() || 'jpeg') : 'jpeg';
+              let fileExt = 'jpeg';
+              if (file instanceof File) {
+                fileExt = file.name.split('.').pop() || 'jpeg';
+              }
               
               if (isImage) {
                 try {

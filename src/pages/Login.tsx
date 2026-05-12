@@ -3,17 +3,15 @@ import React, { useState } from 'react';
 import { Link, useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '@/contexts/AuthContext';
 import { auth, db } from '../lib/firebase';
-import { signInWithEmailAndPassword, signInWithPopup, GoogleAuthProvider } from 'firebase/auth';
+import { signInWithEmailAndPassword, signInWithPopup, signInWithRedirect, GoogleAuthProvider } from 'firebase/auth';
 import { doc, getDoc, setDoc, collection, query, where, getDocs } from 'firebase/firestore';
 import { generateBio } from '../services/geminiService';
-import { User, Lock, Key } from 'lucide-react';
+import { User, Lock } from 'lucide-react';
 import { toast } from 'sonner';
 
 const Login: React.FC = () => {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
-  const [pin, setPin] = useState('');
-  const [showPinField, setShowPinField] = useState(false);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const [isGoogleLoading, setIsGoogleLoading] = useState(false);
@@ -29,6 +27,14 @@ const Login: React.FC = () => {
       setIsGoogleLoading(true);
       setError('');
       const provider = new GoogleAuthProvider();
+      
+      const isStandalone = window.matchMedia('(display-mode: standalone)').matches || (window.navigator as any).standalone;
+      
+      if (isStandalone) {
+        await signInWithRedirect(auth, provider);
+        return;
+      }
+      
       const result = await signInWithPopup(auth, provider);
       
       const userDoc = await getDoc(doc(db, 'profiles', result.user.uid));
@@ -51,7 +57,12 @@ const Login: React.FC = () => {
       
       navigate(returnUrl);
     } catch (error: any) {
-      setError(error.message);
+      if (error.code === 'auth/popup-blocked' || error.code === 'auth/popup-closed-by-user') {
+        const provider = new GoogleAuthProvider();
+        await signInWithRedirect(auth, provider);
+      } else {
+        setError(error.message);
+      }
     } finally {
       setIsGoogleLoading(false);
     }
@@ -86,11 +97,6 @@ const Login: React.FC = () => {
        const profileData = profileDoc.data();
        
        if (profileData.password === password) {
-         if (profileData.backup_pin && pin && profileData.backup_pin !== pin) {
-           setError('Invalid Backup PIN');
-           setLoading(false);
-           return;
-         }
          
          // Assuming we stored plain password for PIN backup auth... this is not secure but replicating old logic!
          // Wait, we can't 'login' to Firebase auth solely via database lookup without custom token.
@@ -149,20 +155,6 @@ const Login: React.FC = () => {
               className="w-full p-4 pl-12 bg-white/5 border border-white/10 rounded-xl focus:border-[#1877F2] focus:bg-white/10 outline-none text-lg text-white placeholder-gray-500 transition-all"
             />
           </div>
-          
-          {showPinField && (
-            <div className="relative animate-in fade-in slide-in-from-top-1">
-              <Key size={20} className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400" />
-              <input
-                type="text"
-                placeholder="Backup PIN (Optional)"
-                value={pin}
-                onChange={(e) => setPin(e.target.value)}
-                maxLength={4}
-                className="w-full p-4 pl-12 bg-white/5 border border-white/10 rounded-xl focus:border-[#1877F2] focus:bg-white/10 outline-none text-lg text-white placeholder-gray-500 transition-all"
-              />
-            </div>
-          )}
 
           {error && <p className="text-red-400 text-sm text-center font-medium bg-red-500/10 p-3 rounded-xl border border-red-500/20">{error}</p>}
 
@@ -175,14 +167,6 @@ const Login: React.FC = () => {
             {loading ? 'Authenticating...' : 'Log In'}
           </button>
           
-          <button 
-            type="button"
-            onClick={() => setShowPinField(!showPinField)}
-            className="text-gray-400 text-sm hover:text-white font-semibold transition-colors"
-          >
-            {showPinField ? 'Hide Backup PIN' : 'Use Backup PIN?'}
-          </button>
-
           <div className="flex items-center gap-4 my-4">
             <div className="h-px bg-white/10 flex-1" />
             <span className="text-gray-500 text-sm font-medium">OR</span>

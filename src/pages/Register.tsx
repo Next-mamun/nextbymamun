@@ -5,7 +5,7 @@ import { User, Lock, Shield, UserCircle, Key } from 'lucide-react';
 import { useAuth } from '@/contexts/AuthContext';
 import { generateBio } from '../services/geminiService';
 import { auth, db } from '../lib/firebase';
-import { createUserWithEmailAndPassword, signInWithPopup, GoogleAuthProvider } from 'firebase/auth';
+import { createUserWithEmailAndPassword, signInWithPopup, signInWithRedirect, GoogleAuthProvider } from 'firebase/auth';
 import { doc, getDoc, setDoc, query, collection, where, getDocs } from 'firebase/firestore';
 
 const Register: React.FC = () => {
@@ -13,8 +13,7 @@ const Register: React.FC = () => {
     firstName: '',
     lastName: '',
     username: '',
-    password: '',
-    pin: ''
+    password: ''
   });
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
@@ -27,6 +26,15 @@ const Register: React.FC = () => {
       setIsGoogleLoading(true);
       setError('');
       const provider = new GoogleAuthProvider();
+      
+      // Use redirect for PWA/standalone mode, else popup
+      const isStandalone = window.matchMedia('(display-mode: standalone)').matches || (window.navigator as any).standalone;
+      
+      if (isStandalone) {
+        await signInWithRedirect(auth, provider);
+        return; // Redirect navigates away
+      }
+      
       const result = await signInWithPopup(auth, provider);
       
       const userDoc = await getDoc(doc(db, 'profiles', result.user.uid));
@@ -50,7 +58,12 @@ const Register: React.FC = () => {
       
       navigate('/');
     } catch (error: any) {
-      setError(error.message);
+      if (error.code === 'auth/popup-blocked' || error.code === 'auth/popup-closed-by-user') {
+        const provider = new GoogleAuthProvider();
+        await signInWithRedirect(auth, provider);
+      } else {
+        setError(error.message);
+      }
     } finally {
       setIsGoogleLoading(false);
     }
@@ -61,8 +74,8 @@ const Register: React.FC = () => {
     setError('');
     setLoading(true);
 
-    if (!formData.firstName || !formData.lastName || !formData.username || !formData.password) {
-      setError('Required fields are missing');
+    if (!formData.firstName || !formData.username || !formData.password) {
+      setError('First name, username and password are required');
       setLoading(false);
       return;
     }
@@ -91,9 +104,8 @@ const Register: React.FC = () => {
       const newProfile = {
           username: usernameLower,
           password: formData.password, // Optional backup for legacy reasons
-          backup_pin: formData.pin || null,
           email: fakeEmail,
-          display_name: `${formData.firstName} ${formData.lastName}`,
+          display_name: formData.lastName ? `${formData.firstName} ${formData.lastName}` : formData.firstName,
           bio: bio,
           avatar_url: `https://api.dicebear.com/7.x/avataaars/svg?seed=${usernameLower}`,
           created_at: new Date().toISOString()
@@ -154,17 +166,6 @@ const Register: React.FC = () => {
               placeholder="New password"
               className="w-full p-4 pl-12 bg-white/5 border border-white/10 rounded-xl outline-none focus:border-[#1877F2] focus:bg-white/10 text-white placeholder-gray-500 font-medium transition-all"
               onChange={e => setFormData({...formData, password: e.target.value})}
-            />
-          </div>
-
-          <div className="relative">
-            <Key size={18} className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400" />
-            <input
-              type="text"
-              placeholder="Backup PIN (4 digits)"
-              maxLength={4}
-              className="w-full p-4 pl-12 bg-white/5 border border-white/10 rounded-xl outline-none focus:border-[#1877F2] focus:bg-white/10 text-white placeholder-gray-500 font-medium transition-all"
-              onChange={e => setFormData({...formData, pin: e.target.value})}
             />
           </div>
 

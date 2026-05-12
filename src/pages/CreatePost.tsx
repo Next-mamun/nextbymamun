@@ -276,7 +276,7 @@ const CreatePost = () => {
             <div className="flex flex-col gap-6 animate-in slide-in-from-bottom-4 duration-500">
               <div className="relative w-full rounded-2xl overflow-hidden aspect-video bg-black shadow-lg border border-gray-200 dark:border-gray-800 group">
                 <iframe 
-                  src={validEmbedUrl || ''} 
+                  src={validEmbedUrl || undefined} 
                   className="w-full h-full border-none"
                   allowFullScreen
                   sandbox="allow-scripts allow-same-origin allow-presentation allow-forms"

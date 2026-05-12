@@ -227,7 +227,7 @@ const PostCard = React.memo(({ post, onObserve, isProfileView = false }: PostCar
     <div ref={cardRef} data-post-id={post.id} style={{ contentVisibility: 'auto', containIntrinsicSize: '0 500px' }} className="bg-white dark:bg-black rounded-xl shadow-sm border border-gray-200 dark:border-gray-800 overflow-hidden transition-all">
       <div className="p-4 flex justify-between items-center">
         <Link to={`/profile/${post.profiles?.username || 'unknown'}`} className="flex gap-3 hover:opacity-80 transition-opacity">
-          <ProfilePhoto src={post.profiles?.avatar_url || ''} alt="profile" size="small" />
+          <ProfilePhoto src={post.profiles?.avatar_url || undefined} alt="profile" size="small" />
           <div>
             <p className="font-bold text-[15px] text-gray-900 dark:text-white leading-tight flex items-center gap-2">
               {post.profiles?.display_name || 'Next User'}
@@ -275,7 +275,7 @@ const PostCard = React.memo(({ post, onObserve, isProfileView = false }: PostCar
             {localComments.map((c: any, index: number) => (
               <div key={c.id || index} className="flex gap-2">
                 <Link to={`/profile/${c.profiles?.username || 'unknown'}`}>
-                  <ProfilePhoto src={c.profiles?.avatar_url || ''} alt="commenter" size="small" />
+                  <ProfilePhoto src={c.profiles?.avatar_url || undefined} alt="commenter" size="small" />
                 </Link>
                 <div className="bg-white dark:bg-black px-3 py-2 rounded-2xl shadow-sm border border-gray-100 dark:border-gray-800 flex-1">
                   <Link to={`/profile/${c.profiles?.username || 'unknown'}`} className="font-bold text-[13px] text-gray-900 dark:text-white hover:underline flex items-center gap-1">
@@ -291,7 +291,7 @@ const PostCard = React.memo(({ post, onObserve, isProfileView = false }: PostCar
             )}
           </div>
           <form onSubmit={handleComment} className="mt-2 flex gap-2">
-            <ProfilePhoto src={currentUser?.avatar_url || ''} alt="me" size="small" />
+            <ProfilePhoto src={currentUser?.avatar_url || undefined} alt="me" size="small" />
             <div className="flex-1 relative">
               <input 
                 type="text" 

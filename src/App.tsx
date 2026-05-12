@@ -7,8 +7,9 @@ import BottomNav from '@/components/BottomNav';
 import NextoRobot from '@/components/NextoRobot';
 import { UserProfile as User } from '@/types';
 import { auth, db } from '@/lib/firebase';
-import { onAuthStateChanged, signOut } from 'firebase/auth';
-import { doc, getDoc, onSnapshot, collection, query, where } from 'firebase/firestore';
+import { generateBio } from '@/services/geminiService';
+import { onAuthStateChanged, signOut, getRedirectResult } from 'firebase/auth';
+import { doc, getDoc, setDoc, onSnapshot, collection, query, where } from 'firebase/firestore';
 import { useWakeLock } from '@/hooks/useWakeLock';
 import { requestNotificationPermission } from '@/services/notificationService';
 import { toast } from 'sonner';
@@ -237,6 +238,35 @@ const App: React.FC = () => {
   }, [currentUser]);
 
   useEffect(() => {
+    let unmounted = false;
+
+    const handleRedirectResult = async () => {
+      try {
+        const result = await getRedirectResult(auth);
+        if (result && result.user) {
+          const userDoc = await getDoc(doc(db, 'profiles', result.user.uid));
+          if (!userDoc.exists()) {
+            const emailUser = result.user.email?.split('@')[0] || result.user.uid.substring(0, 8);
+            const bio = await generateBio(emailUser);
+            const newProfile = {
+               username: emailUser,
+               display_name: result.user.displayName || emailUser,
+               email: result.user.email,
+               bio: bio,
+               avatar_url: result.user.photoURL || `https://api.dicebear.com/7.x/avataaars/svg?seed=${emailUser}`,
+               created_at: new Date().toISOString()
+            };
+            await setDoc(doc(db, 'profiles', result.user.uid), newProfile);
+            if (!unmounted) setCurrentUser({ id: result.user.uid, ...newProfile } as any);
+          }
+        }
+      } catch (err) {
+        console.error("Redirect auth error:", err);
+      }
+    };
+    
+    handleRedirectResult();
+
     const unsubscribe = onAuthStateChanged(auth, async (user) => {
       if (user) {
          fetchUserProfile(user.uid);
@@ -251,7 +281,10 @@ const App: React.FC = () => {
       }
     });
 
-    return () => unsubscribe();
+    return () => {
+      unmounted = true;
+      unsubscribe();
+    };
   }, []);
 
   const fetchUserProfile = async (userId: string) => {
