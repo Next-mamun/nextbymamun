@@ -75,7 +75,13 @@ const Feed: React.FC = () => {
       let docs = await Promise.all(allDocs.map(getPopulatedReel));
       
       // Deduplicate by ID
-      const uniqueDocs = Array.from(new Map(docs.map(d => [d.id, d])).values());
+      let uniqueDocs = Array.from(new Map(docs.map(d => [d.id, d])).values());
+      
+      // Filter out non-native (youtube/embed) videos
+      uniqueDocs = uniqueDocs.filter(r => 
+        r.source_type === 'local' || 
+        (r.media_url && !r.media_url.includes('youtube.com') && !r.media_url.includes('facebook.com') && !r.media_url.includes('/embed/'))
+      );
       
       // Shuffle
       return uniqueDocs.sort(() => Math.random() - 0.5).slice(0, 8);

@@ -36,6 +36,7 @@ const Register = lazy(() => import('@/pages/Register'));
 const Settings = lazy(() => import('@/pages/Settings'));
 
 import { AuthContext, AuthContextType, ThemeContext, ThemeContextType, useAuth, useTheme } from '@/contexts/AuthContext';
+import SmartBanner from '@/components/SmartBanner';
 
 const AppLayout: React.FC = () => {
   const { currentUser } = useAuth();
@@ -88,6 +89,7 @@ const AppLayout: React.FC = () => {
 
   return (
     <div className="min-h-screen bg-[#f0f2f5] dark:bg-[#000000] flex flex-col transition-colors duration-300">
+      <SmartBanner />
       <div 
         className={`flex flex-1 pb-16 max-w-[1920px] mx-auto w-full ${currentUser ? 'pt-14' : ''}`}
         onTouchStart={onTouchStart}

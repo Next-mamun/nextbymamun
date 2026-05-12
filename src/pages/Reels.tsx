@@ -28,11 +28,9 @@ const Reels: React.FC = () => {
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
   
   // Upload State
-  const [ytLink, setYtLink] = useState('');
   const [caption, setCaption] = useState('');
   const [localFile, setLocalFile] = useState<File | string | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
-  const [showYoutube, setShowYoutube] = useState(false);
   
   const fileInputRef = useRef<HTMLInputElement>(null);
   const observer = useRef<IntersectionObserver | null>(null);
@@ -163,6 +161,12 @@ const Reels: React.FC = () => {
   const reels = useMemo(() => {
     let flatReels: any[] = Array.from(new Map((reelsData?.pages.flatMap(p => p.data) || []).map(r => [r.id, r])).values());
     
+    // Filter out non-native (youtube/embed) videos
+    flatReels = flatReels.filter(r => 
+      r.source_type === 'local' || 
+      (r.media_url && !r.media_url.includes('youtube.com') && !r.media_url.includes('facebook.com') && !r.media_url.includes('/embed/'))
+    );
+
     if (flatReels.length > 0) {
       if (sharedReel) {
         flatReels = flatReels.filter(r => r.id !== sharedReel.id);
@@ -262,12 +266,9 @@ const Reels: React.FC = () => {
   };
 
   const handleCreateReel = async () => {
-    if (!caption.trim() && !ytLink && !localFile) return;
-
-    let targetLink = ytLink;
-    if (!targetLink && !localFile) {
-      const urlMatch = caption.match(/https?:\/\/(?:www\.|m\.|web\.)?(?:youtube\.com|youtu\.be|facebook\.com|fb\.watch)\/[^\s]+/i);
-      if (urlMatch) targetLink = urlMatch[0];
+    if (!localFile) {
+      toast.error('Please select a video file.');
+      return;
     }
 
     let payload: any = {
@@ -277,24 +278,7 @@ const Reels: React.FC = () => {
       media_url: '' // Will be updated by UploadContext
     };
 
-    const ytId = getYoutubeId(targetLink);
-    const fbUrl = getFacebookEmbedUrl(targetLink);
-
-    if (ytId) {
-      payload.source_type = 'youtube';
-      payload.youtube_id = ytId;
-      payload.video_url = `https://www.youtube.com/embed/${ytId}`;
-    } else if (fbUrl) {
-      payload.source_type = 'youtube'; // fallback since DB only allows youtube or local
-      payload.video_url = fbUrl;
-    }
-
-    if (!localFile && !payload.video_url) {
-      alert('Please provide a valid video file or YouTube/Facebook link.');
-      return;
-    }
-
-    addUpload(localFile || payload.video_url, 'reel', {
+    addUpload(localFile, 'reel', {
       payload,
       onSuccess: () => {
         queryClient.invalidateQueries({ queryKey: ['reels_infinite'] });
@@ -414,24 +398,13 @@ const Reels: React.FC = () => {
               />
               
               <div 
-                onClick={() => !localFile && !getYoutubeId(ytLink) && fileInputRef.current?.click()}
-                className={`border-2 border-dashed rounded-2xl overflow-hidden flex flex-col items-center justify-center transition-all aspect-[9/16] ${localFile || getYoutubeId(ytLink) ? 'border-green-500 bg-black' : 'border-gray-300 dark:border-gray-700 hover:border-[#1877F2] hover:bg-blue-50 dark:hover:bg-blue-900/20 cursor-pointer'}`}
+                onClick={() => !localFile && fileInputRef.current?.click()}
+                className={`border-2 border-dashed rounded-2xl overflow-hidden flex flex-col items-center justify-center transition-all aspect-[9/16] ${localFile ? 'border-green-500 bg-black' : 'border-gray-300 dark:border-gray-700 hover:border-[#1877F2] hover:bg-blue-50 dark:hover:bg-blue-900/20 cursor-pointer'}`}
               >
                 {localFile && previewUrl ? (
                   <div className="relative w-full h-full flex flex-col items-center justify-center">
                       <video src={previewUrl} className="w-full h-full object-contain" controls />
                       <button onClick={(e) => { e.stopPropagation(); setLocalFile(null); setPreviewUrl(null); }} className="absolute top-2 right-2 bg-black/50 text-white p-2 rounded-full hover:bg-red-500"><X size={16} /></button>
-                  </div>
-                ) : (getYoutubeId(ytLink) || getFacebookEmbedUrl(ytLink)) ? (
-                  <div className="relative w-full h-full flex flex-col items-center justify-center">
-                      <iframe 
-                        src={getYoutubeId(ytLink) ? `https://www.youtube.com/embed/${getYoutubeId(ytLink)}?rel=0&modestbranding=1&iv_load_policy=3&controls=1&disablekb=1` : (getFacebookEmbedUrl(ytLink) || undefined)} 
-                        className="w-full h-full"
-                        allowFullScreen
-                        sandbox="allow-scripts allow-same-origin allow-presentation allow-forms"
-                        title="reel-preview"
-                      />
-                      <button onClick={(e) => { e.stopPropagation(); setYtLink(''); }} className="absolute top-2 right-2 bg-black/50 text-white p-2 rounded-full hover:bg-red-500"><X size={16} /></button>
                   </div>
                 ) : (
                   <div className="flex flex-col items-center gap-3 p-6 text-center">
@@ -446,31 +419,11 @@ const Reels: React.FC = () => {
                 )}
               </div>
 
-              <div className="space-y-3">
-                <button 
-                  onClick={() => setShowYoutube(!showYoutube)}
-                  className="text-sm font-bold text-[#1877F2] flex items-center gap-2 hover:bg-blue-50 dark:hover:bg-blue-900/20 p-2 rounded-lg transition-colors w-full"
-                >
-                  <LinkIcon size={16} />
-                  {showYoutube ? 'Hide Link Option' : 'Add YouTube/Facebook Link'}
-                </button>
-                
-                {showYoutube && (
-                  <input 
-                    type="text" 
-                    placeholder="Paste Video Link..." 
-                    value={ytLink}
-                    onChange={e => setYtLink(e.target.value)}
-                    className="w-full p-3 bg-gray-50 dark:bg-gray-800 rounded-xl outline-none border border-gray-200 dark:border-gray-700 focus:border-[#1877F2] text-sm text-gray-900 dark:text-white placeholder-gray-500"
-                  />
-                )}
-              </div>
-
               <input type="file" ref={fileInputRef} hidden accept="video/*" onChange={handleFileUpload} />
 
               <button 
                 onClick={handleCreateReel}
-                disabled={(!localFile && !ytLink && !caption.match(/https?:\/\/(?:www\.|m\.|web\.)?(?:youtube\.com|youtu\.be|facebook\.com|fb\.watch)\/[^\s]+/i))}
+                disabled={(!localFile && !caption.trim())}
                 className="w-full bg-[#1877F2] text-white py-3.5 rounded-xl font-bold shadow-lg hover:brightness-110 disabled:opacity-50 disabled:shadow-none transition-all"
               >
                 Share Video
