@@ -1,7 +1,7 @@
-import React from 'react';
+import React, { useMemo } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import { Home, PlusSquare, MessageCircle, User, Users } from 'lucide-react';
-import { useAuth } from '@/contexts/AuthContext';
+import { useAuth, useTheme } from '@/contexts/AuthContext';
 import { useQuery } from '@tanstack/react-query';
 import { db } from '../lib/firebase';
 import { collection, query, where, getDocs } from 'firebase/firestore';
@@ -9,6 +9,7 @@ import { collection, query, where, getDocs } from 'firebase/firestore';
 const BottomNav: React.FC = () => {
   const location = useLocation();
   const { currentUser } = useAuth();
+  const { bottomBarSize, iconColor, darkMode } = useTheme();
   const isActive = (path: string) => location.pathname === path;
 
   const { data: totalUnread = 0 } = useQuery({
@@ -28,27 +29,48 @@ const BottomNav: React.FC = () => {
     enabled: !!currentUser,
   });
 
+  const barHeightClass = useMemo(() => {
+    switch(bottomBarSize) {
+      case 'small': return 'h-12';
+      case 'large': return 'h-20';
+      case 'medium': 
+      default: return 'h-16';
+    }
+  }, [bottomBarSize]);
+
+  const iconSize = useMemo(() => {
+    switch(bottomBarSize) {
+      case 'small': return 20;
+      case 'large': return 28;
+      case 'medium': 
+      default: return 24;
+    }
+  }, [bottomBarSize]);
+
+  const activeColor = iconColor;
+  const inactiveColor = darkMode ? '#9CA3AF' : '#6B7280'; // gray-400 : gray-500
+
   return (
-    <div className="fixed bottom-0 left-0 right-0 h-16 bg-white/80 dark:bg-black/80 backdrop-blur-md border-t border-gray-200 dark:border-gray-800 flex items-center justify-around z-50 pb-safe transition-colors px-1">
-      <Link to="/" className={`flex flex-col items-center justify-center w-full h-full ${isActive('/') ? 'text-[#1A2933] dark:text-blue-400' : 'text-gray-500 dark:text-gray-400'}`}>
-        <Home size={24} strokeWidth={isActive('/') ? 2.5 : 2} />
+    <div className={`fixed bottom-0 left-0 right-0 ${barHeightClass} bg-white/80 dark:bg-black/80 backdrop-blur-md border-t border-gray-200 dark:border-gray-800 flex items-center justify-around z-50 pb-safe transition-all px-1`}>
+      <Link to="/" className="flex flex-col items-center justify-center w-full h-full" style={{ color: isActive('/') ? activeColor : inactiveColor }}>
+        <Home size={iconSize} strokeWidth={isActive('/') ? 2.5 : 2} />
         <span className="text-[10px] font-medium mt-1">Home</span>
       </Link>
       
-      <Link to="/friends" className={`flex flex-col items-center justify-center w-full h-full ${isActive('/friends') ? 'text-[#1A2933] dark:text-blue-400' : 'text-gray-500 dark:text-gray-400'}`}>
-        <Users size={24} strokeWidth={isActive('/friends') ? 2.5 : 2} />
+      <Link to="/friends" className="flex flex-col items-center justify-center w-full h-full" style={{ color: isActive('/friends') ? activeColor : inactiveColor }}>
+        <Users size={iconSize} strokeWidth={isActive('/friends') ? 2.5 : 2} />
         <span className="text-[10px] font-medium mt-1">Friends</span>
       </Link>
 
-      <Link to="/create-post" className="flex flex-col items-center justify-center w-full h-full text-[#1A2933] dark:text-white">
-        <div className="bg-[#1A2933] dark:bg-blue-600 text-white p-2 rounded-xl shadow-lg hover:scale-105 transition-transform">
-          <PlusSquare size={24} />
+      <Link to="/create-post" className="flex flex-col items-center justify-center w-full h-full" style={{ color: darkMode ? '#ffffff' : '#1A2933' }}>
+        <div className="p-2 rounded-xl shadow-lg hover:scale-105 transition-transform" style={{ backgroundColor: activeColor, color: 'white' }}>
+          <PlusSquare size={iconSize} />
         </div>
       </Link>
 
-      <Link to="/messages" className={`flex flex-col items-center justify-center w-full h-full relative ${isActive('/messages') ? 'text-[#1A2933] dark:text-blue-400' : 'text-gray-500 dark:text-gray-400'}`}>
+      <Link to="/messages" className="flex flex-col items-center justify-center w-full h-full relative" style={{ color: isActive('/messages') ? activeColor : inactiveColor }}>
         <div className="relative">
-          <MessageCircle size={24} strokeWidth={isActive('/messages') ? 2.5 : 2} />
+          <MessageCircle size={iconSize} strokeWidth={isActive('/messages') ? 2.5 : 2} />
           {totalUnread > 0 && (
             <span className="absolute -top-1 -right-1 bg-red-500 text-white text-[9px] font-bold w-4 h-4 flex items-center justify-center rounded-full border-2 border-white dark:border-black animate-in zoom-in duration-300">
               {totalUnread > 9 ? '9+' : totalUnread}
@@ -58,8 +80,8 @@ const BottomNav: React.FC = () => {
         <span className="text-[10px] font-medium mt-1">Inbox</span>
       </Link>
 
-      <Link to={`/profile/${currentUser?.username}`} className={`flex flex-col items-center justify-center w-full h-full ${isActive(`/profile/${currentUser?.username}`) ? 'text-[#1A2933] dark:text-blue-400' : 'text-gray-500 dark:text-gray-400'}`}>
-        <User size={24} strokeWidth={isActive(`/profile/${currentUser?.username}`) ? 2.5 : 2} />
+      <Link to={`/profile/${currentUser?.username}`} className="flex flex-col items-center justify-center w-full h-full" style={{ color: isActive(`/profile/${currentUser?.username}`) ? activeColor : inactiveColor }}>
+        <User size={iconSize} strokeWidth={isActive(`/profile/${currentUser?.username}`) ? 2.5 : 2} />
         <span className="text-[10px] font-medium mt-1">Profile</span>
       </Link>
     </div>

@@ -171,7 +171,7 @@ const Navbar: React.FC = () => {
   };
 
   return (
-    <nav className="fixed top-0 left-0 right-0 h-14 bg-gradient-to-r from-black to-white backdrop-blur-md border-b border-gray-100 dark:border-gray-800 z-50 px-4 flex items-center justify-between shadow-sm transition-colors">
+    <nav className="fixed top-0 left-0 right-0 h-14 bg-gradient-to-r from-black to-white backdrop-blur-md border-b border-gray-100 dark:border-gray-800 z-[100] px-4 flex items-center justify-between shadow-sm transition-colors">
       <div className="flex items-center gap-2">
         <Link to="/" className="flex items-center">
           <img src="https://i.postimg.cc/wxwt5tsk/retouch-2026030721254774.png" alt="Next" className="h-8 w-auto" />
@@ -217,7 +217,7 @@ const Navbar: React.FC = () => {
                     onClick={() => handleNotificationClick(notif)}
                     className="flex items-start gap-3 p-3 hover:bg-gray-100/50 dark:hover:bg-gray-800/50 rounded-xl transition-colors"
                   >
-                    <img src={notif.avatar} className="w-12 h-12 rounded-full object-cover border dark:border-gray-700 shadow-sm" alt="avatar" />
+                    <img src={notif.avatar || undefined} className="w-12 h-12 rounded-full object-cover border dark:border-gray-700 shadow-sm" alt="avatar" />
                     <div className="flex-1">
                       <p className="text-sm text-gray-900 dark:text-white font-medium leading-tight">{notif.text}</p>
                       <p className="text-xs text-[#1A2933] dark:text-blue-400 font-bold mt-1">
@@ -235,7 +235,7 @@ const Navbar: React.FC = () => {
         {showDropdown && (
           <div className="absolute top-14 right-0 w-64 bg-white/90 dark:bg-black/90 backdrop-blur-xl rounded-2xl shadow-2xl border border-white/20 dark:border-gray-800 p-2 animate-in fade-in zoom-in-95 duration-150 z-[60]">
             <Link to={`/profile/${currentUser?.username}`} className="flex items-center gap-3 p-3 hover:bg-gray-100/50 dark:hover:bg-gray-800/50 rounded-xl transition-colors" onClick={() => setShowDropdown(false)}>
-              <img src={currentUser?.avatar_url} className="w-10 h-10 rounded-full object-cover border dark:border-gray-700 shadow-sm" alt="profile" />
+              <img src={currentUser?.avatar_url || undefined} className="w-10 h-10 rounded-full object-cover border dark:border-gray-700 shadow-sm" alt="profile" />
               <div>
                 <p className="font-bold text-sm text-gray-900 dark:text-white flex items-center gap-1">
                   See Profile

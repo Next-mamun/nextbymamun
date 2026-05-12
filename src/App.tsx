@@ -36,7 +36,6 @@ const Register = lazy(() => import('@/pages/Register'));
 const Settings = lazy(() => import('@/pages/Settings'));
 
 import { AuthContext, AuthContextType, ThemeContext, ThemeContextType, useAuth, useTheme } from '@/contexts/AuthContext';
-import SmartBanner from '@/components/SmartBanner';
 
 const AppLayout: React.FC = () => {
   const { currentUser } = useAuth();
@@ -89,7 +88,6 @@ const AppLayout: React.FC = () => {
 
   return (
     <div className="min-h-screen bg-[#f0f2f5] dark:bg-[#000000] flex flex-col transition-colors duration-300">
-      <SmartBanner />
       <div 
         className={`flex flex-1 pb-16 max-w-[1920px] mx-auto w-full ${currentUser ? 'pt-14' : ''}`}
         onTouchStart={onTouchStart}
@@ -154,6 +152,94 @@ const App: React.FC = () => {
   const setRobotSize = (size: number) => {
     setRobotSizeState(size);
     localStorage.setItem('next_media_robot_size', String(size));
+  };
+
+  const [bottomBarSize, setBottomBarSizeState] = useState<'small'|'medium'|'large'>(() => {
+    return (localStorage.getItem('next_media_bottombarsize') as 'small'|'medium'|'large') || 'medium';
+  });
+  const setBottomBarSize = (size: 'small'|'medium'|'large') => {
+    setBottomBarSizeState(size);
+    localStorage.setItem('next_media_bottombarsize', size);
+  };
+
+  const [iconColor, setIconColorState] = useState(() => {
+    return localStorage.getItem('next_media_iconcolor') || '#1877F2';
+  });
+  const setIconColor = (color: string) => {
+    setIconColorState(color);
+    localStorage.setItem('next_media_iconcolor', color);
+  };
+
+  const [autoplayVideos, setAutoplayVideosState] = useState(() => {
+    const saved = localStorage.getItem('next_media_autoplay');
+    return saved === null ? true : saved === 'true';
+  });
+  const setAutoplayVideos = (val: boolean) => {
+    setAutoplayVideosState(val);
+    localStorage.setItem('next_media_autoplay', String(val));
+  };
+
+  const [saveDataMode, setSaveDataModeState] = useState(() => {
+    const saved = localStorage.getItem('next_media_savedata');
+    return saved === 'true';
+  });
+  const setSaveDataMode = (val: boolean) => {
+    setSaveDataModeState(val);
+    localStorage.setItem('next_media_savedata', String(val));
+  };
+
+  const [highContrastMode, setHighContrastModeState] = useState(() => {
+    const saved = localStorage.getItem('next_media_highcontrast');
+    return saved === 'true';
+  });
+  const setHighContrastMode = (val: boolean) => {
+    setHighContrastModeState(val);
+    localStorage.setItem('next_media_highcontrast', String(val));
+  };
+
+  const [hapticFeedback, setHapticFeedbackState] = useState(() => {
+    const saved = localStorage.getItem('next_media_haptic');
+    return saved === null ? true : saved === 'true';
+  });
+  const setHapticFeedback = (val: boolean) => {
+    setHapticFeedbackState(val);
+    localStorage.setItem('next_media_haptic', String(val));
+  };
+
+  const [animationsEnabled, setAnimationsEnabledState] = useState(() => {
+    const saved = localStorage.getItem('next_media_animations');
+    return saved === null ? true : saved === 'true';
+  });
+  const setAnimationsEnabled = (val: boolean) => {
+    setAnimationsEnabledState(val);
+    localStorage.setItem('next_media_animations', String(val));
+  };
+
+  const [incognitoMode, setIncognitoModeState] = useState(() => {
+    const saved = localStorage.getItem('next_media_incognito');
+    return saved === 'true';
+  });
+  const setIncognitoMode = (val: boolean) => {
+    setIncognitoModeState(val);
+    localStorage.setItem('next_media_incognito', String(val));
+  };
+
+  const [soundEffects, setSoundEffectsState] = useState(() => {
+    const saved = localStorage.getItem('next_media_sound');
+    return saved === 'true';
+  });
+  const setSoundEffects = (val: boolean) => {
+    setSoundEffectsState(val);
+    localStorage.setItem('next_media_sound', String(val));
+  };
+
+  const [compactFeed, setCompactFeedState] = useState(() => {
+    const saved = localStorage.getItem('next_media_compactfeed');
+    return saved === 'true';
+  });
+  const setCompactFeed = (val: boolean) => {
+    setCompactFeedState(val);
+    localStorage.setItem('next_media_compactfeed', String(val));
   };
 
   useEffect(() => {
@@ -335,7 +421,17 @@ const App: React.FC = () => {
         darkMode, toggleDarkMode, 
         desktopMode, toggleDesktopMode, 
         nextoEnabled, toggleNexto,
-        robotSize, setRobotSize
+        robotSize, setRobotSize,
+        bottomBarSize, setBottomBarSize,
+        iconColor, setIconColor,
+        autoplayVideos, setAutoplayVideos,
+        saveDataMode, setSaveDataMode,
+        highContrastMode, setHighContrastMode,
+        hapticFeedback, setHapticFeedback,
+        animationsEnabled, setAnimationsEnabled,
+        incognitoMode, setIncognitoMode,
+        soundEffects, setSoundEffects,
+        compactFeed, setCompactFeed
       }}>
         <BrowserRouter>
           <AppLayout />

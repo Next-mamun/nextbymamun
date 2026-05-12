@@ -260,7 +260,7 @@ const Profile: React.FC = () => {
       {showPhotoModal && (
         <div className="fixed inset-0 bg-black/90 z-[200] flex items-center justify-center p-4 animate-in fade-in duration-200" onClick={() => setShowPhotoModal(false)}>
           <button className="absolute top-6 right-6 text-white hover:scale-110 transition-transform"><X size={32} /></button>
-          <img src={profile.avatar_url} className="max-w-full max-h-full rounded-lg shadow-2xl animate-in zoom-in duration-300" onClick={(e) => e.stopPropagation()} />
+          <img src={profile.avatar_url || undefined} className="max-w-full max-h-full rounded-lg shadow-2xl animate-in zoom-in duration-300" onClick={(e) => e.stopPropagation()} />
         </div>
       )}
 
@@ -273,7 +273,7 @@ const Profile: React.FC = () => {
         <div className="relative mb-24">
           <div className="h-[200px] md:h-[300px] bg-gradient-to-r from-blue-400 to-blue-600 rounded-b-xl overflow-hidden shadow-sm relative z-0 group">
             {(isEditing ? editData.cover_url : profile.cover_url) && (
-              <img src={isEditing ? editData.cover_url : profile.cover_url} className="w-full h-full object-cover transition-transform duration-700 group-hover:scale-105" />
+              <img src={(isEditing ? editData.cover_url : profile.cover_url) || undefined} className="w-full h-full object-cover transition-transform duration-700 group-hover:scale-105" />
             )}
             {isOwnProfile && (
               <>
@@ -291,7 +291,7 @@ const Profile: React.FC = () => {
           
           <div className="absolute -bottom-20 left-4 md:left-10 flex flex-col md:flex-row items-center md:items-end gap-6 w-[calc(100%-32px)] md:w-full z-20">
             <div className="relative group cursor-pointer" onClick={() => !isEditing && setShowPhotoModal(true)}>
-              <img src={isEditing ? editData.avatar_url : profile.avatar_url} className="w-36 h-36 md:w-44 md:h-44 rounded-full border-4 border-white dark:border-black shadow-2xl object-cover bg-white dark:bg-gray-800 hover:brightness-90 transition-all" />
+              <img src={(isEditing ? editData.avatar_url : profile.avatar_url) || undefined} className="w-36 h-36 md:w-44 md:h-44 rounded-full border-4 border-white dark:border-black shadow-2xl object-cover bg-white dark:bg-gray-800 hover:brightness-90 transition-all" />
               {isOwnProfile && (
                 <>
                   <input type="file" ref={avatarInputRef} hidden onChange={(e) => handleFileUpload(e, 'avatar')} accept="image/*" />

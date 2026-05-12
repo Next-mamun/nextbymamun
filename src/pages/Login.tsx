@@ -15,12 +15,18 @@ const Login: React.FC = () => {
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const [isGoogleLoading, setIsGoogleLoading] = useState(false);
-  const { setCurrentUser } = useAuth();
+  const { currentUser, setCurrentUser } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
 
   const searchParams = new URLSearchParams(location.search);
   const returnUrl = searchParams.get('returnUrl') || '/';
+
+  React.useEffect(() => {
+    if (currentUser) {
+      navigate(returnUrl);
+    }
+  }, [currentUser, navigate, returnUrl]);
 
   const handleGoogleLogin = async () => {
     try {
@@ -166,6 +172,13 @@ const Login: React.FC = () => {
             {loading && <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin"></div>}
             {loading ? 'Authenticating...' : 'Log In'}
           </button>
+
+          <Link 
+            to="/register"
+            className="bg-white/5 text-white py-4 rounded-xl text-lg font-bold hover:bg-white/10 transition-all text-center active:scale-[0.98] border border-white/10"
+          >
+            Create new account
+          </Link>
           
           <div className="flex items-center gap-4 my-4">
             <div className="h-px bg-white/10 flex-1" />
@@ -191,15 +204,6 @@ const Login: React.FC = () => {
             )}
             {isGoogleLoading ? 'Connecting...' : 'Continue with Google'}
           </button>
-
-          <div className="h-px bg-white/10 my-2" />
-
-          <Link 
-            to="/register"
-            className="bg-white/5 text-white py-4 rounded-xl text-lg font-bold hover:bg-white/10 transition-all text-center active:scale-[0.98] border border-white/10"
-          >
-            Create new account
-          </Link>
         </form>
       </div>
     </div>

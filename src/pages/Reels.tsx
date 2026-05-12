@@ -18,6 +18,8 @@ import { toast } from 'sonner';
 
 const REELS_PER_PAGE = 5;
 
+let globalReelsSeed = Math.random();
+
 const Reels: React.FC = () => {
   const { id: sharedReelId } = useParams();
   const { currentUser } = useAuth();
@@ -156,7 +158,7 @@ const Reels: React.FC = () => {
     staleTime: 1000 * 60 * 5, // 5 minutes
   });
 
-  const [reelsRandomSeed] = useState(() => Math.random());
+  const [reelsRandomSeed] = useState(() => globalReelsSeed);
 
   const reels = useMemo(() => {
     let flatReels: any[] = Array.from(new Map((reelsData?.pages.flatMap(p => p.data) || []).map(r => [r.id, r])).values());
@@ -286,7 +288,6 @@ const Reels: React.FC = () => {
     });
 
     setIsUploadModalOpen(false);
-    setYtLink('');
     setCaption('');
     setLocalFile(null);
     setPreviewUrl(null);

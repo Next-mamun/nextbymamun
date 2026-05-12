@@ -187,16 +187,6 @@ const Messages: React.FC = () => {
       console.log("Fetching contacts for user:", currentUser?.id);
       if (!currentUser) return [];
 
-      const cacheKey = `contacts_cache_${currentUser.id}`;
-      try {
-        const cachedStr = await redis.get(cacheKey);
-        if (cachedStr) {
-          return typeof cachedStr === 'string' ? JSON.parse(cachedStr) : cachedStr;
-        }
-      } catch (e) {
-        console.warn('Redis read failed for contacts cache', e);
-      }
-      
       // 1. Fetch messages to find active conversations
       const msgQuery = query(
         collection(db, 'messages'),
@@ -278,12 +268,6 @@ const Messages: React.FC = () => {
         if (b.lastMessage) return 1;
         return 0;
       });
-
-      try {
-        await redis.setex(cacheKey, 600, JSON.stringify(sortedContacts));
-      } catch (e) {
-        console.warn('Redis write failed for contacts cache', e);
-      }
 
       return sortedContacts;
     },
@@ -543,8 +527,32 @@ const Messages: React.FC = () => {
       if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
          throw new Error("MediaDevicesNotSupported");
       }
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      const mediaRecorder = new MediaRecorder(stream);
+      const stream = await navigator.mediaDevices.getUserMedia({ 
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+          sampleRate: 48000,
+          channelCount: 1
+        } 
+      });
+      const mimeTypes = [
+        'audio/webm;codecs=opus',
+        'audio/mp4;codecs=mp4a.40.2',
+        'audio/ogg;codecs=opus',
+        'audio/webm'
+      ];
+      let selectedMimeType = '';
+      for (const mimeType of mimeTypes) {
+        if (MediaRecorder.isTypeSupported(mimeType)) {
+          selectedMimeType = mimeType;
+          break;
+        }
+      }
+      const mediaRecorder = new MediaRecorder(stream, {
+        mimeType: selectedMimeType || undefined,
+        audioBitsPerSecond: 128000
+      });
       mediaRecorderRef.current = mediaRecorder;
       audioChunksRef.current = [];
 
@@ -553,8 +561,13 @@ const Messages: React.FC = () => {
       };
 
       mediaRecorder.onstop = () => {
-        const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
-        const audioFile = new File([audioBlob], 'voice_message.webm', { type: 'audio/webm' });
+        const audioBlob = new Blob(audioChunksRef.current, { type: selectedMimeType || 'audio/webm' });
+        
+        let fileExt = 'webm';
+        if (selectedMimeType.includes('mp4')) fileExt = 'mp4';
+        else if (selectedMimeType.includes('ogg')) fileExt = 'ogg';
+
+        const audioFile = new File([audioBlob], `voice_message.${fileExt}`, { type: selectedMimeType || 'audio/webm' });
         
         setRecordedAudio({
           file: audioFile,
@@ -648,6 +661,10 @@ const Messages: React.FC = () => {
     const payloadExtra = { JSON_PAYLOAD: true, text: 'Viewed ' + (msg.media_type || 'media'), is_view_once: false, parent_message_id: msg.parent_message_id };
     try {
         await updateDoc(doc(db, 'messages', msg.id), { media_url: null, content: JSON.stringify(payloadExtra) });
+        if (currentUser && selectedChat) {
+          const cacheKey = `messages_cache_${[currentUser.id, selectedChat.id].sort().join('_')}`;
+          try { await redis.del(cacheKey); } catch (e) {}
+        }
         queryClient.invalidateQueries({ queryKey: ['messages', selectedChat?.id] });
     } catch(e) {}
   };

@@ -121,8 +121,9 @@ export const UploadProvider: React.FC<{ children: React.ReactNode }> = ({ childr
               clearInterval(interval);
               
               let fileExt = 'jpeg';
-              if (file instanceof File) {
-                fileExt = file.name.split('.').pop() || 'jpeg';
+              let actualFile = file as File;
+              if (actualFile && actualFile.name) {
+                fileExt = actualFile.name.split('.').pop() || 'jpeg';
               }
               
               if (isImage) {

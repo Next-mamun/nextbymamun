@@ -102,7 +102,7 @@ const BlockedUsersSection: React.FC = () => {
           {blockedUsers.map((user: any) => (
             <div key={user.id} className="flex items-center justify-between p-4 hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors">
               <div className="flex items-center gap-3">
-                <img src={user.avatar_url} className="w-10 h-10 rounded-full object-cover border border-gray-200 dark:border-gray-700" />
+                <img src={user.avatar_url || undefined} className="w-10 h-10 rounded-full object-cover border border-gray-200 dark:border-gray-700" />
                 <div>
                   <p className="font-bold text-gray-900 dark:text-white flex items-center gap-1">
                     {user.display_name}
@@ -143,7 +143,19 @@ const Row: React.FC<{ icon?: React.ReactNode, title: string, description?: strin
 
 const Settings: React.FC = () => {
   const { currentUser, setCurrentUser } = useAuth();
-  const { darkMode, toggleDarkMode, desktopMode, toggleDesktopMode, nextoEnabled, toggleNexto, robotSize, setRobotSize } = useTheme();
+  const { 
+    darkMode, toggleDarkMode, desktopMode, toggleDesktopMode, nextoEnabled, toggleNexto, robotSize, setRobotSize,
+    bottomBarSize, setBottomBarSize,
+    iconColor, setIconColor,
+    autoplayVideos, setAutoplayVideos,
+    saveDataMode, setSaveDataMode,
+    highContrastMode, setHighContrastMode,
+    hapticFeedback, setHapticFeedback,
+    animationsEnabled, setAnimationsEnabled,
+    incognitoMode, setIncognitoMode,
+    soundEffects, setSoundEffects,
+    compactFeed, setCompactFeed
+  } = useTheme();
   const { addUpload } = useUpload();
   const avatarInputRef = React.useRef<HTMLInputElement>(null);
   const [textSize, setTextSize] = useState<'normal' | 'large' | 'extra-large'>('normal');
@@ -418,6 +430,48 @@ const Settings: React.FC = () => {
                   </div>
                 )}
               </Section>
+              
+              <Section title="Appearance & Experience">
+                <div className="p-4 border-b border-gray-100 dark:border-gray-700">
+                  <p className="font-bold text-gray-900 dark:text-white mb-3">Bottom Bar Size</p>
+                  <div className="flex gap-3">
+                    {['small', 'medium', 'large'].map((size) => (
+                      <button 
+                        key={size}
+                        onClick={() => setBottomBarSize(size as any)}
+                        className={`flex-1 py-2 rounded-xl text-sm font-bold capitalize transition-colors ${bottomBarSize === size ? 'bg-[#1877F2] text-white' : 'bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-300'}`}
+                      >
+                        {size}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                
+                <div className="p-4 border-b border-gray-100 dark:border-gray-700">
+                  <p className="font-bold text-gray-900 dark:text-white mb-3">Brand / Icon Color</p>
+                  <div className="flex gap-3 overflow-x-auto pb-2 scrollbar-hide">
+                    {['#1877F2', '#10B981', '#F59E0B', '#EF4444', '#8B5CF6', '#EC4899', '#6366F1'].map((c) => (
+                      <button 
+                        key={c}
+                        onClick={() => setIconColor(c)}
+                        className={`w-10 h-10 rounded-full flex-shrink-0 transition-transform ${iconColor === c ? 'scale-110 ring-2 ring-offset-2 ring-offset-white dark:ring-offset-black' : 'opacity-80 hover:scale-105'}`}
+                        style={{ backgroundColor: c, borderColor: c }}
+                      />
+                    ))}
+                  </div>
+                </div>
+                
+                <Row icon={<FileText size={20}/>} title="High Contrast Mode" description="Increase contrast for better readability." action={<Toggle checked={highContrastMode} onChange={() => setHighContrastMode(!highContrastMode)} />} border={true} />
+                <Row icon={<Type size={20}/>} title="Animations" description="Enable fluid motion and transitions." action={<Toggle checked={animationsEnabled} onChange={() => setAnimationsEnabled(!animationsEnabled)} />} border={true} />
+                <Row icon={<RefreshCw size={20}/>} title="Haptic Feedback" description="Vibrate on certain actions." action={<Toggle checked={hapticFeedback} onChange={() => setHapticFeedback(!hapticFeedback)} />} border={false} />
+              </Section>
+              
+              <Section title="Media & Feed">
+                <Row icon={<Camera size={20}/>} title="Autoplay Videos" description="Automatically play videos on cellular/Wi-Fi." action={<Toggle checked={autoplayVideos} onChange={() => setAutoplayVideos(!autoplayVideos)} />} border={true} />
+                <Row icon={<MessageSquare size={20}/>} title="Compact Feed" description="Show more posts on screen at a time." action={<Toggle checked={compactFeed} onChange={() => setCompactFeed(!compactFeed)} />} border={true} />
+                <Row icon={<Download size={20}/>} title="Data Saver Mode" description="Load lower quality media." action={<Toggle checked={saveDataMode} onChange={() => setSaveDataMode(!saveDataMode)} />} border={true} />
+                <Row icon={<BellRing size={20}/>} title="In-App Sounds" description="Play sounds when liking or messaging." action={<Toggle checked={soundEffects} onChange={() => setSoundEffects(!soundEffects)} />} border={false} />
+              </Section>
             </div>
           )}
 
@@ -494,7 +548,7 @@ const Settings: React.FC = () => {
                 <div className="flex items-center justify-between p-4 border-b border-gray-100 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors">
                   <div className="flex items-center gap-4">
                     <div className="relative">
-                      <img src={profile?.avatar_url || currentUser?.avatar_url} className="w-16 h-16 rounded-full object-cover border-2 border-gray-100 dark:border-gray-800 shadow-sm" />
+                      <img src={profile?.avatar_url || currentUser?.avatar_url || undefined} className="w-16 h-16 rounded-full object-cover border-2 border-gray-100 dark:border-gray-800 shadow-sm" />
                       <button 
                         onClick={() => avatarInputRef.current?.click()}
                         className="absolute -bottom-1 -right-1 bg-[#1877F2] text-white p-1.5 rounded-full border-2 border-white dark:border-gray-800 shadow-md hover:bg-blue-600 transition-colors"

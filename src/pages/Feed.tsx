@@ -20,6 +20,8 @@ import { redis } from '@/lib/redis';
 
 import { useUpload } from '@/contexts/UploadContext';
 
+let globalFeedSeed = Math.random();
+
 const Feed: React.FC = () => {
   const { id: sharedPostId } = useParams();
   const { currentUser } = useAuth();
@@ -83,8 +85,19 @@ const Feed: React.FC = () => {
         (r.media_url && !r.media_url.includes('youtube.com') && !r.media_url.includes('facebook.com') && !r.media_url.includes('/embed/'))
       );
       
-      // Shuffle
-      return uniqueDocs.sort(() => Math.random() - 0.5).slice(0, 8);
+      // Shuffle deterministically based on seed
+      const seededRandom = (seed: number) => {
+        let x = Math.sin(seed++) * 10000;
+        return x - Math.floor(x);
+      };
+      let currentSeed = globalFeedSeed;
+      const shuffled = [...uniqueDocs];
+      for (let i = shuffled.length - 1; i > 0; i--) {
+        const j = Math.floor(seededRandom(currentSeed) * (i + 1));
+        currentSeed += 1;
+        [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+      }
+      return shuffled.slice(0, 8);
     },
     staleTime: 1000 * 60 * 5,
   });
@@ -202,7 +215,7 @@ const Feed: React.FC = () => {
     enabled: !!sharedPostId,
   });
 
-  const [feedRandomSeed] = useState(() => Math.random());
+  const [feedRandomSeed] = useState(() => globalFeedSeed);
 
   const posts = useMemo(() => {
     let flatPosts = Array.from(new Map((postsData?.pages.flatMap(p => p.data) || []).map(p => [p.id, p])).values()) as any[];
@@ -428,7 +441,7 @@ const Feed: React.FC = () => {
   return (
     <div className="max-w-[90vmin] mx-auto w-full flex flex-col gap-[2vmin] pb-[10vmin]">
       {/* Search Bar */}
-      <div className="bg-white dark:bg-black rounded-[2vmin] shadow-sm border border-gray-200 dark:border-gray-800 p-[1vmin] flex items-center gap-[1vmin] sticky top-0 z-50">
+      <div className="bg-white dark:bg-black rounded-[2vmin] shadow-sm border border-gray-200 dark:border-gray-800 p-[1vmin] flex items-center gap-[1vmin] sticky top-0 z-40">
         <div className="flex-1 bg-gray-100 dark:bg-gray-900 rounded-full flex items-center px-4 py-2 border border-transparent focus-within:border-[#1877F2] transition-all">
           <Search size={18} className="text-gray-400" />
           <input 

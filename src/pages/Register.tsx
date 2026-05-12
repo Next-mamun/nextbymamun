@@ -18,8 +18,14 @@ const Register: React.FC = () => {
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const [isGoogleLoading, setIsGoogleLoading] = useState(false);
-  const { setCurrentUser } = useAuth();
+  const { currentUser, setCurrentUser } = useAuth();
   const navigate = useNavigate();
+
+  React.useEffect(() => {
+    if (currentUser) {
+      navigate('/');
+    }
+  }, [currentUser, navigate]);
 
   const handleGoogleLogin = async () => {
     try {
@@ -27,10 +33,9 @@ const Register: React.FC = () => {
       setError('');
       const provider = new GoogleAuthProvider();
       
-      // Use redirect for PWA/standalone mode, else popup
-      const isStandalone = window.matchMedia('(display-mode: standalone)').matches || (window.navigator as any).standalone;
+      const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
       
-      if (isStandalone) {
+      if (isMobile) {
         await signInWithRedirect(auth, provider);
         return; // Redirect navigates away
       }

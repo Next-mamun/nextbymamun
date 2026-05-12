@@ -25,6 +25,26 @@ export interface ThemeContextType {
   toggleNexto: () => void;
   robotSize: number;
   setRobotSize: (size: number) => void;
+  bottomBarSize: 'small' | 'medium' | 'large';
+  setBottomBarSize: (size: 'small' | 'medium' | 'large') => void;
+  iconColor: string;
+  setIconColor: (color: string) => void;
+  autoplayVideos: boolean;
+  setAutoplayVideos: (val: boolean) => void;
+  saveDataMode: boolean;
+  setSaveDataMode: (val: boolean) => void;
+  highContrastMode: boolean;
+  setHighContrastMode: (val: boolean) => void;
+  hapticFeedback: boolean;
+  setHapticFeedback: (val: boolean) => void;
+  animationsEnabled: boolean;
+  setAnimationsEnabled: (val: boolean) => void;
+  incognitoMode: boolean;
+  setIncognitoMode: (val: boolean) => void;
+  soundEffects: boolean;
+  setSoundEffects: (val: boolean) => void;
+  compactFeed: boolean;
+  setCompactFeed: (val: boolean) => void;
 }
 
 export const ThemeContext = createContext<ThemeContextType>({ 
@@ -35,7 +55,27 @@ export const ThemeContext = createContext<ThemeContextType>({
   nextoEnabled: true,
   toggleNexto: () => {},
   robotSize: 80,
-  setRobotSize: () => {}
+  setRobotSize: () => {},
+  bottomBarSize: 'medium',
+  setBottomBarSize: () => {},
+  iconColor: '#1877F2',
+  setIconColor: () => {},
+  autoplayVideos: true,
+  setAutoplayVideos: () => {},
+  saveDataMode: false,
+  setSaveDataMode: () => {},
+  highContrastMode: false,
+  setHighContrastMode: () => {},
+  hapticFeedback: true,
+  setHapticFeedback: () => {},
+  animationsEnabled: true,
+  setAnimationsEnabled: () => {},
+  incognitoMode: false,
+  setIncognitoMode: () => {},
+  soundEffects: false,
+  setSoundEffects: () => {},
+  compactFeed: false,
+  setCompactFeed: () => {}
 });
 
 export const useTheme = () => useContext(ThemeContext);
