@@ -1,18 +1,18 @@
 
 import React, { useState, useEffect, useRef } from 'react';
-import { ThumbsUp, MessageSquare, Trash2, Eye, Send, MessageCircle, Share2 } from 'lucide-react';
+import { ThumbsUp, MessageSquare, Trash2, Eye, Send, MessageCircle, Share2, Clapperboard } from 'lucide-react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
 import { db } from '@/lib/firebase';
 import { doc, getDoc, setDoc, deleteDoc, updateDoc, collection, query, where, getDocs, addDoc } from 'firebase/firestore';
-import { useAuth } from '@/contexts/AuthContext';
+import { useAuth, useTheme } from '@/contexts/AuthContext';
 import { VerifiedBadge } from '@/components/VerifiedBadge';
 import ZoomableImage from '@/components/ZoomableImage';
 import ProfilePhoto from '@/components/ProfilePhoto';
 import VideoPlayer from '@/components/VideoPlayer';
 import EmbedPlayer from '@/components/EmbedPlayer';
 import ConfirmDialog from '@/components/ConfirmDialog';
-import { formatTime } from '@/lib/utils';
+import { formatTime, playInteractionSound, triggerHaptic } from '@/lib/utils';
 import { toast } from 'sonner';
 
 interface PostCardProps {
@@ -23,6 +23,7 @@ interface PostCardProps {
 
 const PostCard = React.memo(({ post, onObserve, isProfileView = false }: PostCardProps) => {
   const { currentUser } = useAuth();
+  const { soundEffects, hapticFeedback, autoplayVideos, saveDataMode } = useTheme();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [comment, setComment] = useState('');
@@ -59,7 +60,12 @@ const PostCard = React.memo(({ post, onObserve, isProfileView = false }: PostCar
     const newIsLiked = !isLiked;
     setIsLiked(newIsLiked);
     setLikesCount(prev => newIsLiked ? prev + 1 : prev - 1);
-
+    
+    if (newIsLiked) {
+       playInteractionSound(soundEffects);
+       triggerHaptic(hapticFeedback);
+    }
+    
     try {
       const likesRef = collection(db, 'likes');
       const q = query(likesRef, where('post_id', '==', post.id), where('user_id', '==', currentUser.id));

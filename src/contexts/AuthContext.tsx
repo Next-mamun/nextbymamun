@@ -45,6 +45,8 @@ export interface ThemeContextType {
   setSoundEffects: (val: boolean) => void;
   compactFeed: boolean;
   setCompactFeed: (val: boolean) => void;
+  showAllReels: boolean;
+  setShowAllReels: (val: boolean) => void;
 }
 
 export const ThemeContext = createContext<ThemeContextType>({ 
@@ -75,7 +77,9 @@ export const ThemeContext = createContext<ThemeContextType>({
   soundEffects: false,
   setSoundEffects: () => {},
   compactFeed: false,
-  setCompactFeed: () => {}
+  setCompactFeed: () => {},
+  showAllReels: false,
+  setShowAllReels: () => {},
 });
 
 export const useTheme = () => useContext(ThemeContext);

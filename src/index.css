@@ -63,3 +63,18 @@ body {
 .fast-spin {
   animation: fast-spin 0.4s linear infinite;
 }
+
+body.high-contrast {
+  filter: contrast(1.25) saturate(1.2);
+}
+
+body.high-contrast .dark {
+  filter: contrast(1.3) saturate(1.2);
+}
+
+body.no-animations *, body.no-animations *::before, body.no-animations *::after {
+  animation-duration: 0.01ms !important;
+  animation-iteration-count: 1 !important;
+  transition-duration: 0.01ms !important;
+  scroll-behavior: auto !important;
+}

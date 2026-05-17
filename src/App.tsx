@@ -242,6 +242,15 @@ const App: React.FC = () => {
     localStorage.setItem('next_media_compactfeed', String(val));
   };
 
+  const [showAllReels, setShowAllReelsState] = useState(() => {
+    const saved = localStorage.getItem('next_media_showallreels');
+    return saved === 'true'; // Default is false to show only uploaded
+  });
+  const setShowAllReels = (val: boolean) => {
+    setShowAllReelsState(val);
+    localStorage.setItem('next_media_showallreels', String(val));
+  };
+
   useEffect(() => {
     if (darkMode) {
       document.documentElement.classList.add('dark');
@@ -251,6 +260,22 @@ const App: React.FC = () => {
       localStorage.setItem('next_media_theme', 'light');
     }
   }, [darkMode]);
+
+  useEffect(() => {
+    if (highContrastMode) {
+      document.body.classList.add('high-contrast');
+    } else {
+      document.body.classList.remove('high-contrast');
+    }
+  }, [highContrastMode]);
+
+  useEffect(() => {
+    if (!animationsEnabled) {
+      document.body.classList.add('no-animations');
+    } else {
+      document.body.classList.remove('no-animations');
+    }
+  }, [animationsEnabled]);
 
   useEffect(() => {
     let viewportMeta = document.querySelector('meta[name="viewport"]');
@@ -431,7 +456,8 @@ const App: React.FC = () => {
         animationsEnabled, setAnimationsEnabled,
         incognitoMode, setIncognitoMode,
         soundEffects, setSoundEffects,
-        compactFeed, setCompactFeed
+        compactFeed, setCompactFeed,
+        showAllReels, setShowAllReels
       }}>
         <BrowserRouter>
           <AppLayout />

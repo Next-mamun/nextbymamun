@@ -154,7 +154,8 @@ const Settings: React.FC = () => {
     animationsEnabled, setAnimationsEnabled,
     incognitoMode, setIncognitoMode,
     soundEffects, setSoundEffects,
-    compactFeed, setCompactFeed
+    compactFeed, setCompactFeed,
+    showAllReels, setShowAllReels
   } = useTheme();
   const { addUpload } = useUpload();
   const avatarInputRef = React.useRef<HTMLInputElement>(null);
@@ -468,6 +469,7 @@ const Settings: React.FC = () => {
               
               <Section title="Media & Feed">
                 <Row icon={<Camera size={20}/>} title="Autoplay Videos" description="Automatically play videos on cellular/Wi-Fi." action={<Toggle checked={autoplayVideos} onChange={() => setAutoplayVideos(!autoplayVideos)} />} border={true} />
+                <Row icon={<FileText size={20}/>} title="Show All Shared Videos in Reels" description="Include YouTube and Facebook videos in the Reels feed." action={<Toggle checked={showAllReels} onChange={() => setShowAllReels(!showAllReels)} />} border={true} />
                 <Row icon={<MessageSquare size={20}/>} title="Compact Feed" description="Show more posts on screen at a time." action={<Toggle checked={compactFeed} onChange={() => setCompactFeed(!compactFeed)} />} border={true} />
                 <Row icon={<Download size={20}/>} title="Data Saver Mode" description="Load lower quality media." action={<Toggle checked={saveDataMode} onChange={() => setSaveDataMode(!saveDataMode)} />} border={true} />
                 <Row icon={<BellRing size={20}/>} title="In-App Sounds" description="Play sounds when liking or messaging." action={<Toggle checked={soundEffects} onChange={() => setSoundEffects(!soundEffects)} />} border={false} />

@@ -2,14 +2,14 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { Plus, X, Link as LinkIcon, ThumbsUp, MessageSquare, Share2, Music, UserPlus, Send, Video, Trash2, CheckCircle, Volume2, VolumeX, Eye, Play } from 'lucide-react';
 import { Link, useParams } from 'react-router-dom';
-import { useAuth } from '@/contexts/AuthContext';
+import { useAuth, useTheme } from '@/contexts/AuthContext';
 import { db, auth as firebaseAuth } from '../lib/firebase';
 import { collection, query, where, orderBy, limit, getDocs, doc, getDoc, updateDoc, deleteDoc, addDoc, onSnapshot, startAfter } from 'firebase/firestore';
 import { VerifiedBadge } from '@/components/VerifiedBadge';
 import { useQuery, useInfiniteQuery, useQueryClient } from '@tanstack/react-query';
 import { Reel } from '@/types';
 import ProfilePhoto from '@/components/ProfilePhoto';
-import { formatTime, getPosterUrl } from '@/lib/utils';
+import { formatTime, getPosterUrl, playInteractionSound, triggerHaptic } from '@/lib/utils';
 import { redis } from '@/lib/redis';
 
 import { useUpload } from '@/contexts/UploadContext';
@@ -23,6 +23,7 @@ let globalReelsSeed = Math.random();
 const Reels: React.FC = () => {
   const { id: sharedReelId } = useParams();
   const { currentUser } = useAuth();
+  const { showAllReels } = useTheme();
   const { addUpload } = useUpload();
   const queryClient = useQueryClient();
   const [isUploadModalOpen, setIsUploadModalOpen] = useState(false);
@@ -162,12 +163,10 @@ const Reels: React.FC = () => {
 
   const reels = useMemo(() => {
     let flatReels: any[] = Array.from(new Map((reelsData?.pages.flatMap(p => p.data) || []).map(r => [r.id, r])).values());
-    
-    // Filter out non-native (youtube/embed) videos
-    flatReels = flatReels.filter(r => 
-      r.source_type === 'local' || 
-      (r.media_url && !r.media_url.includes('youtube.com') && !r.media_url.includes('facebook.com') && !r.media_url.includes('/embed/'))
-    );
+
+    if (!showAllReels) {
+      flatReels = flatReels.filter(r => r.source_type === 'local' || (r.media_url && !r.media_url.includes('youtube.com') && !r.media_url.includes('facebook.com') && !r.media_url.includes('/embed/')));
+    }
 
     if (flatReels.length > 0) {
       if (sharedReel) {
@@ -336,26 +335,8 @@ const Reels: React.FC = () => {
           <p className="text-sm">Be the first to share a moment on Next!</p>
         </div>
       ) : reels.map((reel, index) => {
-        const isAdSlot = index > 0 && index % 10 === 0;
-        const adId = `ad-${index}`;
-        const isAdHidden = hiddenAds.has(adId);
-        
         return (
           <React.Fragment key={reel.id}>
-            {isAdSlot && !isAdHidden && (
-              <div 
-                data-id={adId}
-                className="reel-item h-[100dvh] w-full md:w-[450px] shrink-0 snap-start md:snap-center relative flex flex-col items-center justify-center bg-black"
-              >
-                <span className="text-white/40 text-xs uppercase tracking-widest absolute top-20 font-bold z-0">Advertisement</span>
-                <iframe 
-                  src={`/ad2.html?id=${adId}`}
-                  loading="lazy"
-                  className="w-full h-full relative z-10 border-none"
-                  sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox allow-top-navigation-by-user-activation"
-                />
-              </div>
-            )}
             <div 
               data-id={reel.id}
               data-index={index}
@@ -439,6 +420,7 @@ const Reels: React.FC = () => {
 
 const ReelItem: React.FC<{ reel: any, isActive: boolean, isNeighbor: boolean, onDelete: () => void }> = ({ reel, isActive, isNeighbor, onDelete }) => {
   const { currentUser } = useAuth();
+  const { soundEffects, hapticFeedback, autoplayVideos, saveDataMode } = useTheme();
 
   const [views, setViews] = useState(reel.views || 0);
   const [isMuted, setIsMuted] = useState(false);
@@ -454,19 +436,41 @@ const ReelItem: React.FC<{ reel: any, isActive: boolean, isNeighbor: boolean, on
   const [comments, setComments] = useState((reel.comments || []).slice().reverse());
 
   const poster = getPosterUrl(reel.media_url);
+  const isYouTubeUrl = reel.media_url?.includes('youtube.com/embed') || reel.media_url?.includes('youtube.com/') || reel.media_url?.includes('youtu.be/');
+  const isFacebook = reel.media_url?.includes('fb.watch') || reel.media_url?.includes('facebook.com');
+  const isYouTube = reel.source_type === 'youtube' || isYouTubeUrl || isFacebook;
+  
+  const ytId = reel.source_type === 'youtube' ? reel.youtube_id : ((reel.media_url?.match(/(?:youtu\.be\/|youtube\.com\/(?:embed\/|v\/|watch\?v=|watch\?.+&v=))([\w-]{11})/) || [])[1]);
 
-  const isYouTube = reel.media_url?.includes('youtube.com/embed') || reel.media_url?.includes('fb.watch') || reel.media_url?.includes('facebook.com');
+  useEffect(() => {
+    const handleOtherVideoPlaying = (e: CustomEvent) => {
+      if (e.detail.src !== reel.media_url) {
+        if (!videoRef.current?.paused) {
+          videoRef.current?.pause();
+          setIsPlaying(false);
+        }
+      }
+    };
+    window.addEventListener('single-video-play' as any, handleOtherVideoPlaying);
+    return () => window.removeEventListener('single-video-play' as any, handleOtherVideoPlaying);
+  }, [reel.media_url]);
 
   useEffect(() => {
     if (isActive) {
       setIsPlaying(true);
       if (videoRef.current) {
         videoRef.current.currentTime = 0;
-        videoRef.current.play().catch(e => {
+        videoRef.current.play().then(() => {
+            window.dispatchEvent(new CustomEvent('single-video-play', { detail: { src: reel.media_url } }));
+        }).catch(e => {
             console.log("Autoplay prevented", e);
             setIsPlaying(false);
         });
       }
+      if (isYouTube) {
+          window.dispatchEvent(new CustomEvent('single-video-play', { detail: { src: reel.media_url } }));
+      }
+
       
       // Increment view count
       if (!hasViewed.current) {
@@ -558,6 +562,8 @@ const ReelItem: React.FC<{ reel: any, isActive: boolean, isNeighbor: boolean, on
     } else {
       setLikesCount(prev => prev + 1);
       setIsLiked(true);
+      playInteractionSound(soundEffects);
+      triggerHaptic(hapticFeedback);
       await addDoc(collection(db, 'likes'), { post_id: reel.id, user_id: currentUser.id, created_at: new Date().toISOString() });
       
       if (reel.user_id !== currentUser?.id) {
@@ -613,10 +619,11 @@ const ReelItem: React.FC<{ reel: any, isActive: boolean, isNeighbor: boolean, on
   let ytUrl = reel.media_url;
   if (isYouTube && isActive) {
       try {
-        const urlObj = new URL(reel.media_url);
+        const urlObj = new URL(reel.media_url || `https://youtube.com/embed/${ytId}`);
         urlObj.searchParams.set('autoplay', '1');
-        urlObj.searchParams.set('mute', '0');
-        urlObj.searchParams.set('controls', '0');
+        urlObj.searchParams.set('mute', isMuted ? '1' : '0'); 
+        urlObj.searchParams.set('controls', '1');
+        urlObj.searchParams.set('allowfullscreen', '1');
         urlObj.searchParams.set('loop', '1');
         const playlistId = urlObj.pathname.split('/').pop();
         if (playlistId) {
@@ -664,16 +671,25 @@ const ReelItem: React.FC<{ reel: any, isActive: boolean, isNeighbor: boolean, on
           isActive ? (
             <iframe 
               src={ytUrl}
-              className="w-full h-full object-contain pointer-events-none"
+              className="w-full h-full object-contain pointer-events-auto"
               frameBorder="0"
               allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
               sandbox="allow-scripts allow-same-origin allow-presentation allow-forms"
               title="reel-player"
             />
           ) : (
-             <div className="w-full h-full bg-gray-900 flex items-center justify-center">
-                <div className="w-16 h-16 rounded-full border-4 border-white/20 border-t-[#1877F2] animate-spin" />
-             </div>
+            <div className="w-full h-full bg-black relative flex items-center justify-center pointer-events-none">
+              {ytId ? (
+                <img src={`https://img.youtube.com/vi/${ytId}/hqdefault.jpg`} className="w-full h-full object-cover opacity-80" alt="Video Thumbnail" />
+              ) : (
+                <img src={getPosterUrl(reel.media_url) || undefined} onError={(e) => { e.currentTarget.style.display='none'; }} className={`w-full h-full object-cover opacity-80 ${!getPosterUrl(reel.media_url) ? 'hidden' : ''}`} alt="Video Thumbnail" />
+              )}
+               <div className="absolute inset-0 flex items-center justify-center">
+                  <div className="w-16 h-16 rounded-full bg-black/50 flex items-center justify-center backdrop-blur-sm">
+                    <Play size={32} className="text-white ml-2" />
+                  </div>
+               </div>
+            </div>
           )
         ) : (
           <>
@@ -681,7 +697,7 @@ const ReelItem: React.FC<{ reel: any, isActive: boolean, isNeighbor: boolean, on
               ref={videoRef}
               src={reel.media_url} 
               poster={poster}
-              preload={isNeighbor ? "auto" : "none"}
+              preload={isNeighbor && !saveDataMode ? "auto" : "none"}
               loop 
               muted={isMuted}
               playsInline

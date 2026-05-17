@@ -6,7 +6,7 @@ import ZoomableImage from '@/components/ZoomableImage';
 import ProfilePhoto from '@/components/ProfilePhoto';
 import VideoPlayer from '@/components/VideoPlayer';
 import EmbedPlayer from '@/components/EmbedPlayer';
-import { useAuth } from '@/contexts/AuthContext';
+import { useAuth, useTheme } from '@/contexts/AuthContext';
 import { db } from '../lib/firebase';
 import { collection, query, where, orderBy, limit, getDocs, doc, getDoc, updateDoc, startAfter } from 'firebase/firestore';
 import { Link, useNavigate, useParams } from 'react-router-dom';
@@ -14,7 +14,7 @@ import { useQuery, useInfiniteQuery, useQueryClient } from '@tanstack/react-quer
 import { CameraCapture, MediaEditor } from '@/components/MediaTools';
 
 import PostCard from '@/components/PostCard';
-import AdsterraAd from '@/components/AdsterraAd';
+import AdSenseAd from '@/components/AdSenseAd';
 import { getPosterUrl } from '@/lib/utils';
 import { redis } from '@/lib/redis';
 
@@ -25,6 +25,7 @@ let globalFeedSeed = Math.random();
 const Feed: React.FC = () => {
   const { id: sharedPostId } = useParams();
   const { currentUser } = useAuth();
+  const { showAllReels } = useTheme();
   const queryClient = useQueryClient();
   const navigate = useNavigate();
   const { addUpload, uploads } = useUpload();
@@ -63,7 +64,7 @@ const Feed: React.FC = () => {
 
   // Fetch Reels
   const { data: reels = [] } = useQuery({
-    queryKey: ['reels_ribbon'],
+    queryKey: ['reels_ribbon', showAllReels],
     queryFn: async () => {
       // Try fetching from 'reels' collection first as it's the primary source
       const qReels = query(collection(db, 'reels'), orderBy('created_at', 'desc'), limit(20));
@@ -79,11 +80,13 @@ const Feed: React.FC = () => {
       // Deduplicate by ID
       let uniqueDocs = Array.from(new Map(docs.map(d => [d.id, d])).values());
       
-      // Filter out non-native (youtube/embed) videos
-      uniqueDocs = uniqueDocs.filter(r => 
-        r.source_type === 'local' || 
-        (r.media_url && !r.media_url.includes('youtube.com') && !r.media_url.includes('facebook.com') && !r.media_url.includes('/embed/'))
-      );
+      // Filter out non-native (youtube/embed) videos if showAllReels is false
+      if (!showAllReels) {
+        uniqueDocs = uniqueDocs.filter(r => 
+          r.source_type === 'local' || 
+          (r.media_url && !r.media_url.includes('youtube.com') && !r.media_url.includes('facebook.com') && !r.media_url.includes('/embed/'))
+        );
+      }
       
       // Shuffle deterministically based on seed
       const seededRandom = (seed: number) => {
@@ -641,25 +644,32 @@ const Feed: React.FC = () => {
             <Link to="/reels" className="text-[#1877F2] text-xs font-bold hover:underline">View All</Link>
           </div>
           <div className="flex gap-3 overflow-x-auto pb-2 scrollbar-hide">
-            {reels.map(reel => (
-              <Link to="/reels" key={reel.id} className="relative flex-shrink-0 w-32 h-56 rounded-xl overflow-hidden bg-black border dark:border-gray-800 shadow-sm">
-                {reel.source_type === 'youtube' ? (
-                   <img src={`https://img.youtube.com/vi/${reel.youtube_id}/mqdefault.jpg`} className="w-full h-full object-cover" />
-                ) : (
-                   <img src={getPosterUrl(reel.media_url) || undefined} onError={(e) => { e.currentTarget.style.display='none'; e.currentTarget.nextElementSibling?.classList.remove('hidden'); }} className={`w-full h-full object-cover ${!getPosterUrl(reel.media_url) ? 'hidden' : ''}`} />
-                )}
-                <video src={reel.media_url ? `${reel.media_url}#t=0.1` : undefined} preload="metadata" className={`w-full h-full object-cover ${getPosterUrl(reel.media_url) ? 'hidden' : ''}`} muted playsInline />
-                <div className="absolute inset-0 flex items-center justify-center bg-black/10">
-                  <div className="bg-black/50 p-2 rounded-full backdrop-blur-sm">
-                    <Clapperboard size={20} className="text-white" />
+            {reels.filter(r => showAllReels || (r.source_type === 'local' || (r.media_url && !r.media_url.includes('youtube.com') && !r.media_url.includes('facebook.com') && !r.media_url.includes('/embed/')))).map(reel => {
+              const ytId = reel.source_type === 'youtube' ? reel.youtube_id : (reel.media_url?.match(/(?:youtu\.be\/|youtube\.com\/(?:embed\/|v\/|watch\?v=|watch\?.+&v=))([\w-]{11})/) || [])[1];
+              const isYoutube = !!ytId;
+
+              return (
+                <Link to={`/reels/${reel.id}`} key={reel.id} className="relative flex-shrink-0 w-32 h-56 rounded-xl overflow-hidden bg-black border dark:border-gray-800 shadow-sm">
+                  {isYoutube ? (
+                     <img src={`https://img.youtube.com/vi/${ytId}/mqdefault.jpg`} className="w-full h-full object-cover" />
+                  ) : (
+                    <>
+                     <img src={getPosterUrl(reel.media_url) || undefined} onError={(e) => { e.currentTarget.style.display='none'; e.currentTarget.nextElementSibling?.classList.remove('hidden'); }} className={`w-full h-full object-cover ${!getPosterUrl(reel.media_url) ? 'hidden' : ''}`} />
+                     <video src={reel.media_url && !reel.media_url.includes('facebook') ? `${reel.media_url}#t=0.1` : undefined} preload="metadata" className={`w-full h-full object-cover ${getPosterUrl(reel.media_url) ? 'hidden' : ''}`} muted playsInline />
+                    </>
+                  )}
+                  <div className="absolute inset-0 flex items-center justify-center bg-black/10">
+                    <div className="bg-black/50 p-2 rounded-full backdrop-blur-sm">
+                      <Clapperboard size={20} className="text-white" />
+                    </div>
                   </div>
-                </div>
-                <div className="absolute bottom-2 left-2 flex items-center gap-1 z-10">
-                   <ThumbsUp size={12} className="text-white drop-shadow-md" />
-                   <span className="text-white text-[10px] font-bold drop-shadow-md">{reel.likes?.length || 0}</span>
-                </div>
-              </Link>
-            ))}
+                  <div className="absolute bottom-2 left-2 flex items-center gap-1 z-10">
+                     <ThumbsUp size={12} className="text-white drop-shadow-md" />
+                     <span className="text-white text-[10px] font-bold drop-shadow-md">{reel.likes?.length || 0}</span>
+                  </div>
+                </Link>
+              );
+            })}
           </div>
         </div>
       )}
@@ -724,7 +734,7 @@ const Feed: React.FC = () => {
                   post={post} 
                   onObserve={handleObserve}
                 />
-                {index > 0 && (index + 1) % 4 === 0 && <AdsterraAd />}
+                {index > 0 && (index + 1) % 4 === 0 && <AdSenseAd />}
               </motion.div>
             ))}
           </AnimatePresence>
