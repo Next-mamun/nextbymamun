@@ -294,8 +294,22 @@ const App: React.FC = () => {
     }
   }, [desktopMode]);
 
-  const toggleDarkMode = () => setDarkMode(!darkMode);
-  const toggleDesktopMode = () => setDesktopMode(!desktopMode);
+  const toggleDarkMode = () => {
+    const newVal = !darkMode;
+    setDarkMode(newVal);
+    localStorage.setItem('next_media_theme', newVal ? 'dark' : 'light');
+    if (newVal) {
+      document.documentElement.classList.add('dark');
+    } else {
+      document.documentElement.classList.remove('dark');
+    }
+  };
+
+  const toggleDesktopMode = () => {
+    const newVal = !desktopMode;
+    setDesktopMode(newVal);
+    localStorage.setItem('next_media_desktop', String(newVal));
+  };
   const toggleNexto = () => {
     const newVal = !nextoEnabled;
     setNextoEnabled(newVal);

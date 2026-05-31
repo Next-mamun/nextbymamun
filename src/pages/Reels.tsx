@@ -470,30 +470,29 @@ const ReelItem: React.FC<{ reel: any, isActive: boolean, isNeighbor: boolean, on
       if (isYouTube) {
           window.dispatchEvent(new CustomEvent('single-video-play', { detail: { src: reel.media_url } }));
       }
-
-      
-      // Increment view count
-      if (!hasViewed.current) {
-        const incrementView = async () => {
-          try {
-            const reelRef = doc(db, 'posts', reel.id);
-            const reelSnap = await getDoc(reelRef);
-            if (reelSnap.exists()) {
-              await updateDoc(reelRef, { views: (reelSnap.data().views || 0) + 1 });
-              setViews(prev => prev + 1);
-            }
-          } catch (err) {
-            console.error('Error updating views:', err);
-          }
-          hasViewed.current = true;
-        };
-        incrementView();
-      }
     } else {
       setIsPlaying(false);
-      if (videoRef.current) {
-        videoRef.current.pause();
-      }
+      videoRef.current?.pause();
+    }
+  }, [isActive, reel.media_url]);
+
+  useEffect(() => {
+    // Increment view count
+    if (isActive && !hasViewed.current) {
+      const incrementView = async () => {
+        try {
+          const reelRef = doc(db, 'posts', reel.id);
+          const reelSnap = await getDoc(reelRef);
+          if (reelSnap.exists()) {
+            await updateDoc(reelRef, { views: (reelSnap.data().views || 0) + 1 });
+            setViews(prev => prev + 1);
+          }
+        } catch (err) {
+          console.error('Error updating views:', err);
+        }
+        hasViewed.current = true;
+      };
+      incrementView();
     }
   }, [isActive, reel.id]);
 

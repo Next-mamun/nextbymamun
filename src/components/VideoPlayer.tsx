@@ -30,12 +30,12 @@ const VideoPlayer: React.FC<VideoPlayerProps> = ({ src, className }) => {
   useEffect(() => {
     const observer = new IntersectionObserver(
       ([entry]) => {
-        if (!entry.isIntersecting) {
+        if (!entry.isIntersecting || entry.intersectionRatio < 0.5) {
           if (!videoRef.current?.paused) {
             videoRef.current?.pause();
             setIsPlaying(false);
           }
-        } else if (autoplayVideos && videoRef.current?.paused) {
+        } else if (autoplayVideos && entry.intersectionRatio >= 0.5 && videoRef.current?.paused) {
           // Play only if it is sufficiently visible
           const playPromise = videoRef.current?.play();
           if (playPromise !== undefined) {
@@ -46,7 +46,7 @@ const VideoPlayer: React.FC<VideoPlayerProps> = ({ src, className }) => {
           }
         }
       },
-      { threshold: 0.1, rootMargin: "-35% 0px -35% 0px" }
+      { threshold: [0.5, 0.6, 0.7, 0.8, 0.9, 1.0], rootMargin: "-30% 0px -30% 0px" }
     );
 
     if (videoRef.current) {

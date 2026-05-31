@@ -14,6 +14,7 @@ import EmbedPlayer from '@/components/EmbedPlayer';
 import ConfirmDialog from '@/components/ConfirmDialog';
 import { formatTime, playInteractionSound, triggerHaptic } from '@/lib/utils';
 import { toast } from 'sonner';
+import { triggerNotification } from '@/services/notificationService';
 
 interface PostCardProps {
   post: any;
@@ -89,6 +90,14 @@ const PostCard = React.memo(({ post, onObserve, isProfileView = false }: PostCar
             is_read: false,
             created_at: new Date().toISOString()
           });
+          
+          triggerNotification(
+            post.user_id,
+            'New Like',
+            `${currentUser.display_name || 'Someone'} liked your post.`,
+            { type: 'like', post_id: post.id, sender_id: currentUser.id }
+          );
+
           queryClient.invalidateQueries({ queryKey: ['notifications', post.user_id] });
         }
       }
@@ -172,6 +181,14 @@ const PostCard = React.memo(({ post, onObserve, isProfileView = false }: PostCar
           is_read: false,
           created_at: new Date().toISOString()
         });
+        
+        triggerNotification(
+          post.user_id,
+          'New Comment',
+          `${currentUser.display_name || 'Someone'} commented: ${commentText}`,
+          { type: 'comment', post_id: post.id, sender_id: currentUser.id }
+        );
+
         queryClient.invalidateQueries({ queryKey: ['notifications', post.user_id] });
       }
       queryClient.invalidateQueries({ queryKey: ['posts'] });

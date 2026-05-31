@@ -1,8 +1,11 @@
 {
-  "name": "Next ",
-  "description": "A feature-rich social media platform inspired by Facebook, featuring real-time chat, AI-powered post enhancement, friend systems, and multimedia sharing. Built with React, Supabase",
+  "name": "Next",
+  "description": "A feature-rich social media platform inspired by Facebook, featuring real-time chat, AI-powered post enhancement, friend systems, and multimedia sharing. Built with React and Firebase.",
   "requestFramePermissions": [
     "camera",
     "microphone"
+  ],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
   ]
 }
