@@ -18,6 +18,8 @@ import { MediaEditor } from '../components/MediaTools';
 import { useUpload } from '@/contexts/UploadContext';
 import ConfirmDialog from '@/components/ConfirmDialog';
 import { formatTime } from '@/lib/utils';
+import { triggerNotification } from '@/services/notificationService';
+import { toast } from 'sonner';
 
 const CustomAudioPlayer = ({ src, isSender }: { src: string; isSender?: boolean }) => {
   const [isPlaying, setIsPlaying] = useState(false);
@@ -191,11 +193,13 @@ const Messages: React.FC = () => {
       const msgQuery = query(
         collection(db, 'messages'),
         or(where('sender_id', '==', currentUser.id), where('receiver_id', '==', currentUser.id)),
-        orderBy('created_at', 'desc'),
-        limit(200)
+        limit(500)
       );
       const msgSnap = await getDocs(msgQuery);
-      const messages = msgSnap.docs.map(d => ({id: d.id, ...d.data()} as any));
+      let messages = msgSnap.docs.map(d => ({id: d.id, ...d.data()} as any));
+      
+      // Sort in memory to avoid composite index requirement
+      messages.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
       
       const partnerMap = new Map<string, any>();
       messages.forEach(m => {
@@ -301,18 +305,25 @@ const Messages: React.FC = () => {
           and(where('sender_id', '==', currentUser.id), where('receiver_id', '==', selectedChat.id)),
           and(where('sender_id', '==', selectedChat.id), where('receiver_id', '==', currentUser.id))
         ),
-        orderBy('created_at', 'desc'),
-        limit(100)
+        limit(200)
       );
 
       const dataSnap = await getDocs(q);
-      const data = dataSnap.docs.map(d => ({id: d.id, ...d.data()} as any));
+      let data = dataSnap.docs.map(d => {
+        const item = d.data();
+        // Convert Firestore Timestamp to ISO string for consistency in App
+        const createdAt = item.created_at && typeof item.created_at.toDate === 'function' 
+          ? item.created_at.toDate().toISOString() 
+          : item.created_at;
+        return {id: d.id, ...item, created_at: createdAt} as any;
+      });
       
       if (!data) return [];
-      // Data arrives descending so newest are first. Reverse to show chronologically
-      const chronoData = data.reverse();
-      // Filter duplicate messages by ID
-      const finalData = Array.from(new Map(chronoData.map(m => [m.id, m])).values()).map(m => {
+      
+      // Sort in memory chronologically
+      data.sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
+      
+      const finalData = Array.from(new Map(data.map(m => [m.id, m])).values()).map(m => {
         let parsed: any = { ...m };
         if (typeof m.content === 'string' && m.content.startsWith('{"JSON_PAYLOAD":')) {
           try {
@@ -502,7 +513,7 @@ const Messages: React.FC = () => {
       content: JSON.stringify(payloadExtra),
       media_url: '', // Will be updated by UploadContext
       media_type: selectedMedia.type,
-      created_at: new Date().toISOString()
+      created_at: serverTimestamp()
     };
     
     const uploadData = selectedMedia.type === 'video' && selectedMedia.file ? selectedMedia.file : processedUrl;
@@ -619,7 +630,7 @@ const Messages: React.FC = () => {
        content: JSON.stringify(payloadExtra),
        media_url: '',
        media_type: 'audio',
-       created_at: new Date().toISOString()
+       created_at: serverTimestamp()
     };
     
     // Add optimistic UI to messages immediately
@@ -710,7 +721,7 @@ const Messages: React.FC = () => {
        sender_id: currentUser!.id,
        receiver_id: selectedChat.id,
        content: JSON.stringify(payloadExtra),
-       created_at: new Date().toISOString(),
+       created_at: serverTimestamp(),
        is_read: false
     };
 
@@ -722,7 +733,8 @@ const Messages: React.FC = () => {
         id: tempId,
         content: payloadExtra.text,
         is_view_once: payloadExtra.is_view_once,
-        parent_message_id: payloadExtra.parent_message_id
+        parent_message_id: payloadExtra.parent_message_id,
+        created_at: new Date().toISOString() // for UI only
       };
       return [...(old || []), optimisticMsg];
     });
@@ -733,14 +745,28 @@ const Messages: React.FC = () => {
     
     try {
       await addDoc(collection(db, 'messages'), newMessage);
+      
+      // Trigger Push Notification
+      try {
+        triggerNotification(
+          selectedChat.id,
+          currentUser?.display_name || 'New Message',
+          messageText,
+          { type: 'message', sender_id: currentUser?.id }
+        );
+      } catch (notifErr) {
+        console.error('Notification failed:', notifErr);
+      }
+
       const cacheKey = `messages_cache_${[currentUser!.id, selectedChat.id].sort().join('_')}`;
       try { await redis.del(cacheKey); } catch (e) {}
       
       queryClient.invalidateQueries({ queryKey: ['messages', selectedChat.id] });
       queryClient.invalidateQueries({ queryKey: ['contacts'] });
       queryClient.invalidateQueries({ queryKey: ['notifications', selectedChat.id] });
-    } catch(e) {
+    } catch(e: any) {
       console.error(e);
+      toast.error('Failed to send message: ' + e.message);
     }
   };
 
