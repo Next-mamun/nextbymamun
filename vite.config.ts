@@ -34,6 +34,17 @@ export default defineConfig(({ mode }) => {
                     statuses: [0, 200]
                   }
                 }
+              },
+              {
+                urlPattern: /^https:\/\/.*\.supabase\.co\/.*/i,
+                handler: 'NetworkFirst',
+                options: {
+                  cacheName: 'supabase-data-cache',
+                  expiration: {
+                    maxEntries: 100,
+                    maxAgeSeconds: 60 * 60 * 24 // <== 24 hours
+                  }
+                }
               }
             ]
           }

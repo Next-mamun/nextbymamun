@@ -1,13 +1,12 @@
 import React, { createContext, useContext, useState, useCallback, useEffect, useRef } from 'react';
-import { db, storage, auth } from '../lib/firebase';
-import { collection, addDoc, updateDoc, doc, serverTimestamp } from 'firebase/firestore';
+import { db, storage } from '../lib/firebase';
+import { collection, addDoc, updateDoc, doc } from 'firebase/firestore';
 import { ref, uploadBytesResumable, getDownloadURL } from 'firebase/storage';
 import Draggable from 'react-draggable';
 import { Pause, Play, X, RefreshCw } from 'lucide-react';
 import * as idb from 'idb-keyval';
 import * as tus from 'tus-js-client';
 import { invalidatePostsCache, redis } from '@/lib/redis';
-import { triggerNotification } from '@/services/notificationService';
 
 import imageCompression from 'browser-image-compression';
 
@@ -289,7 +288,7 @@ export const UploadProvider: React.FC<{ children: React.ReactNode }> = ({ childr
           if (metadata.category) postData.category = metadata.category;
         }
 
-        postData.created_at = serverTimestamp();
+        postData.created_at = new Date().toISOString();
         const postDoc = await addDoc(collection(db, 'posts'), postData);
         await invalidatePostsCache();
       } else if (type === 'story') {
@@ -298,7 +297,7 @@ export const UploadProvider: React.FC<{ children: React.ReactNode }> = ({ childr
           media_url: mediaUrl,
           media_type: mediaType,
           expires_at: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
-          created_at: serverTimestamp()
+          created_at: new Date().toISOString()
         });
       } else if (type === 'reel') {
         const payload = {
@@ -306,28 +305,16 @@ export const UploadProvider: React.FC<{ children: React.ReactNode }> = ({ childr
           content: metadata.payload.content || metadata.payload.caption || '',
           media_url: mediaUrl,
           media_type: 'video',
-          created_at: serverTimestamp(),
+          created_at: new Date().toISOString(),
           source_type: metadata.payload.source_type || 'local',
           youtube_id: metadata.payload.youtube_id || null,
           views: 0
         };
         await addDoc(collection(db, 'posts'), payload);
       } else if (type === 'message') {
-        const payload = { ...metadata.payload, created_at: serverTimestamp() };
+        const payload = { ...metadata.payload, created_at: new Date().toISOString() };
         if (mediaUrl) payload.media_url = mediaUrl;
         await addDoc(collection(db, 'messages'), payload);
-        
-        // Trigger Push Notification
-        try {
-          triggerNotification(
-            metadata.payload.receiver_id,
-            auth.currentUser?.displayName || 'New Media Message',
-            `Sent a ${metadata.mediaType || 'media'}`,
-            { type: 'message', sender_id: auth.currentUser?.uid }
-          );
-        } catch (notifErr) {
-          console.error('Notification failed:', notifErr);
-        }
         
         try {
           const cacheKey = `messages_cache_${[metadata.payload.sender_id, metadata.payload.receiver_id].sort().join('_')}`;
@@ -341,7 +328,7 @@ export const UploadProvider: React.FC<{ children: React.ReactNode }> = ({ childr
           sender_id: metadata.payload.sender_id,
           type: 'message',
           is_read: false,
-          created_at: serverTimestamp()
+          created_at: new Date().toISOString()
         });
       } else if (type === 'profile') {
         const payload = { ...metadata.payload };

@@ -7,7 +7,6 @@ import { useNavigate } from 'react-router-dom';
 import { VerifiedBadge } from '@/components/VerifiedBadge';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { redis } from '@/lib/redis';
-import { triggerNotification } from '@/services/notificationService';
 
 const Friends: React.FC = () => {
   const { currentUser } = useAuth();
@@ -200,14 +199,6 @@ const Friends: React.FC = () => {
                 is_read: false,
                 created_at: new Date().toISOString()
               });
-              
-              triggerNotification(
-                otherId,
-                'Friend Request Accepted',
-                `${currentUser?.display_name || 'Someone'} accepted your friend request!`,
-                { type: 'friend_accept', sender_id: currentUser?.id }
-              );
-
               queryClient.invalidateQueries({ queryKey: ['notifications', otherId] });
             }
           }
@@ -241,14 +232,6 @@ const Friends: React.FC = () => {
         is_read: false,
         created_at: new Date().toISOString()
       });
-
-      triggerNotification(
-        targetId,
-        'New Friend Request',
-        `${currentUser?.display_name || 'Someone'} sent you a friend request!`,
-        { type: 'friend_request', sender_id: currentUser?.id }
-      );
-
       queryClient.invalidateQueries({ queryKey: ['notifications', targetId] });
     } catch (err) {
       console.error("Error sending request:", err);

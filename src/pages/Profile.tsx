@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { Camera, Edit2, Plus, Save, X, MessageCircle, UserPlus, Check, Users, RefreshCw, Calendar, CheckCircle } from 'lucide-react';
 import { useAuth } from '@/contexts/AuthContext';
-import { db, OperationType, handleFirestoreError } from '../lib/firebase';
+import { db } from '../lib/firebase';
 import { doc, getDoc, updateDoc, collection, query, where, getDocs, addDoc, deleteDoc, orderBy } from 'firebase/firestore';
 import { VerifiedBadge } from '@/components/VerifiedBadge';
 import ZoomableImage from '@/components/ZoomableImage';
@@ -30,28 +30,19 @@ const Profile: React.FC = () => {
   const { data: profile, isLoading: profileLoading } = useQuery({
     queryKey: ['profile', username],
     queryFn: async () => {
-      if (!username || !db) return null;
+      if (!username) return null;
       let userData = null;
       
       const q = query(collection(db, 'profiles'), where('username', '==', username));
-      let snap;
-      try {
-        snap = await getDocs(q);
-      } catch (error) {
-        handleFirestoreError(error, OperationType.GET, 'profiles');
-      }
+      const snap = await getDocs(q);
       
-      if (snap && !snap.empty) {
+      if (!snap.empty) {
          userData = { id: snap.docs[0].id, ...snap.docs[0].data() };
-      } else if (db) {
+      } else {
          const docRef = doc(db, 'profiles', username);
-         try {
-           const docSnap = await getDoc(docRef);
-           if (docSnap.exists()) {
-               userData = { id: docSnap.id, ...docSnap.data() };
-           }
-         } catch (error) {
-           handleFirestoreError(error, OperationType.GET, 'profiles/' + username);
+         const docSnap = await getDoc(docRef);
+         if (docSnap.exists()) {
+             userData = { id: docSnap.id, ...docSnap.data() };
          }
       }
       return userData;

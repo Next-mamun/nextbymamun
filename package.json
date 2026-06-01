@@ -4,8 +4,8 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "dev": "tsx server.ts",
-    "build": "vite build && esbuild server.ts --bundle --platform=node --format=cjs --packages=external --sourcemap --outfile=dist/server.cjs",
+    "dev": "vite",
+    "build": "vite build",
     "lint": "tsc",
     "preview": "vite preview"
   },
@@ -23,9 +23,7 @@
     "browser-image-compression": "^2.0.2",
     "clsx": "^2.1.1",
     "emoji-picker-react": "^4.18.0",
-    "express": "^5.2.1",
     "firebase": "^12.13.0",
-    "firebase-admin": "^13.10.0",
     "idb-keyval": "^6.2.2",
     "lucide-react": "^0.575.0",
     "motion": "^12.35.2",
@@ -43,13 +41,10 @@
     "workbox-window": "^7.4.0"
   },
   "devDependencies": {
-    "@types/express": "^5.0.6",
     "@types/node": "^22.14.0",
     "@types/react-dropzone": "^4.2.2",
     "@vitejs/plugin-react": "^5.0.0",
-    "esbuild": "^0.28.0",
     "react-dropzone": "^15.0.0",
-    "tsx": "^4.22.4",
     "typescript": "~5.8.2",
     "vite": "^6.2.0"
   }
