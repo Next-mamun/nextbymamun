@@ -14,7 +14,6 @@ dist-ssr
 .env
 
 # Firebase config
-firebase-applet-config.json
 firebase-blueprint.json
 service-account.json
 google-services.json
