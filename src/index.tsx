@@ -2,7 +2,6 @@
 import React from 'react';
 import ReactDOM from 'react-dom/client';
 import App from './App';
-import { registerSW } from 'virtual:pwa-register';
 import { QueryClient } from '@tanstack/react-query';
 import { PersistQueryClientProvider } from '@tanstack/react-query-persist-client';
 import { createAsyncStoragePersister } from '@tanstack/query-async-storage-persister';
@@ -31,18 +30,6 @@ const persister = createAsyncStoragePersister({
 
 // Expose queryClient globally for real-time invalidation from App.tsx listeners
 (window as any).queryClient = queryClient;
-
-// Register service worker
-registerSW({
-  onNeedRefresh() {
-    if (confirm('New content available. Reload?')) {
-      window.location.reload();
-    }
-  },
-  onOfflineReady() {
-    console.log('App ready for offline use');
-  },
-});
 
 const rootElement = document.getElementById('root');
 if (!rootElement) {

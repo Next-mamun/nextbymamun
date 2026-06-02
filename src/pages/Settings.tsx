@@ -292,6 +292,10 @@ const Settings: React.FC = () => {
     }
   }, [searchQuery, filteredTabs, activeTab]);
 
+  const [notificationPermission, setNotificationPermission] = useState(
+    typeof window !== 'undefined' && 'Notification' in window ? Notification.permission : 'denied'
+  );
+
   return (
     <div className="max-w-[1200px] mx-auto bg-white dark:bg-black rounded-2xl shadow-sm flex flex-col md:flex-row h-[calc(100vh-80px)] overflow-hidden border border-gray-200 dark:border-gray-800 transition-colors">
       {/* Sidebar */}
@@ -493,25 +497,25 @@ const Settings: React.FC = () => {
 
               <Section title="Push Notifications">
                 <div className="p-6 flex flex-col items-center text-center">
-                  <div className={`p-4 rounded-full mb-4 ${Notification.permission === 'granted' ? 'bg-green-100 text-green-600' : 'bg-blue-100 text-blue-600'}`}>
+                  <div className={`p-4 rounded-full mb-4 ${notificationPermission === 'granted' ? 'bg-green-100 text-green-600' : 'bg-blue-100 text-blue-600'}`}>
                     <BellRing size={48} />
                   </div>
                   <h3 className="text-xl font-bold mb-2">
-                    {Notification.permission === 'granted' ? 'Notifications Enabled' : 'Enable Push Notifications'}
+                    {notificationPermission === 'granted' ? 'Notifications Enabled' : 'Enable Push Notifications'}
                   </h3>
                   <p className="text-gray-500 dark:text-gray-400 text-sm mb-6 max-w-sm">
-                    {Notification.permission === 'granted' 
+                    {notificationPermission === 'granted' 
                       ? 'You are all set! You will receive alerts for new messages and mentions even when the app is in the background.'
                       : 'Stay updated with real-time alerts for messages and mentions. Click the button below to grant permission.'}
                   </p>
                   
-                  {Notification.permission !== 'granted' && (
+                  {notificationPermission !== 'granted' && (
                     <button 
                       onClick={async () => {
                         const granted = await requestNotificationPermission();
                         if (granted) {
                           toast('Notifications Enabled!', { description: 'You will now receive alerts from Next.' });
-                          window.location.reload(); // Refresh to update UI state
+                          if ('Notification' in window) setNotificationPermission(Notification.permission);
                         } else {
                           alert('Notification permission was denied. Please enable it in your browser settings.');
                         }
@@ -522,7 +526,7 @@ const Settings: React.FC = () => {
                     </button>
                   )}
 
-                  {Notification.permission === 'granted' && (
+                  {notificationPermission === 'granted' && (
                     <button 
                       onClick={() => toast('Test Notification', { description: 'This is a test to verify notifications are working.' })}
                       className="px-8 py-3 bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-white font-bold rounded-xl hover:bg-gray-200 dark:hover:bg-gray-700 transition-all"

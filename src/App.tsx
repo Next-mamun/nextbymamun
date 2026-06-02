@@ -325,7 +325,27 @@ const App: React.FC = () => {
   useEffect(() => {
     if (currentUser) {
       localStorage.setItem('next_media_user', JSON.stringify(currentUser));
-      requestNotificationPermission();
+      
+      // Request notification on explicit user gesture
+      if (typeof window !== 'undefined' && 'Notification' in window) {
+        if (Notification.permission === 'default') {
+           setTimeout(() => {
+             toast('Enable Push Notifications', {
+                description: 'Get real-time alerts for new messages.',
+                action: {
+                  label: 'Allow',
+                  onClick: async () => {
+                    await requestNotificationPermission();
+                  }
+                },
+                duration: Infinity,
+                id: 'notif-prompt'
+             });
+           }, 2000);
+        } else if (Notification.permission === 'granted') {
+           requestNotificationPermission(); // Gets FCM token silently
+        }
+      }
 
       // Firebase Real-time Listeners for Notifications
       if (!auth.currentUser) return;
@@ -350,8 +370,16 @@ const App: React.FC = () => {
                const senderDoc = await getDoc(doc(db, 'profiles', data.sender_id));
                const sender = senderDoc.data();
                
+               let messageContent = data.content;
+               if (typeof data.content === 'string' && data.content.startsWith('{"JSON_PAYLOAD":')) {
+                 try {
+                   const obj = JSON.parse(data.content);
+                   messageContent = obj.text || (data.media_url ? 'Sent an attachment' : 'New message');
+                 } catch(e) {}
+               }
+
                toast(`New message from ${sender?.display_name || 'Someone'}`, {
-                 description: data.content,
+                 description: messageContent,
                  id: 'message-' + data.sender_id
                });
              }
