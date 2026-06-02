@@ -40,12 +40,15 @@ export const requestNotificationPermission = async () => {
     if (permission === 'granted') {
       try {
         const registration = await navigator.serviceWorker.register('/firebase-messaging-sw.js');
-        const token = await getToken(messaging, {
-          vapidKey: 'BF1N2MaGEU8mze53cT65jsQZmwTj7-qbNhsqPGuc3cswdZMKu6eYi8Q9gOXNggerRSSvolQhalQIiIiNGNzC8FQ',
-          serviceWorkerRegistration: registration
-        });
-        
-        await updateFCMTokenInDb(token);
+        const msg = await messaging();
+        if (msg) {
+          const vapidKey = import.meta.env.VITE_FIREBASE_VAPID_KEY || 'BF1N2MaGEU8mze53cT65jsQZmwTj7-qbNhsqPGuc3cswdZMKu6eYi8Q9gOXNggerRSSvolQhalQIiIiNGNzC8FQ';
+          const token = await getToken(msg, {
+            vapidKey: vapidKey,
+            serviceWorkerRegistration: registration
+          });
+          await updateFCMTokenInDb(token);
+        }
       } catch (tokenErr) {
         console.error('Failed to get FCM token:', tokenErr);
       }
