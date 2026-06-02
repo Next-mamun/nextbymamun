@@ -16,8 +16,11 @@ import { toast } from 'sonner';
 
 // Handle dynamic import errors
 window.addEventListener('error', (e) => {
-  if (e.message && e.message.includes('Failed to fetch dynamically imported module')) {
-    window.location.reload();
+  if (e.message && typeof e.message === 'string' && e.message.includes('Failed to fetch dynamically imported module')) {
+    if (!sessionStorage.getItem('reloaded_for_module_fetch')) {
+      sessionStorage.setItem('reloaded_for_module_fetch', 'true');
+      window.location.reload();
+    }
   }
 });
 
@@ -371,11 +374,18 @@ const App: React.FC = () => {
                const sender = senderDoc.data();
                
                let messageContent = data.content;
-               if (typeof data.content === 'string' && data.content.startsWith('{"JSON_PAYLOAD":')) {
-                 try {
-                   const obj = JSON.parse(data.content);
-                   messageContent = obj.text || (data.media_url ? 'Sent an attachment' : 'New message');
-                 } catch(e) {}
+               if (typeof data.content === 'string') {
+                 if (data.content.includes('"JSON_PAYLOAD"')) {
+                   try {
+                     const obj = JSON.parse(data.content);
+                     messageContent = obj.text || (data.media_url ? 'Sent an attachment' : 'New message');
+                   } catch(e) {}
+                 } else if (data.content.startsWith('{')) {
+                   try {
+                     const obj = JSON.parse(data.content);
+                     if (obj.text) messageContent = obj.text;
+                   } catch(e) {}
+                 }
                }
 
                toast(`New message from ${sender?.display_name || 'Someone'}`, {

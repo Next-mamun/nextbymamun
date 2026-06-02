@@ -205,13 +205,20 @@ const Messages: React.FC = () => {
       messages.forEach(m => {
         const partnerId = m.sender_id === currentUser.id ? m.receiver_id : m.sender_id;
         let parsedM: any = { ...m };
-        if (typeof m.content === 'string' && m.content.startsWith('{"JSON_PAYLOAD":')) {
-          try {
-            const obj = JSON.parse(m.content);
-            parsedM.content = obj.text;
-            parsedM.is_view_once = obj.is_view_once;
-            parsedM.parent_message_id = obj.parent_message_id;
-          } catch(e) {}
+        if (typeof m.content === 'string') {
+          if (m.content.includes('"JSON_PAYLOAD"')) {
+            try {
+              const obj = JSON.parse(m.content);
+              parsedM.content = obj.text;
+              parsedM.is_view_once = obj.is_view_once;
+              parsedM.parent_message_id = obj.parent_message_id;
+            } catch(e) {}
+          } else if (m.content.startsWith('{')) {
+            try {
+              const obj = JSON.parse(m.content);
+              if (obj.text !== undefined) parsedM.content = obj.text;
+            } catch(e) {}
+          }
         }
         if (!partnerMap.has(partnerId)) {
           partnerMap.set(partnerId, parsedM);
@@ -325,13 +332,20 @@ const Messages: React.FC = () => {
       
       const finalData = Array.from(new Map(data.map(m => [m.id, m])).values()).map(m => {
         let parsed: any = { ...m };
-        if (typeof m.content === 'string' && m.content.startsWith('{"JSON_PAYLOAD":')) {
-          try {
-            const obj = JSON.parse(m.content);
-            parsed.content = obj.text;
-            parsed.is_view_once = obj.is_view_once;
-            parsed.parent_message_id = obj.parent_message_id;
-          } catch(e) {}
+        if (typeof m.content === 'string') {
+          if (m.content.includes('"JSON_PAYLOAD"')) {
+            try {
+              const obj = JSON.parse(m.content);
+              parsed.content = obj.text;
+              parsed.is_view_once = obj.is_view_once;
+              parsed.parent_message_id = obj.parent_message_id;
+            } catch(e) {}
+          } else if (m.content.startsWith('{')) {
+            try {
+              const obj = JSON.parse(m.content);
+              if (obj.text !== undefined) parsed.content = obj.text;
+            } catch(e) {}
+          }
         }
         return parsed;
       });
