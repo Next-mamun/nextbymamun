@@ -31,6 +31,19 @@ const persister = createAsyncStoragePersister({
 // Expose queryClient globally for real-time invalidation from App.tsx listeners
 (window as any).queryClient = queryClient;
 
+// Unregister any old service workers (like VitePWA) to prevent caching issues on mobile networks
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.getRegistrations().then(function(registrations) {
+    for(let registration of registrations) {
+      if (registration.active?.scriptURL.includes('sw.js') && !registration.active?.scriptURL.includes('firebase-messaging-sw.js')) {
+        registration.unregister();
+      }
+    }
+  }).catch(function(err) {
+    console.log('Service Worker registration failed: ', err);
+  });
+}
+
 const rootElement = document.getElementById('root');
 if (!rootElement) {
   throw new Error("Could not find root element to mount to");

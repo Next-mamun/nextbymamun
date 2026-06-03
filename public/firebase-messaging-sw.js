@@ -24,3 +24,34 @@ messaging.onBackgroundMessage((payload) => {
 
   self.registration.showNotification(notificationTitle, notificationOptions);
 });
+
+self.addEventListener('notificationclick', (event) => {
+  event.notification.close();
+  
+  let urlToOpen = '/';
+  const data = event.notification.data;
+  
+  if (data) {
+    if (data.type === 'message' && data.sender_id) {
+       urlToOpen = `/messages?user=${data.sender_id}`;
+    } else if (data.url) {
+      urlToOpen = data.url;
+    }
+  }
+
+  event.waitUntil(
+    clients.matchAll({ type: 'window', includeUncontrolled: true }).then((windowClients) => {
+      // Check if there is already a window/tab open with the target URL
+      for (let i = 0; i < windowClients.length; i++) {
+        const client = windowClients[i];
+        if (client.url.includes(urlToOpen) && 'focus' in client) {
+          return client.focus();
+        }
+      }
+      // If not, open the target URL in a new window/tab.
+      if (clients.openWindow) {
+        return clients.openWindow(urlToOpen);
+      }
+    })
+  );
+});
