@@ -17,10 +17,7 @@ import { toast } from 'sonner';
 // Handle dynamic import errors
 window.addEventListener('error', (e) => {
   if (e.message && e.message.includes('Failed to fetch dynamically imported module')) {
-    if (!sessionStorage.getItem('reloaded-for-chunk')) {
-      sessionStorage.setItem('reloaded-for-chunk', 'true');
-      window.location.reload();
-    }
+    window.location.reload();
   }
 });
 
