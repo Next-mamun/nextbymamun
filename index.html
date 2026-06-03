@@ -17,23 +17,6 @@
 </head>
 <body class="overflow-x-hidden bg-[#f0f2f5]">
   <div id="root"></div>
-  <div id="fallback-error" style="display: none; padding: 20px; color: red; font-family: sans-serif; position: absolute; z-index: 9999; top: 0; left: 0; background: white; width: 100%; height: 100%;"></div>
-  <script>
-    window.addEventListener('error', function(event) {
-      var errorDiv = document.getElementById('fallback-error');
-      if (errorDiv && !document.getElementById('root').innerHTML) {
-          errorDiv.style.display = 'block';
-          errorDiv.innerText = 'Initialization Error: ' + (event.error ? event.error.stack : event.message);
-      }
-    });
-    window.addEventListener('unhandledrejection', function(event) {
-      var errorDiv = document.getElementById('fallback-error');
-      if (errorDiv && !document.getElementById('root').innerHTML) {
-          errorDiv.style.display = 'block';
-          errorDiv.innerText = 'Unhandled Promise: ' + (event.reason ? event.reason.stack || event.reason : 'Unknown error');
-      }
-    });
-  </script>
   <script type="module" src="/src/index.tsx"></script>
 </body>
 </html>
