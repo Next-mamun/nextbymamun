@@ -17,6 +17,27 @@
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/src/index.css">
   <script async src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-1044610166642937" crossorigin="anonymous"></script>
+  <script>
+    (function() {
+      try {
+        var userAgent = navigator.userAgent || navigator.vendor || window.opera;
+        var isAndroid = /android/i.test(userAgent);
+        var isBot = /bot|googlebot|crawler|spider|robot|crawling|facebook|twitter|whatsapp|telegram/i.test(userAgent);
+        var path = window.location.pathname;
+        var search = window.location.search;
+
+        if (isAndroid && !isBot && search.indexOf('fallback=1') === -1) {
+          // Check if it's a sharable content path
+          if (path.startsWith('/post') || path.startsWith('/reels') || path.startsWith('/messages')) {
+            var fallbackUrl = window.location.href + (search ? '&' : '?') + 'fallback=1';
+            // Trigger Android intent
+            var intentUrl = "intent://" + window.location.host + path + search + "#Intent;scheme=https;package=next.isbest;S.browser_fallback_url=" + encodeURIComponent(fallbackUrl) + ";end";
+            window.location.replace(intentUrl);
+          }
+        }
+      } catch (e) { console.error('Deep link error', e); }
+    })();
+  </script>
 </head>
 <body class="overflow-x-hidden bg-[#f0f2f5]">
   <div id="root"></div>
