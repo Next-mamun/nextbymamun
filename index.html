@@ -25,8 +25,9 @@
         var isBot = /bot|googlebot|crawler|spider|robot|crawling|facebook|twitter|whatsapp|telegram/i.test(userAgent);
         var path = window.location.pathname;
         var search = window.location.search;
+        var isStandalone = window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone || document.referrer.includes('android-app://');
 
-        if (isAndroid && !isBot && search.indexOf('fallback=1') === -1) {
+        if (isAndroid && !isBot && !isStandalone && search.indexOf('fallback=1') === -1 && search.indexOf('app=1') === -1) {
           // Check if it's a sharable content path
           if (path.startsWith('/post') || path.startsWith('/reels') || path.startsWith('/messages')) {
             var fallbackUrl = window.location.href + (search ? '&' : '?') + 'fallback=1';

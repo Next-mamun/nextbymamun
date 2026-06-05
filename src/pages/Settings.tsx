@@ -471,7 +471,37 @@ const Settings: React.FC = () => {
                 <Row icon={<RefreshCw size={20}/>} title="Haptic Feedback" description="Vibrate on certain actions." action={<Toggle checked={hapticFeedback} onChange={() => setHapticFeedback(!hapticFeedback)} />} border={false} />
               </Section>
               
-              <Section title="Media & Feed">
+              <Section title="Media, Feed & App">
+                <div className="p-4 border-b border-gray-100 dark:border-gray-700 flex justify-between items-center bg-gradient-to-r from-blue-50 to-indigo-50 dark:from-blue-900/20 dark:to-indigo-900/20">
+                  <div>
+                    <h3 className="font-bold text-gray-900 dark:text-white mb-1 flex items-center gap-2">
+                      <Monitor size={18} className="text-blue-500" />
+                      Fast Work Mode
+                    </h3>
+                    <p className="text-xs text-gray-600 dark:text-gray-400">
+                      Install Next onto your device for lightning-fast loads. You will be able to launch it as a standalone app, and content will be cached efficiently to save data.
+                    </p>
+                  </div>
+                  <button 
+                    onClick={() => {
+                      const promptEvent = (window as any).deferredInstallPrompt;
+                      if (promptEvent) {
+                        promptEvent.prompt();
+                        promptEvent.userChoice.then((choiceResult: any) => {
+                          if (choiceResult.outcome === 'accepted') {
+                            toast.success('App installation started!');
+                          }
+                          (window as any).deferredInstallPrompt = null;
+                        });
+                      } else {
+                        toast.error('App is already installed or your browser does not support it.');
+                      }
+                    }}
+                    className="shrink-0 ml-4 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-lg transition-colors text-sm"
+                  >
+                    Install UI
+                  </button>
+                </div>
                 <Row icon={<Camera size={20}/>} title="Autoplay Videos" description="Automatically play videos on cellular/Wi-Fi." action={<Toggle checked={autoplayVideos} onChange={() => setAutoplayVideos(!autoplayVideos)} />} border={true} />
                 <Row icon={<FileText size={20}/>} title="Show All Shared Videos in Reels" description="Include YouTube and Facebook videos in the Reels feed." action={<Toggle checked={showAllReels} onChange={() => setShowAllReels(!showAllReels)} />} border={true} />
                 <Row icon={<MessageSquare size={20}/>} title="Compact Feed" description="Show more posts on screen at a time." action={<Toggle checked={compactFeed} onChange={() => setCompactFeed(!compactFeed)} />} border={true} />

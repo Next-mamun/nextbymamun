@@ -28,6 +28,13 @@ const persister = createAsyncStoragePersister({
   storage: idbStorage,
 });
 
+// Global listener for PWA install prompt
+(window as any).deferredInstallPrompt = null;
+window.addEventListener('beforeinstallprompt', (e) => {
+  e.preventDefault();
+  (window as any).deferredInstallPrompt = e;
+});
+
 // Expose queryClient globally for real-time invalidation from App.tsx listeners
 (window as any).queryClient = queryClient;
 

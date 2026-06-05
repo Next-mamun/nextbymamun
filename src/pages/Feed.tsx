@@ -530,14 +530,15 @@ const Feed: React.FC = () => {
         ))}
       </div>
 
-      <div className="bg-white dark:bg-black rounded-xl shadow-sm border border-gray-100 dark:border-gray-800 overflow-hidden mb-4">
-        <div className="p-4 flex gap-3">
-          <ProfilePhoto src={currentUser?.avatar_url || undefined} alt="user" size="medium" />
-          <div className="flex-1">
-            <textarea 
-              value={newPostContent} 
-              onChange={(e) => setNewPostContent(e.target.value)} 
-              placeholder="What's on your mind?" 
+      {currentUser && (
+        <div className="bg-white dark:bg-black rounded-xl shadow-sm border border-gray-100 dark:border-gray-800 overflow-hidden mb-4">
+          <div className="p-4 flex gap-3">
+            <ProfilePhoto src={currentUser?.avatar_url || undefined} alt="user" size="medium" />
+            <div className="flex-1">
+              <textarea 
+                value={newPostContent} 
+                onChange={(e) => setNewPostContent(e.target.value)} 
+                placeholder="What's on your mind?" 
               className="w-full bg-transparent border-none outline-none resize-none text-[15px] text-gray-800 dark:text-white placeholder-gray-500 font-medium pt-2 min-h-[40px]" 
               rows={newPostContent.split('\n').length > 1 ? Math.min(newPostContent.split('\n').length, 5) : 1} 
               style={{ overflow: 'hidden' }}
@@ -676,6 +677,7 @@ const Feed: React.FC = () => {
           )}
         </div>
       </div>
+      )}
 
       {/* Quick Reels Ribbon */}
       {reels.length > 0 && (

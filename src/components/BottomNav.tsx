@@ -2,7 +2,7 @@ import React, { useMemo } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import { Home, PlusSquare, MessageCircle, User, Users } from 'lucide-react';
 import { useAuth, useTheme } from '@/contexts/AuthContext';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { db } from '../lib/firebase';
 import { collection, query, where, getDocs } from 'firebase/firestore';
 
@@ -10,6 +10,7 @@ const BottomNav: React.FC = () => {
   const location = useLocation();
   const { currentUser } = useAuth();
   const { bottomBarSize, iconColor, darkMode } = useTheme();
+  const queryClient = useQueryClient();
   const isActive = (path: string) => location.pathname === path;
 
   const { data: totalUnread = 0 } = useQuery({
@@ -68,7 +69,15 @@ const BottomNav: React.FC = () => {
         </div>
       </Link>
 
-      <Link to="/messages" className="flex flex-col items-center justify-center w-full h-full relative" style={{ color: isActive('/messages') ? activeColor : inactiveColor }}>
+      <Link 
+        to="/messages" 
+        className="flex flex-col items-center justify-center w-full h-full relative" 
+        style={{ color: isActive('/messages') ? activeColor : inactiveColor }}
+        onClick={() => {
+          queryClient.setQueryData(['totalUnread_firestore_bottom'], 0);
+          queryClient.setQueryData(['totalUnread_firestore'], 0);
+        }}
+      >
         <div className="relative">
           <MessageCircle size={iconSize} strokeWidth={isActive('/messages') ? 2.5 : 2} />
           {totalUnread > 0 && (
