@@ -31,7 +31,7 @@ const Sidebar: React.FC = () => {
   const queryClient = useQueryClient();
 
   const { data: totalUnread = 0 } = useQuery({
-    queryKey: ['totalUnread_firestore'],
+    queryKey: ['totalUnread'],
     queryFn: async () => {
       if (!currentUser) return 0;
       const q = query(
@@ -41,7 +41,15 @@ const Sidebar: React.FC = () => {
       );
       const snap = await getDocs(q);
       
-      const uniqueSenders = new Set(snap.docs.map(doc => doc.data().sender_id));
+      const clearedAt = parseInt(localStorage.getItem('inbox_cleared_at') || '0', 10);
+      const validDocs = snap.docs.filter(doc => {
+        const data = doc.data();
+        if (!data.created_at) return true;
+        const msgTime = typeof data.created_at === 'string' ? new Date(data.created_at).getTime() : data.created_at.toMillis ? data.created_at.toMillis() : Date.now();
+        return msgTime > clearedAt;
+      });
+      
+      const uniqueSenders = new Set(validDocs.map(doc => doc.data().sender_id));
       return uniqueSenders.size;
     },
     enabled: !!currentUser,
@@ -67,8 +75,8 @@ const Sidebar: React.FC = () => {
         to="/messages" 
         badge={totalUnread} 
         onClick={() => {
-          queryClient.setQueryData(['totalUnread_firestore'], 0);
-          queryClient.setQueryData(['totalUnread_firestore_bottom'], 0);
+          localStorage.setItem('inbox_cleared_at', Date.now().toString());
+          queryClient.setQueryData(['totalUnread'], 0);
         }}
       />
       <SidebarItem icon={<div className="relative p-1.5 rounded-xl bg-gradient-to-tr from-pink-500 via-red-500 to-yellow-500 text-white shadow-md shadow-pink-500/20"><svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M20.2 6 3 11l-.9-2.4c-.3-1.1.3-2.2 1.3-2.5l13.5-4c1.1-.3 2.2.3 2.5 1.3Z"/><path d="m6.2 5.3 3.1 3.9"/><path d="m12.4 3.4 3.1 4"/><path d="M3 11h18v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"/></svg></div>} label={<span className="font-bold bg-clip-text text-transparent bg-gradient-to-r from-pink-500 to-orange-500">Reels</span>} to="/reels" />

@@ -14,7 +14,7 @@ const BottomNav: React.FC = () => {
   const isActive = (path: string) => location.pathname === path;
 
   const { data: totalUnread = 0 } = useQuery({
-    queryKey: ['totalUnread_firestore_bottom'],
+    queryKey: ['totalUnread'],
     queryFn: async () => {
       if (!currentUser) return 0;
       const q = query(
@@ -24,7 +24,15 @@ const BottomNav: React.FC = () => {
       );
       const snap = await getDocs(q);
       
-      const uniqueSenders = new Set(snap.docs.map(doc => doc.data().sender_id));
+      const clearedAt = parseInt(localStorage.getItem('inbox_cleared_at') || '0', 10);
+      const validDocs = snap.docs.filter(doc => {
+        const data = doc.data();
+        if (!data.created_at) return true; // optimistic
+        const msgTime = typeof data.created_at === 'string' ? new Date(data.created_at).getTime() : data.created_at.toMillis ? data.created_at.toMillis() : Date.now();
+        return msgTime > clearedAt;
+      });
+      
+      const uniqueSenders = new Set(validDocs.map(doc => doc.data().sender_id));
       return uniqueSenders.size;
     },
     enabled: !!currentUser,
@@ -74,8 +82,8 @@ const BottomNav: React.FC = () => {
         className="flex flex-col items-center justify-center w-full h-full relative" 
         style={{ color: isActive('/messages') ? activeColor : inactiveColor }}
         onClick={() => {
-          queryClient.setQueryData(['totalUnread_firestore_bottom'], 0);
-          queryClient.setQueryData(['totalUnread_firestore'], 0);
+          localStorage.setItem('inbox_cleared_at', Date.now().toString());
+          queryClient.setQueryData(['totalUnread'], 0);
         }}
       >
         <div className="relative">

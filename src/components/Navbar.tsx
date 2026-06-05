@@ -47,6 +47,10 @@ const Navbar: React.FC = () => {
       const msgNotifs: any[] = [];
       
       validMsgs.forEach(msg => {
+        const clearedAt = parseInt(localStorage.getItem('inbox_cleared_at') || '0', 10);
+        const msgTime = typeof msg.created_at === 'string' ? new Date(msg.created_at).getTime() : msg.created_at?.toMillis ? msg.created_at.toMillis() : Date.now();
+        if (msgTime <= clearedAt) return;
+
         if (!msgSenders.has(msg.sender_id)) {
           msgSenders.add(msg.sender_id);
           msgNotifs.push({
@@ -144,18 +148,20 @@ const Navbar: React.FC = () => {
       const seenIds = JSON.parse(localStorage.getItem('seen_notifications') || '[]');
       const newSeenIds = Array.from(new Set([...seenIds, ...notifications.map((n: any) => n.id)]));
       localStorage.setItem('seen_notifications', JSON.stringify(newSeenIds));
+      localStorage.setItem('inbox_cleared_at', Date.now().toString());
  
       if (currentUser?.id) {
          queryClient.setQueryData(['notifications_firestore', currentUser.id], (oldData: any) => {
             if (!oldData) return oldData;
             return oldData.map((n: any) => ({ ...n, is_seen: true }));
          });
+         queryClient.setQueryData(['totalUnread'], 0);
       }
       
       try {
         const qUnread = query(collection(db, 'notifications'), where('user_id', '==', currentUser?.id), where('is_read', '==', false));
         const snap = await getDocs(qUnread);
-        await Promise.all(snap.docs.map(d => updateDoc(doc(db, 'notifications', d.id), { is_read: true })));
+        snap.docs.forEach(d => updateDoc(doc(db, 'notifications', d.id), { is_read: true }).catch(() => {}));
       } catch (e) {
         console.error(e);
       }

@@ -200,8 +200,8 @@ const Messages: React.FC = () => {
       
       // Sort in memory to avoid composite index requirement
       messages.sort((a, b) => {
-        const timeA = typeof a.created_at === 'string' ? new Date(a.created_at).getTime() : a.created_at?.toMillis ? a.created_at.toMillis() : 0;
-        const timeB = typeof b.created_at === 'string' ? new Date(b.created_at).getTime() : b.created_at?.toMillis ? b.created_at.toMillis() : 0;
+        const timeA = typeof a.created_at === 'string' ? new Date(a.created_at).getTime() : a.created_at?.toMillis ? a.created_at.toMillis() : Date.now();
+        const timeB = typeof b.created_at === 'string' ? new Date(b.created_at).getTime() : b.created_at?.toMillis ? b.created_at.toMillis() : Date.now();
         return timeB - timeA;
       });
       
@@ -277,8 +277,8 @@ const Messages: React.FC = () => {
 
       const sortedContacts = contactsWithMessages.sort((a, b) => {
         if (a.lastMessage && b.lastMessage) {
-          const timeA = typeof a.lastMessage.created_at === 'string' ? new Date(a.lastMessage.created_at).getTime() : a.lastMessage.created_at?.toMillis ? a.lastMessage.created_at.toMillis() : 0;
-          const timeB = typeof b.lastMessage.created_at === 'string' ? new Date(b.lastMessage.created_at).getTime() : b.lastMessage.created_at?.toMillis ? b.lastMessage.created_at.toMillis() : 0;
+          const timeA = typeof a.lastMessage.created_at === 'string' ? new Date(a.lastMessage.created_at).getTime() : a.lastMessage.created_at?.toMillis ? a.lastMessage.created_at.toMillis() : Date.now();
+          const timeB = typeof b.lastMessage.created_at === 'string' ? new Date(b.lastMessage.created_at).getTime() : b.lastMessage.created_at?.toMillis ? b.lastMessage.created_at.toMillis() : Date.now();
           return timeB - timeA;
         }
         if (a.lastMessage) return -1;
