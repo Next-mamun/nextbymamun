@@ -39,7 +39,7 @@ export const requestNotificationPermission = async () => {
     const permission = await Notification.requestPermission();
     if (permission === 'granted') {
       try {
-        const registration = await navigator.serviceWorker.register('/firebase-messaging-sw.js');
+        const registration = await navigator.serviceWorker.register('/sw.js');
         const msg = await messaging();
         if (msg) {
           const vapidKey = import.meta.env.VITE_FIREBASE_VAPID_KEY || 'BF1N2MaGEU8mze53cT65jsQZmwTj7-qbNhsqPGuc3cswdZMKu6eYi8Q9gOXNggerRSSvolQhalQIiIiNGNzC8FQ';

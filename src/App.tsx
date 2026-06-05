@@ -388,6 +388,23 @@ const App: React.FC = () => {
                  }
                }
 
+               if (localStorage.getItem('next_media_sound') === 'true') {
+                 try {
+                   const AudioContext = window.AudioContext || (window as any).webkitAudioContext;
+                   const ctx = new AudioContext();
+                   const osc = ctx.createOscillator();
+                   const gain = ctx.createGain();
+                   osc.connect(gain);
+                   gain.connect(ctx.destination);
+                   osc.type = 'sine';
+                   osc.frequency.setValueAtTime(800, ctx.currentTime);
+                   gain.gain.setValueAtTime(0.1, ctx.currentTime);
+                   osc.start();
+                   gain.gain.exponentialRampToValueAtTime(0.00001, ctx.currentTime + 0.3);
+                   osc.stop(ctx.currentTime + 0.3);
+                 } catch(e) { console.warn('Audio play blocked', e); }
+               }
+
                toast(`New message from ${sender?.display_name || 'Someone'}`, {
                  description: messageContent,
                  id: 'message-' + data.sender_id

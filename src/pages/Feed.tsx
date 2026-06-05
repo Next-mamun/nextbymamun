@@ -8,7 +8,7 @@ import VideoPlayer from '@/components/VideoPlayer';
 import EmbedPlayer from '@/components/EmbedPlayer';
 import { useAuth, useTheme } from '@/contexts/AuthContext';
 import { db } from '../lib/firebase';
-import { collection, query, where, orderBy, limit, getDocs, doc, getDoc, updateDoc, startAfter } from 'firebase/firestore';
+import { collection, query, where, orderBy, limit, getDocs, doc, getDoc, updateDoc, startAfter, onSnapshot } from 'firebase/firestore';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { useQuery, useInfiniteQuery, useQueryClient } from '@tanstack/react-query';
 import { CameraCapture, MediaEditor } from '@/components/MediaTools';
@@ -167,6 +167,16 @@ const Feed: React.FC = () => {
     queryFn: async ({ pageParam = undefined }: { pageParam: any }) => {
       const cacheKey = `posts_cache_${selectedCategory}_${contentTypeFilter}_${pageParam ? pageParam.id : 0}`;
       
+      try {
+        const cached = await redis.get(cacheKey);
+        if (cached) {
+          const parsed = typeof cached === 'string' ? JSON.parse(cached) : cached;
+          return { data: parsed, lastVisible: pageParam }; // We don't have lastVisible in cache usually, but we assume it's just continuous
+        }
+      } catch (e) {
+        console.warn('Redis cache error', e);
+      }
+      
       let q = query(collection(db, 'posts'), orderBy('created_at', 'desc'), limit(POSTS_PER_PAGE));
 
       if (selectedCategory !== 'All') {
@@ -198,6 +208,12 @@ const Feed: React.FC = () => {
         populatedPosts = Array.from(new Map(populatedPosts.map(p => [p.id, p])).values());
       }
       
+      try {
+        await redis.setex(cacheKey, 600, JSON.stringify(populatedPosts));
+      } catch (e) {
+        console.warn('Redis save error', e);
+      }
+      
       return { data: populatedPosts, lastVisible };
     },
     initialPageParam: undefined as any,
@@ -219,6 +235,31 @@ const Feed: React.FC = () => {
   });
 
   const [feedRandomSeed] = useState(() => globalFeedSeed);
+  const [newPostsCount, setNewPostsCount] = useState(0);
+
+  useEffect(() => {
+    // Listen for new posts globally
+    const q = query(collection(db, 'posts'), orderBy('created_at', 'desc'), limit(1));
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      snapshot.docChanges().forEach((change) => {
+        if (change.type === 'added') {
+          // Check if this post is already in our flatPosts
+          const currentPosts = queryClient.getQueryData(['posts', selectedCategory, contentTypeFilter]) as any;
+          const flatPosts = currentPosts?.pages?.flatMap((p: any) => p.data) || [];
+          if (flatPosts.length > 0 && !flatPosts.some((p: any) => p.id === change.doc.id) && change.doc.data().user_id !== currentUser?.id) {
+            queryClient.invalidateQueries({ queryKey: ['posts'] });
+          }
+        }
+      });
+    });
+    return () => unsubscribe();
+  }, [selectedCategory, contentTypeFilter, currentUser?.id, queryClient]);
+
+  const handleRefreshFeed = () => {
+    queryClient.invalidateQueries({ queryKey: ['posts'] });
+    setNewPostsCount(0);
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
 
   const posts = useMemo(() => {
     let flatPosts = Array.from(new Map((postsData?.pages.flatMap(p => p.data) || []).map(p => [p.id, p])).values()) as any[];
