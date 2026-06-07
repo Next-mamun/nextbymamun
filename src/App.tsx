@@ -90,15 +90,15 @@ const AppLayout: React.FC = () => {
   };
 
   return (
-    <div className="min-h-screen bg-[#f0f2f5] dark:bg-[#000000] flex flex-col transition-colors duration-300">
+    <div className="h-[100dvh] max-h-[100dvh] overflow-hidden bg-[#f0f2f5] dark:bg-[#000000] flex flex-col transition-colors duration-300">
       <div 
-        className={`flex flex-1 pb-16 max-w-[1920px] mx-auto w-full ${currentUser ? 'pt-14' : ''}`}
+        className={`flex flex-1 pb-[60px] md:pb-0 max-w-[1920px] mx-auto w-full ${currentUser ? 'pt-14' : ''}`}
         onTouchStart={onTouchStart}
         onTouchEnd={onTouchEnd}
       >
         {currentUser && !isMessages && <Navbar />}
         {currentUser && <div className="hidden md:block"><Sidebar /></div>}
-        <main className={`flex-1 overflow-x-hidden overflow-y-auto ${currentUser ? 'p-0 md:p-4' : ''}`}>
+        <main className={`flex-1 flex flex-col overflow-x-hidden overflow-y-auto ${currentUser ? 'p-0 md:p-4' : ''}`}>
           <Suspense fallback={
             <div className="h-full flex items-center justify-center">
               <div className="fast-spin rounded-full h-8 w-8 border-t-2 border-b-2 border-[#1877F2]"></div>
@@ -121,7 +121,7 @@ const AppLayout: React.FC = () => {
           </Suspense>
         </main>
       </div>
-      {currentUser && <div className="z-[100] relative"><BottomNav /></div>}
+      {currentUser && <div className="z-[100] relative keyboard-hide"><BottomNav /></div>}
     </div>
   );
 };

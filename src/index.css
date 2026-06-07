@@ -78,3 +78,9 @@ body.no-animations *, body.no-animations *::before, body.no-animations *::after 
   transition-duration: 0.01ms !important;
   scroll-behavior: auto !important;
 }
+
+@media (max-height: 500px) and (orientation: portrait) {
+  .keyboard-hide {
+    display: none !important;
+  }
+}

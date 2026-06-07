@@ -821,7 +821,7 @@ const Messages: React.FC = () => {
   };
 
   return (
-    <div className="flex h-[calc(100vh-64px)] md:h-full bg-white dark:bg-black rounded-xl shadow-xl border border-gray-200 dark:border-gray-800 overflow-hidden max-w-[1200px] mx-auto">
+    <div className="flex flex-1 h-full w-full bg-white dark:bg-black md:rounded-xl shadow-xl border-x-0 md:border border-gray-200 dark:border-gray-800 overflow-hidden max-w-[1200px] mx-auto">
       {/* Contact Sidebar */}
       <div className={`${selectedChat ? 'hidden md:flex' : 'flex'} w-full md:w-[350px] border-r border-gray-100 dark:border-gray-800 flex flex-col bg-gray-50/50 dark:bg-black/50`}>
         <div className="p-4 border-b border-gray-100 dark:border-gray-800 bg-white dark:bg-black sticky top-0 z-20">
