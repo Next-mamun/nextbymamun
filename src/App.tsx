@@ -32,6 +32,7 @@ import Profile from '@/pages/Profile';
 import Notifications from '@/pages/Notifications';
 import Reels from '@/pages/Reels';
 import CreatePost from '@/pages/CreatePost';
+import Lab from '@/pages/Lab';
 
 // Less common pages can remain lazy
 const Login = lazy(() => import('@/pages/Login'));
@@ -117,6 +118,7 @@ const AppLayout: React.FC = () => {
               <Route path="/create-post" element={currentUser ? <CreatePost /> : <Navigate to="/login" />} />
               <Route path="/reels" element={currentUser ? <Reels /> : <Navigate to="/login" />} />
               <Route path="/reels/:id" element={<Reels />} />
+              <Route path="/lab" element={currentUser ? <Lab /> : <Navigate to="/login" />} />
             </Routes>
           </Suspense>
         </main>

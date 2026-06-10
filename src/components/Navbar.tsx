@@ -1,7 +1,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { Link, useNavigate, useLocation } from 'react-router-dom';
-import { Home, Users, MessageCircle, Bell, User, LogOut, Menu } from 'lucide-react';
+import { Home, Users, MessageCircle, Bell, User, LogOut, Menu, BookOpen } from 'lucide-react';
 import { useAuth } from '@/contexts/AuthContext';
 import { collection, query, where, orderBy, limit, getDocs, doc, getDoc, updateDoc, deleteDoc, onSnapshot } from 'firebase/firestore';
 import { db } from '../lib/firebase';
@@ -185,6 +185,13 @@ const Navbar: React.FC = () => {
       </div>
 
       <div className="flex items-center justify-end gap-1 relative">
+        <Link 
+          to="/lab"
+          className="p-2 rounded-full hover:bg-black/5 dark:hover:bg-white/5 transition-colors text-black dark:text-white"
+          title="Lab (E-Books)"
+        >
+          <BookOpen size={24} />
+        </Link>
         <button 
           onClick={handleNotificationsClick}
           className={`p-2 rounded-full hover:bg-black/5 transition-colors relative ${showNotifications ? 'text-[#1877F2] bg-blue-50' : 'text-black'}`}

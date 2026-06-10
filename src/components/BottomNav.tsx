@@ -1,6 +1,6 @@
 import React, { useMemo } from 'react';
 import { Link, useLocation } from 'react-router-dom';
-import { Home, PlusSquare, MessageCircle, User, Users } from 'lucide-react';
+import { Home, PlusSquare, MessageCircle, User, Users, BookOpen } from 'lucide-react';
 import { useAuth, useTheme } from '@/contexts/AuthContext';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { db } from '../lib/firebase';
