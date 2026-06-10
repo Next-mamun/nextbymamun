@@ -177,7 +177,8 @@ const Navbar: React.FC = () => {
   };
 
   return (
-    <nav className="fixed top-0 left-0 right-0 h-14 bg-gradient-to-r from-black to-white backdrop-blur-md border-b border-gray-100 dark:border-gray-800 z-[100] px-4 flex items-center justify-between shadow-sm transition-colors">
+    <nav className="fixed top-0 left-0 right-0 h-14 bg-white/90 dark:bg-black/90 backdrop-blur-md border-b border-gray-100 dark:border-gray-800 z-[100] transition-colors safe-top">
+      <div className="max-w-[1920px] mx-auto h-full px-4 flex items-center justify-between">
       <div className="flex items-center gap-2">
         <Link to="/" className="flex items-center">
           <img src="https://i.postimg.cc/wxwt5tsk/retouch-2026030721254774.png" alt="Next" className="h-8 w-auto" />
@@ -271,6 +272,7 @@ const Navbar: React.FC = () => {
             </button>
           </div>
         )}
+      </div>
       </div>
     </nav>
   );

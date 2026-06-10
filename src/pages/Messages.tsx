@@ -293,47 +293,32 @@ const Messages: React.FC = () => {
     gcTime: Infinity,
   });
 
-  const { data: messages = [] } = useQuery({
-    queryKey: ['messages', selectedChat?.id],
-    queryFn: async () => {
-      if (!selectedChat || !currentUser) return [];
-      const cacheKey = currentUser?.id && selectedChat?.id 
-        ? `messages_cache_${[currentUser.id, selectedChat.id].sort().join('_')}`
-        : null;
-      
-      if (cacheKey) {
-        try {
-          const cachedStr = await redis.get(cacheKey);
-          if (cachedStr) {
-            return typeof cachedStr === 'string' ? JSON.parse(cachedStr) : cachedStr;
-          }
-        } catch (e) {
-          console.warn('Redis read failed for messages cache', e);
-        }
-      }
+  const [messages, setMessages] = useState<any[]>([]);
 
-      const q = query(
-        collection(db, 'messages'),
-        or(
-          and(where('sender_id', '==', currentUser.id), where('receiver_id', '==', selectedChat.id)),
-          and(where('sender_id', '==', selectedChat.id), where('receiver_id', '==', currentUser.id))
-        ),
-        limit(200)
-      );
+  useEffect(() => {
+    if (!selectedChat || !currentUser) {
+      setMessages([]);
+      return;
+    }
 
-      const dataSnap = await getDocs(q);
-      let data = dataSnap.docs.map(d => {
+    const q = query(
+      collection(db, 'messages'),
+      or(
+        and(where('sender_id', '==', currentUser.id), where('receiver_id', '==', selectedChat.id)),
+        and(where('sender_id', '==', selectedChat.id), where('receiver_id', '==', currentUser.id))
+      ),
+      limit(200)
+    );
+
+    const unsub = onSnapshot(q, { includeMetadataChanges: true }, (snapshot) => {
+      const data = snapshot.docs.map(d => {
         const item = d.data();
-        // Convert Firestore Timestamp to ISO string for consistency in App
         const createdAt = item.created_at && typeof item.created_at.toDate === 'function' 
           ? item.created_at.toDate().toISOString() 
           : item.created_at;
         return {id: d.id, ...item, created_at: createdAt} as any;
       });
       
-      if (!data) return [];
-      
-      // Sort in memory chronologically
       data.sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
       
       const finalData = Array.from(new Map(data.map(m => [m.id, m])).values()).map(m => {
@@ -356,18 +341,26 @@ const Messages: React.FC = () => {
         return parsed;
       });
       
-      if (cacheKey) {
-        try {
-          await redis.setex(cacheKey, 600, JSON.stringify(finalData));
-        } catch (e) {
-          console.warn('Redis write failed for messages cache', e);
-        }
+      setMessages(finalData);
+
+      // Check for incoming unread messages and mark them as read
+      const unreadCount = finalData.filter(m => m.sender_id === selectedChat.id && !m.is_read).length;
+      if (unreadCount > 0) {
+        queryClient.invalidateQueries({ queryKey: ['unreadCounts'] });
+        queryClient.invalidateQueries({ queryKey: ['totalUnread'] });
       }
-      return finalData;
-    },
-    enabled: !!selectedChat,
-    staleTime: 0, // Messages should be fresh
-  });
+
+      finalData.forEach(async (m) => {
+        if (m.sender_id === selectedChat.id && !m.is_read) {
+          try {
+            await updateDoc(doc(db, 'messages', m.id), { is_read: true });
+          } catch(e) {}
+        }
+      });
+    });
+
+    return () => unsub();
+  }, [selectedChat?.id, currentUser?.id]);
 
   const { data: blockData = null } = useQuery({
     queryKey: ['blockStatus', selectedChat?.id],
@@ -447,46 +440,6 @@ const Messages: React.FC = () => {
     };
   }, [currentUser?.id, queryClient]);
 
-  useEffect(() => {
-    if (selectedChat) {
-      const markAsRead = async () => {
-        if (!currentUser?.id || !selectedChat?.id) return;
-        
-        const qUnread = query(
-          collection(db, 'messages'),
-          where('receiver_id', '==', currentUser.id),
-          where('sender_id', '==', selectedChat.id),
-          where('is_read', '==', false)
-        );
-        
-        const snap = await getDocs(qUnread);
-        if(!snap.empty) {
-            await Promise.all(snap.docs.map(d => updateDoc(doc(db, 'messages', d.id), { is_read: true })));
-            queryClient.invalidateQueries({ queryKey: ['unreadCounts'] });
-            queryClient.invalidateQueries({ queryKey: ['totalUnread'] });
-            queryClient.invalidateQueries({ queryKey: ['notifications', currentUser.id] });
-        }
-      };
-      
-      markAsRead();
-
-      const qChat = query(
-        collection(db, 'messages'),
-        or(
-          and(where('sender_id', '==', currentUser?.id), where('receiver_id', '==', selectedChat.id)),
-          and(where('sender_id', '==', selectedChat.id), where('receiver_id', '==', currentUser?.id))
-        )
-      );
-      
-      const unsubChat = onSnapshot(qChat, () => {
-         queryClient.invalidateQueries({ queryKey: ['messages', selectedChat.id] });
-         markAsRead();
-      });
-
-      return () => unsubChat();
-    }
-  }, [selectedChat, currentUser?.id, queryClient]);
-
   const handleEmojiClick = (emojiData: any) => {
     handleMessageTextChange(messageText + emojiData.emoji);
   };
@@ -501,6 +454,11 @@ const Messages: React.FC = () => {
   const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file || !selectedChat) return;
+
+    if (!file.type.startsWith('image/') && !file.type.startsWith('video/')) {
+      alert('Please select a valid image or video file.');
+      return;
+    }
 
     if (file.type.startsWith('video/')) {
       setSelectedMedia({
@@ -821,9 +779,9 @@ const Messages: React.FC = () => {
   };
 
   return (
-    <div className="flex flex-1 h-full w-full bg-white dark:bg-black md:rounded-xl shadow-xl border-x-0 md:border border-gray-200 dark:border-gray-800 overflow-hidden max-w-[1200px] mx-auto">
+    <div className="flex flex-1 min-h-0 h-full w-full bg-white dark:bg-black md:rounded-xl shadow-xl border-x-0 md:border border-gray-200 dark:border-gray-800 max-w-[1200px] mx-auto overflow-hidden">
       {/* Contact Sidebar */}
-      <div className={`${selectedChat ? 'hidden md:flex' : 'flex'} w-full md:w-[350px] border-r border-gray-100 dark:border-gray-800 flex flex-col bg-gray-50/50 dark:bg-black/50`}>
+      <div className={`${selectedChat ? 'hidden md:flex' : 'flex'} min-h-0 w-full md:w-[350px] border-r border-gray-100 dark:border-gray-800 flex flex-col bg-gray-50/50 dark:bg-black/50`}>
         <div className="p-4 border-b border-gray-100 dark:border-gray-800 bg-white dark:bg-black sticky top-0 z-20">
           <div className="flex justify-between items-center mb-4">
             <h1 className="text-2xl font-black text-gray-900 dark:text-white">Chats</h1>
@@ -844,7 +802,7 @@ const Messages: React.FC = () => {
             />
           </div>
         </div>
-        <div className="flex-1 overflow-y-auto p-2 space-y-1">
+        <div className="flex-1 overflow-y-auto p-2 space-y-1 min-h-0">
           {loadingContacts && contacts.length === 0 ? (
             <div className="flex flex-col gap-2 px-2 pt-2">
               {[...Array(6)].map((_, i) => (
@@ -922,10 +880,10 @@ const Messages: React.FC = () => {
       </div>
 
       {/* Message Area */}
-      <div className={`${!selectedChat ? 'hidden md:flex' : 'flex'} flex-1 flex-col bg-white dark:bg-black`}>
+      <div className={`${!selectedChat ? 'hidden md:flex' : 'flex'} flex-1 flex-col bg-white dark:bg-black relative min-h-0`}>
         {selectedChat ? (
           <>
-            <div className="p-4 border-b border-gray-100 dark:border-gray-800 flex items-center justify-between shadow-sm bg-white/80 dark:bg-black/80 backdrop-blur-md sticky top-0 z-10">
+            <div className="p-4 border-b border-gray-100 dark:border-gray-800 flex items-center justify-between shadow-sm bg-white dark:bg-black shrink-0 z-10">
               <div className="flex items-center gap-3">
                 <button onClick={() => setSelectedChat(null)} className="md:hidden p-2 rounded-full hover:bg-gray-100 dark:hover:bg-gray-800"><ArrowLeft size={20} className="text-gray-600 dark:text-gray-300" /></button>
                 <div className="flex items-center gap-3 cursor-pointer hover:opacity-80 transition-opacity" onClick={() => navigate(`/profile/${selectedChat.username}`)}>
@@ -950,7 +908,7 @@ const Messages: React.FC = () => {
               </button>
             </div>
             
-            <div className="flex-1 p-6 overflow-y-auto bg-gray-50/30 dark:bg-gray-900/30 flex flex-col gap-3">
+            <div className="flex-1 p-3 md:p-6 overflow-y-auto bg-gray-50/30 dark:bg-gray-900/30 flex flex-col gap-3 min-h-0">
               {isBlocked ? (
                 <div className="flex-1 flex flex-col items-center justify-center text-center p-8">
                   <div className="bg-red-100 dark:bg-red-900/20 p-6 rounded-full mb-4">
@@ -1064,9 +1022,9 @@ const Messages: React.FC = () => {
                   </button>
                 </div>
               )}
-              <form onSubmit={handleSendMessage} className="p-3 md:p-5 bg-white dark:bg-black border-t border-gray-100 dark:border-gray-800 flex items-center gap-2 md:gap-3 relative z-30">
+              <form onSubmit={handleSendMessage} className="p-3 md:p-5 bg-white dark:bg-black border-t border-gray-100 dark:border-gray-800 flex items-center gap-2 md:gap-3 relative z-30 shrink-0">
                 {!recordedAudio && (
-                  <input type="file" ref={fileInputRef} hidden onChange={handleFileSelect} accept="image/*,video/*" />
+                  <input type="file" ref={fileInputRef} hidden onChange={handleFileSelect} accept="*/*" />
                 )}
                 
                 {!recordedAudio && (

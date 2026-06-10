@@ -356,6 +356,10 @@ const Feed: React.FC = () => {
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
+      if (!file.type.startsWith('image/') && !file.type.startsWith('video/')) {
+        alert('Please select a valid image or video file.');
+        return;
+      }
       const type = file.type.startsWith('video') ? 'video' : 'image';
       setSelectedFile(file);
       setPreviewUrl(URL.createObjectURL(file));
@@ -483,7 +487,7 @@ const Feed: React.FC = () => {
   };
 
   return (
-    <div className="max-w-[90vmin] mx-auto w-full flex flex-col gap-[2vmin] pb-[10vmin]">
+    <div className="max-w-[700px] w-full mx-auto flex flex-col gap-4 pb-20 pt-4 px-4">
       {/* Search Bar */}
       <div className="bg-white dark:bg-black rounded-[2vmin] shadow-sm border border-gray-200 dark:border-gray-800 p-[1vmin] flex items-center gap-[1vmin] sticky top-0 z-40">
         <div className="flex-1 bg-gray-100 dark:bg-gray-900 rounded-full flex items-center px-4 py-2 border border-transparent focus-within:border-[#1877F2] transition-all">
@@ -609,7 +613,7 @@ const Feed: React.FC = () => {
         {/* Options & Action Bar */}
         <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center border-t border-gray-100 dark:border-gray-800/60 px-4 py-3 bg-gray-50/50 dark:bg-gray-900/30 gap-3">
           <div className="flex items-center gap-1 flex-wrap">
-            <input type="file" ref={fileInputRef} hidden onChange={(e) => handleFileSelect(e)} accept="image/*,video/*" />
+            <input type="file" ref={fileInputRef} hidden onChange={(e) => handleFileSelect(e)} accept="*/*" />
             <button onClick={() => fileInputRef.current?.click()} className="flex items-center gap-1.5 px-3 py-1.5 hover:bg-green-50 dark:hover:bg-green-900/20 rounded-full text-green-500 transition-colors group" title="Photo/Video">
               <LucideImage size={20} className="group-hover:scale-110 transition-transform" />
               <span className="text-sm font-bold text-gray-600 dark:text-gray-400 hidden sm:inline">Media</span>

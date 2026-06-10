@@ -36,6 +36,11 @@ const CreatePost = () => {
     if (acceptedFiles && acceptedFiles.length > 0) {
       const selectedFile = acceptedFiles[0];
       
+      if (!selectedFile.type.startsWith('image/') && !selectedFile.type.startsWith('video/')) {
+        alert('Please select an image or video file.');
+        return;
+      }
+      
       // Limit file size to 10MB
       if (selectedFile.size > 10 * 1024 * 1024) {
         alert('File is too large. Please select a file under 10MB.');
@@ -72,10 +77,6 @@ const CreatePost = () => {
 
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
     onDrop,
-    accept: {
-      'image/*': ['.jpeg', '.png', '.gif', '.webp'],
-      'video/*': ['.mp4', '.mov', '.avi']
-    },
     multiple: false,
   });
 

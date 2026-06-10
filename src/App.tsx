@@ -50,6 +50,7 @@ const AppLayout: React.FC = () => {
   const [touchStart, setTouchStart] = useState<{ x: number, y: number } | null>(null);
 
   const onTouchStart = (e: React.TouchEvent) => {
+    // DO NOT prevent default here or scrolling will break
     setTouchStart({ x: e.touches[0].clientX, y: e.touches[0].clientY });
   };
 
@@ -59,8 +60,8 @@ const AppLayout: React.FC = () => {
     const distanceX = touchStart.x - touchEnd.x;
     const distanceY = Math.abs(touchStart.y - touchEnd.y);
 
-    // Swipe sensitivity thresholds
-    const isHorizontalSwipe = Math.abs(distanceX) > 120 && distanceY < 60;
+    // Swipe sensitivity thresholds - stricter to avoid accidental swipes when scrolling down
+    const isHorizontalSwipe = Math.abs(distanceX) > 120 && distanceY < 40;
     
     if (isHorizontalSwipe) {
       handleSwipe(distanceX > 0 ? 'left' : 'right');
@@ -91,17 +92,18 @@ const AppLayout: React.FC = () => {
   };
 
   return (
-    <div className="h-[100dvh] max-h-[100dvh] overflow-hidden bg-[#f0f2f5] dark:bg-[#000000] flex flex-col transition-colors duration-300">
+    <div className="w-full h-[100dvh] bg-[#f0f2f5] dark:bg-[#000000] flex flex-col transition-colors duration-300 overflow-hidden">
       <div 
-        className={`flex flex-1 pb-[60px] md:pb-0 max-w-[1920px] mx-auto w-full ${currentUser ? 'pt-14' : ''}`}
+        className={`flex h-[100dvh] w-full max-w-[1920px] mx-auto overflow-hidden`}
         onTouchStart={onTouchStart}
         onTouchEnd={onTouchEnd}
       >
-        {currentUser && !isMessages && <Navbar />}
-        {currentUser && <div className="hidden md:block"><Sidebar /></div>}
-        <main className={`flex-1 flex flex-col overflow-x-hidden overflow-y-auto ${currentUser ? 'p-0 md:p-4' : ''}`}>
+        {currentUser && <Navbar />}
+        {currentUser && <div className="hidden md:block xl:min-w-[300px] shrink-0 sticky top-14 h-[calc(100vh-3.5rem)] overflow-y-auto"><Sidebar /></div>}
+        <main className={`w-full flex-1 flex flex-col min-w-0 pt-14 pb-[60px] md:pb-0 ${isMessages ? 'overflow-hidden bg-white dark:bg-black' : 'overflow-x-hidden overflow-y-auto px-0 md:p-4'}`}>
+          <div className="flex-1 w-full flex flex-col min-h-0">
           <Suspense fallback={
-            <div className="h-full flex items-center justify-center">
+            <div className="h-full flex items-center justify-center min-h-[50vh]">
               <div className="fast-spin rounded-full h-8 w-8 border-t-2 border-b-2 border-[#1877F2]"></div>
             </div>
           }>
@@ -121,6 +123,7 @@ const AppLayout: React.FC = () => {
               <Route path="/lab" element={currentUser ? <Lab /> : <Navigate to="/login" />} />
             </Routes>
           </Suspense>
+          </div>
         </main>
       </div>
       {currentUser && <div className="z-[100] relative keyboard-hide"><BottomNav /></div>}
@@ -281,6 +284,31 @@ const App: React.FC = () => {
       document.body.classList.remove('no-animations');
     }
   }, [animationsEnabled]);
+
+  useEffect(() => {
+    const updateVP = () => {
+      if (window.visualViewport) {
+        document.documentElement.style.setProperty('--vh', `${window.visualViewport.height * 0.01}px`);
+      } else {
+        document.documentElement.style.setProperty('--vh', `${window.innerHeight * 0.01}px`);
+      }
+    };
+    updateVP();
+    if (window.visualViewport) {
+      window.visualViewport.addEventListener('resize', updateVP);
+      window.visualViewport.addEventListener('scroll', updateVP);
+    } else {
+      window.addEventListener('resize', updateVP);
+    }
+    return () => {
+      if (window.visualViewport) {
+        window.visualViewport.removeEventListener('resize', updateVP);
+        window.visualViewport.removeEventListener('scroll', updateVP);
+      } else {
+        window.removeEventListener('resize', updateVP);
+      }
+    };
+  }, []);
 
   useEffect(() => {
     let viewportMeta = document.querySelector('meta[name="viewport"]');
