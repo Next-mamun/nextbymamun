@@ -183,15 +183,6 @@ const Messages: React.FC = () => {
     }
   }, [location.state, location.pathname, navigate]);
 
-  useEffect(() => {
-    if (selectedChat) {
-      document.body.classList.add('chat-active');
-    } else {
-      document.body.classList.remove('chat-active');
-    }
-    return () => document.body.classList.remove('chat-active');
-  }, [selectedChat]);
-
   const { data: contacts = [], isLoading: loadingContacts } = useQuery({
     queryKey: ['contacts'],
     queryFn: async () => {

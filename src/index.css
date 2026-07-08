@@ -75,15 +75,6 @@ html, body {
 
 .h-screen {
   height: 100vh;
-  height: calc(var(--vh, 1vh) * 100);
-}
-
-.min-h-\[100dvh\] {
-  min-height: calc(var(--vh, 1vh) * 100) !important;
-}
-
-.h-\[100dvh\] {
-  height: calc(var(--vh, 1vh) * 100) !important;
 }
 
 body.high-contrast {
@@ -105,20 +96,4 @@ body.no-animations *, body.no-animations *::before, body.no-animations *::after 
   .keyboard-hide {
     display: none !important;
   }
-}
-
-body.chat-active .bottom-nav-container {
-  display: none !important;
-}
-
-main.is-messages {
-  padding-bottom: 60px;
-}
-@media (min-width: 768px) {
-  main.is-messages {
-    padding-bottom: 0px;
-  }
-}
-body.chat-active main.is-messages {
-  padding-bottom: 0px !important;
 }

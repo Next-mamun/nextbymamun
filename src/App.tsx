@@ -49,6 +49,18 @@ const AppLayout: React.FC = () => {
 
   const [touchStart, setTouchStart] = useState<{ x: number, y: number } | null>(null);
 
+  useEffect(() => {
+    const handleResize = () => {
+      // standard handle resize if needed
+    };
+    
+    window.addEventListener('resize', handleResize);
+    
+    return () => {
+      window.removeEventListener('resize', handleResize);
+    };
+  }, []);
+
   const onTouchStart = (e: React.TouchEvent) => {
     // DO NOT prevent default here or scrolling will break
     setTouchStart({ x: e.touches[0].clientX, y: e.touches[0].clientY });
@@ -92,15 +104,15 @@ const AppLayout: React.FC = () => {
   };
 
   return (
-    <div className="fixed inset-0 w-full bg-[#f0f2f5] dark:bg-[#000000] flex flex-col transition-colors duration-300 overflow-hidden">
+    <div className="w-full h-[100dvh] bg-[#f0f2f5] dark:bg-[#000000] flex flex-col transition-colors duration-300 overflow-hidden">
       <div 
-        className={`flex flex-1 h-full w-full max-w-[1920px] mx-auto overflow-hidden`}
+        className="flex h-[100dvh] w-full max-w-[1920px] mx-auto overflow-hidden"
         onTouchStart={onTouchStart}
         onTouchEnd={onTouchEnd}
       >
         {currentUser && <Navbar />}
         {currentUser && <div className="hidden md:block xl:min-w-[300px] shrink-0 sticky top-14 h-[calc(100vh-3.5rem)] overflow-y-auto"><Sidebar /></div>}
-        <main className={`w-full flex-1 flex flex-col min-w-0 pt-14 main-content-container ${isMessages ? 'is-messages overflow-hidden bg-white dark:bg-black' : 'pb-[60px] md:pb-0 overflow-x-hidden overflow-y-auto px-0 md:p-4'}`}>
+        <main className={`w-full flex-1 flex flex-col min-w-0 pt-14 pb-[60px] md:pb-0 ${isMessages ? 'overflow-hidden bg-white dark:bg-black' : 'overflow-x-hidden overflow-y-auto px-0 md:p-4'}`}>
           <div className="flex-1 w-full flex flex-col min-h-0">
           <Suspense fallback={
             <div className="h-full flex items-center justify-center min-h-[50vh]">
@@ -285,30 +297,7 @@ const App: React.FC = () => {
     }
   }, [animationsEnabled]);
 
-  useEffect(() => {
-    const updateVP = () => {
-      if (window.visualViewport) {
-        document.documentElement.style.setProperty('--vh', `${window.visualViewport.height * 0.01}px`);
-      } else {
-        document.documentElement.style.setProperty('--vh', `${window.innerHeight * 0.01}px`);
-      }
-    };
-    updateVP();
-    if (window.visualViewport) {
-      window.visualViewport.addEventListener('resize', updateVP);
-      window.visualViewport.addEventListener('scroll', updateVP);
-    } else {
-      window.addEventListener('resize', updateVP);
-    }
-    return () => {
-      if (window.visualViewport) {
-        window.visualViewport.removeEventListener('resize', updateVP);
-        window.visualViewport.removeEventListener('scroll', updateVP);
-      } else {
-        window.removeEventListener('resize', updateVP);
-      }
-    };
-  }, []);
+
 
   useEffect(() => {
     let viewportMeta = document.querySelector('meta[name="viewport"]');
