@@ -106,3 +106,19 @@ body.no-animations *, body.no-animations *::before, body.no-animations *::after 
     display: none !important;
   }
 }
+
+body.chat-active .bottom-nav-container {
+  display: none !important;
+}
+
+main.is-messages {
+  padding-bottom: 60px;
+}
+@media (min-width: 768px) {
+  main.is-messages {
+    padding-bottom: 0px;
+  }
+}
+body.chat-active main.is-messages {
+  padding-bottom: 0px !important;
+}

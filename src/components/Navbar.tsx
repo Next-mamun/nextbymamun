@@ -195,7 +195,7 @@ const Navbar: React.FC = () => {
         </Link>
         <button 
           onClick={handleNotificationsClick}
-          className={`p-2 rounded-full hover:bg-black/5 transition-colors relative ${showNotifications ? 'text-[#1877F2] bg-blue-50' : 'text-black'}`}
+          className={`p-2 rounded-full hover:bg-black/5 dark:hover:bg-white/5 transition-colors relative ${showNotifications ? 'text-[#1877F2] bg-blue-50 dark:bg-blue-900/30' : 'text-black dark:text-white'}`}
         >
           <Bell size={24} fill={showNotifications ? "currentColor" : "none"} />
           {notifications.filter(n => !n.is_seen).length > 0 && (
@@ -207,7 +207,7 @@ const Navbar: React.FC = () => {
 
         <button 
           onClick={() => { setShowDropdown(!showDropdown); setShowNotifications(false); }}
-          className={`p-2 rounded-full hover:bg-black/5 transition-colors ${showDropdown ? 'text-[#1877F2] bg-blue-50' : 'text-black'}`}
+          className={`p-2 rounded-full hover:bg-black/5 dark:hover:bg-white/5 transition-colors ${showDropdown ? 'text-[#1877F2] bg-blue-50 dark:bg-blue-900/30' : 'text-black dark:text-white'}`}
         >
           <Menu size={24} />
         </button>

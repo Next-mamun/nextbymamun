@@ -100,7 +100,7 @@ const AppLayout: React.FC = () => {
       >
         {currentUser && <Navbar />}
         {currentUser && <div className="hidden md:block xl:min-w-[300px] shrink-0 sticky top-14 h-[calc(100vh-3.5rem)] overflow-y-auto"><Sidebar /></div>}
-        <main className={`w-full flex-1 flex flex-col min-w-0 pt-14 ${isMessages ? 'pb-0 overflow-hidden bg-white dark:bg-black' : 'pb-[60px] md:pb-0 overflow-x-hidden overflow-y-auto px-0 md:p-4'}`}>
+        <main className={`w-full flex-1 flex flex-col min-w-0 pt-14 main-content-container ${isMessages ? 'is-messages overflow-hidden bg-white dark:bg-black' : 'pb-[60px] md:pb-0 overflow-x-hidden overflow-y-auto px-0 md:p-4'}`}>
           <div className="flex-1 w-full flex flex-col min-h-0">
           <Suspense fallback={
             <div className="h-full flex items-center justify-center min-h-[50vh]">
@@ -126,7 +126,7 @@ const AppLayout: React.FC = () => {
           </div>
         </main>
       </div>
-      {currentUser && !isMessages && <div className="z-[100] relative keyboard-hide"><BottomNav /></div>}
+      {currentUser && <div className="z-[100] relative bottom-nav-container keyboard-hide"><BottomNav /></div>}
     </div>
   );
 };
