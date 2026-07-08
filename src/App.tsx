@@ -49,15 +49,31 @@ const AppLayout: React.FC = () => {
 
   const [touchStart, setTouchStart] = useState<{ x: number, y: number } | null>(null);
 
+  const [appHeight, setAppHeight] = useState('100dvh');
+
   useEffect(() => {
     const handleResize = () => {
-      // standard handle resize if needed
+      if (window.visualViewport) {
+        setAppHeight(`${window.visualViewport.height}px`);
+      } else {
+        setAppHeight(`${window.innerHeight}px`);
+      }
     };
     
-    window.addEventListener('resize', handleResize);
+    handleResize();
+    
+    if (window.visualViewport) {
+      window.visualViewport.addEventListener('resize', handleResize);
+    } else {
+      window.addEventListener('resize', handleResize);
+    }
     
     return () => {
-      window.removeEventListener('resize', handleResize);
+      if (window.visualViewport) {
+        window.visualViewport.removeEventListener('resize', handleResize);
+      } else {
+        window.removeEventListener('resize', handleResize);
+      }
     };
   }, []);
 
@@ -104,9 +120,10 @@ const AppLayout: React.FC = () => {
   };
 
   return (
-    <div className="w-full h-[100dvh] bg-[#f0f2f5] dark:bg-[#000000] flex flex-col transition-colors duration-300 overflow-hidden">
+    <div className="w-full bg-[#f0f2f5] dark:bg-[#000000] flex flex-col transition-colors duration-300 overflow-hidden" style={{ height: appHeight }}>
       <div 
-        className="flex h-[100dvh] w-full max-w-[1920px] mx-auto overflow-hidden"
+        className="flex w-full max-w-[1920px] mx-auto overflow-hidden"
+        style={{ height: appHeight }}
         onTouchStart={onTouchStart}
         onTouchEnd={onTouchEnd}
       >
@@ -311,7 +328,7 @@ const App: React.FC = () => {
       viewportMeta.setAttribute('content', 'width=1024');
       localStorage.setItem('next_media_desktop', 'true');
     } else {
-      viewportMeta.setAttribute('content', 'width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no');
+      viewportMeta.setAttribute('content', 'width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, interactive-widget=resizes-content');
       localStorage.setItem('next_media_desktop', 'false');
     }
   }, [desktopMode]);
