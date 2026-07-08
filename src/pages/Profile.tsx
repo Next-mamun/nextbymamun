@@ -264,7 +264,7 @@ const Profile: React.FC = () => {
   if (!profile) return <div className="p-20 text-center text-gray-500 font-bold">Profile not found.</div>;
 
   return (
-    <div className="bg-white dark:bg-black min-h-screen relative overflow-hidden pt-4">
+    <div className="bg-white dark:bg-black min-h-screen relative pt-4">
       {/* Photo Modal */}
       {showPhotoModal && (
         <div className="fixed inset-0 bg-black/90 z-[200] flex items-center justify-center p-4 animate-in fade-in duration-200" onClick={() => setShowPhotoModal(false)}>

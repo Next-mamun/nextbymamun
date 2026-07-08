@@ -92,15 +92,15 @@ const AppLayout: React.FC = () => {
   };
 
   return (
-    <div className="w-full h-[100dvh] bg-[#f0f2f5] dark:bg-[#000000] flex flex-col transition-colors duration-300 overflow-hidden">
+    <div className="fixed inset-0 w-full bg-[#f0f2f5] dark:bg-[#000000] flex flex-col transition-colors duration-300 overflow-hidden">
       <div 
-        className={`flex h-[100dvh] w-full max-w-[1920px] mx-auto overflow-hidden`}
+        className={`flex flex-1 h-full w-full max-w-[1920px] mx-auto overflow-hidden`}
         onTouchStart={onTouchStart}
         onTouchEnd={onTouchEnd}
       >
         {currentUser && <Navbar />}
         {currentUser && <div className="hidden md:block xl:min-w-[300px] shrink-0 sticky top-14 h-[calc(100vh-3.5rem)] overflow-y-auto"><Sidebar /></div>}
-        <main className={`w-full flex-1 flex flex-col min-w-0 pt-14 pb-[60px] md:pb-0 ${isMessages ? 'overflow-hidden bg-white dark:bg-black' : 'overflow-x-hidden overflow-y-auto px-0 md:p-4'}`}>
+        <main className={`w-full flex-1 flex flex-col min-w-0 pt-14 ${isMessages ? 'pb-0 overflow-hidden bg-white dark:bg-black' : 'pb-[60px] md:pb-0 overflow-x-hidden overflow-y-auto px-0 md:p-4'}`}>
           <div className="flex-1 w-full flex flex-col min-h-0">
           <Suspense fallback={
             <div className="h-full flex items-center justify-center min-h-[50vh]">
@@ -126,7 +126,7 @@ const AppLayout: React.FC = () => {
           </div>
         </main>
       </div>
-      {currentUser && <div className="z-[100] relative keyboard-hide"><BottomNav /></div>}
+      {currentUser && !isMessages && <div className="z-[100] relative keyboard-hide"><BottomNav /></div>}
     </div>
   );
 };
