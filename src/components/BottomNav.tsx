@@ -60,7 +60,10 @@ const BottomNav: React.FC = () => {
   const inactiveColor = darkMode ? '#9CA3AF' : '#6B7280'; // gray-400 : gray-500
 
   return (
-    <div className={`fixed bottom-0 left-0 right-0 ${barHeightClass} bg-white/80 dark:bg-black/80 backdrop-blur-md border-t border-gray-200 dark:border-gray-800 flex items-center justify-around z-50 pb-safe transition-all px-1`}>
+    <div 
+      className={`fixed left-0 right-0 ${barHeightClass} bg-white/80 dark:bg-black/80 backdrop-blur-md border-t border-gray-200 dark:border-gray-800 flex items-center justify-around z-50 transition-all px-1`}
+      style={{ bottom: 'var(--keyboard-offset, 0px)', paddingBottom: 'env(safe-area-inset-bottom)' }}
+    >
       <Link to="/" className="flex flex-col items-center justify-center w-full h-full" style={{ color: isActive('/') ? activeColor : inactiveColor }}>
         <Home size={iconSize} strokeWidth={isActive('/') ? 2.5 : 2} />
         <span className="text-[10px] font-medium mt-1">Home</span>

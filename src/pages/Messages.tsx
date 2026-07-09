@@ -315,7 +315,7 @@ const Messages: React.FC = () => {
         const item = d.data();
         const createdAt = item.created_at && typeof item.created_at.toDate === 'function' 
           ? item.created_at.toDate().toISOString() 
-          : item.created_at;
+          : (item.created_at || item.local_created_at || new Date().toISOString());
         return {id: d.id, ...item, created_at: createdAt} as any;
       });
       
@@ -491,7 +491,8 @@ const Messages: React.FC = () => {
       content: JSON.stringify(payloadExtra),
       media_url: '', // Will be updated by UploadContext
       media_type: selectedMedia.type,
-      created_at: serverTimestamp()
+      created_at: serverTimestamp(),
+      local_created_at: new Date().toISOString()
     };
     
     const uploadData = selectedMedia.type === 'video' && selectedMedia.file ? selectedMedia.file : processedUrl;
@@ -608,7 +609,8 @@ const Messages: React.FC = () => {
        content: JSON.stringify(payloadExtra),
        media_url: '',
        media_type: 'audio',
-       created_at: serverTimestamp()
+       created_at: serverTimestamp(),
+      local_created_at: new Date().toISOString()
     };
     
     // Add optimistic UI to messages immediately
@@ -718,6 +720,7 @@ const Messages: React.FC = () => {
        receiver_id: selectedChat.id,
        content: JSON.stringify(payloadExtra),
        created_at: serverTimestamp(),
+      local_created_at: new Date().toISOString(),
        is_read: false
     };
 

@@ -49,14 +49,14 @@ const AppLayout: React.FC = () => {
 
   const [touchStart, setTouchStart] = useState<{ x: number, y: number } | null>(null);
 
-  const [appHeight, setAppHeight] = useState('100dvh');
+  const [keyboardOffset, setKeyboardOffset] = useState(0);
 
   useEffect(() => {
     const handleResize = () => {
       if (window.visualViewport) {
-        setAppHeight(`${window.visualViewport.height}px`);
-      } else {
-        setAppHeight(`${window.innerHeight}px`);
+        const offset = Math.max(0, window.innerHeight - window.visualViewport.height - window.visualViewport.pageTop);
+        setKeyboardOffset(offset);
+        document.documentElement.style.setProperty('--keyboard-offset', `${offset}px`);
       }
     };
     
@@ -64,6 +64,7 @@ const AppLayout: React.FC = () => {
     
     if (window.visualViewport) {
       window.visualViewport.addEventListener('resize', handleResize);
+      window.visualViewport.addEventListener('scroll', handleResize);
     } else {
       window.addEventListener('resize', handleResize);
     }
@@ -71,6 +72,7 @@ const AppLayout: React.FC = () => {
     return () => {
       if (window.visualViewport) {
         window.visualViewport.removeEventListener('resize', handleResize);
+        window.visualViewport.removeEventListener('scroll', handleResize);
       } else {
         window.removeEventListener('resize', handleResize);
       }
@@ -120,10 +122,12 @@ const AppLayout: React.FC = () => {
   };
 
   return (
-    <div className="w-full bg-[#f0f2f5] dark:bg-[#000000] flex flex-col transition-colors duration-300 overflow-hidden" style={{ height: appHeight }}>
+    <div 
+      className="w-full h-[100dvh] bg-[#f0f2f5] dark:bg-[#000000] flex flex-col transition-colors duration-300 overflow-hidden" 
+      style={{ paddingBottom: `${keyboardOffset}px` }}
+    >
       <div 
-        className="flex w-full max-w-[1920px] mx-auto overflow-hidden"
-        style={{ height: appHeight }}
+        className="flex w-full h-full max-w-[1920px] mx-auto overflow-hidden"
         onTouchStart={onTouchStart}
         onTouchEnd={onTouchEnd}
       >
@@ -155,7 +159,7 @@ const AppLayout: React.FC = () => {
           </div>
         </main>
       </div>
-      {currentUser && <div className="z-[100] relative bottom-nav-container keyboard-hide"><BottomNav /></div>}
+      {currentUser && <div className="z-[100] relative bottom-nav-container"><BottomNav /></div>}
     </div>
   );
 };
@@ -166,7 +170,9 @@ const App: React.FC = () => {
     const saved = localStorage.getItem('next_media_user');
     return saved ? JSON.parse(saved) : null;
   });
-  const [loadingAuth, setLoadingAuth] = useState(true);
+  const [loadingAuth, setLoadingAuth] = useState(() => {
+    return localStorage.getItem('next_media_user') ? false : true;
+  });
 
   const [darkMode, setDarkMode] = useState(() => {
     return localStorage.getItem('next_media_theme') === 'dark';
