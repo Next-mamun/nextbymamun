@@ -1,5 +1,5 @@
 
-import React, { useState, useEffect, createContext, useContext, Suspense, lazy } from 'react';
+import React, { useState, useEffect, createContext, useContext, Suspense, lazy, useRef } from 'react';
 import { BrowserRouter, Routes, Route, Navigate, useLocation, useNavigate } from 'react-router-dom';
 import Navbar from '@/components/Navbar';
 import Sidebar from '@/components/Sidebar';
@@ -13,6 +13,8 @@ import { doc, getDoc, setDoc, onSnapshot, collection, query, where } from 'fireb
 import { useWakeLock } from '@/hooks/useWakeLock';
 import { requestNotificationPermission } from '@/services/notificationService';
 import { toast } from 'sonner';
+import { useQueryClient } from '@tanstack/react-query';
+import { Loader2 } from 'lucide-react';
 
 // Handle dynamic import errors
 window.addEventListener('error', (e) => {
@@ -49,15 +51,28 @@ const AppLayout: React.FC = () => {
 
   const [touchStart, setTouchStart] = useState<{ x: number, y: number } | null>(null);
 
-  const [keyboardOffset, setKeyboardOffset] = useState(0);
+  const [isKeyboardOpen, setIsKeyboardOpen] = useState(false);
 
   useEffect(() => {
+    const initialHeight = window.innerHeight;
+    
     const handleResize = () => {
+      let keyboardOpen = false;
+      
+      // Check window shrink (Android)
+      if (window.innerHeight < initialHeight * 0.8) {
+        keyboardOpen = true;
+      }
+      
+      // Check visual viewport (iOS)
       if (window.visualViewport) {
         const offset = Math.max(0, window.innerHeight - window.visualViewport.height - window.visualViewport.pageTop);
-        setKeyboardOffset(offset);
-        document.documentElement.style.setProperty('--keyboard-offset', `${offset}px`);
+        if (offset > 50) {
+          keyboardOpen = true;
+        }
       }
+      
+      setIsKeyboardOpen(keyboardOpen);
     };
     
     handleResize();
@@ -65,30 +80,66 @@ const AppLayout: React.FC = () => {
     if (window.visualViewport) {
       window.visualViewport.addEventListener('resize', handleResize);
       window.visualViewport.addEventListener('scroll', handleResize);
-    } else {
-      window.addEventListener('resize', handleResize);
     }
+    window.addEventListener('resize', handleResize);
     
     return () => {
       if (window.visualViewport) {
         window.visualViewport.removeEventListener('resize', handleResize);
         window.visualViewport.removeEventListener('scroll', handleResize);
-      } else {
-        window.removeEventListener('resize', handleResize);
       }
+      window.removeEventListener('resize', handleResize);
     };
   }, []);
+
+  const queryClient = useQueryClient();
+  const mainRef = useRef<HTMLElement>(null);
+  const [pullProgress, setPullProgress] = useState(0);
+  const [isRefreshing, setIsRefreshing] = useState(false);
 
   const onTouchStart = (e: React.TouchEvent) => {
     // DO NOT prevent default here or scrolling will break
     setTouchStart({ x: e.touches[0].clientX, y: e.touches[0].clientY });
   };
 
-  const onTouchEnd = (e: React.TouchEvent) => {
+  const onTouchMove = (e: React.TouchEvent) => {
+    if (!touchStart || isRefreshing || isMessages) return;
+    
+    // Only handle pull-to-refresh if we are at the very top of the scrollable area
+    const mainEl = mainRef.current;
+    if (!mainEl || mainEl.scrollTop > 0) return;
+
+    const currentY = e.touches[0].clientY;
+    const distanceY = currentY - touchStart.y;
+    
+    // If pulling down
+    if (distanceY > 0) {
+      // Prevent default to stop native overscroll glow on some browsers if possible
+      // e.preventDefault() might not work in passive event listeners, but we can set state
+      const progress = Math.min(distanceY / 150, 1);
+      setPullProgress(progress);
+    }
+  };
+
+  const onTouchEnd = async (e: React.TouchEvent) => {
     if (!touchStart) return;
+    
     const touchEnd = { x: e.changedTouches[0].clientX, y: e.changedTouches[0].clientY };
     const distanceX = touchStart.x - touchEnd.x;
     const distanceY = Math.abs(touchStart.y - touchEnd.y);
+
+    // Pull to refresh trigger
+    if (pullProgress > 0.8 && !isRefreshing && !isMessages) {
+      setIsRefreshing(true);
+      try {
+        await queryClient.refetchQueries();
+      } finally {
+        setIsRefreshing(false);
+        setPullProgress(0);
+      }
+    } else {
+      setPullProgress(0);
+    }
 
     // Swipe sensitivity thresholds - stricter to avoid accidental swipes when scrolling down
     const isHorizontalSwipe = Math.abs(distanceX) > 120 && distanceY < 40;
@@ -124,16 +175,39 @@ const AppLayout: React.FC = () => {
   return (
     <div 
       className="w-full h-[100dvh] bg-[#f0f2f5] dark:bg-[#000000] flex flex-col transition-colors duration-300 overflow-hidden" 
-      style={{ paddingBottom: isMessages ? '0px' : `${keyboardOffset}px` }}
+      style={{ paddingBottom: '0px' }}
     >
       <div 
-        className="flex w-full h-full max-w-[1920px] mx-auto overflow-hidden"
+        className="flex w-full h-full max-w-[1920px] mx-auto overflow-hidden relative"
         onTouchStart={onTouchStart}
+        onTouchMove={onTouchMove}
         onTouchEnd={onTouchEnd}
       >
         {currentUser && <Navbar />}
         {currentUser && <div className="hidden md:block xl:min-w-[300px] shrink-0 sticky top-14 h-[calc(100vh-3.5rem)] overflow-y-auto"><Sidebar /></div>}
-        <main className={`w-full flex-1 flex flex-col min-w-0 pt-14 ${isMessages ? (keyboardOffset > 50 ? 'pb-0' : 'pb-[60px]') : (keyboardOffset > 50 ? 'pb-0' : 'pb-[60px]')} md:pb-0 ${isMessages ? 'overflow-hidden bg-white dark:bg-black' : 'overflow-x-hidden overflow-y-auto px-0 md:p-4'}`}>
+        <main 
+          ref={mainRef}
+          className={`w-full flex-1 flex flex-col min-w-0 pt-14 ${isMessages ? (isKeyboardOpen ? 'pb-0' : 'pb-[60px]') : (isKeyboardOpen ? 'pb-0' : 'pb-[60px]')} md:pb-0 ${isMessages ? 'overflow-hidden bg-white dark:bg-black' : 'overflow-x-hidden overflow-y-auto px-0 md:p-4'} relative`}
+        >
+          {/* Pull to Refresh Indicator */}
+          {!isMessages && (pullProgress > 0 || isRefreshing) && (
+            <div 
+              className="absolute top-14 left-0 w-full flex justify-center z-50 pointer-events-none transition-transform"
+              style={{ transform: `translateY(${Math.min(pullProgress * 50, 50)}px)` }}
+            >
+              <div className="bg-white dark:bg-gray-800 rounded-full shadow-md p-2 flex items-center justify-center">
+                {isRefreshing ? (
+                   <Loader2 className="w-6 h-6 text-[#1877F2] animate-spin" />
+                ) : (
+                   <div 
+                     className="w-6 h-6 border-2 border-[#1877F2] border-t-transparent rounded-full" 
+                     style={{ transform: `rotate(${pullProgress * 360}deg)` }}
+                   />
+                )}
+              </div>
+            </div>
+          )}
+
           <div className="flex-1 w-full flex flex-col min-h-0">
           <Suspense fallback={
             <div className="h-full flex items-center justify-center min-h-[50vh]">
@@ -159,7 +233,7 @@ const AppLayout: React.FC = () => {
           </div>
         </main>
       </div>
-      {currentUser && keyboardOffset <= 50 && (
+      {currentUser && !isKeyboardOpen && (
         <div className="z-[100] relative bottom-nav-container">
           <BottomNav />
         </div>

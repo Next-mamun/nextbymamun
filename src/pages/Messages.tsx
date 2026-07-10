@@ -304,15 +304,13 @@ const Messages: React.FC = () => {
     const q1 = query(
       collection(db, 'messages'),
       where('sender_id', '==', currentUser.id),
-      where('receiver_id', '==', selectedChat.id),
-      limit(150)
+      where('receiver_id', '==', selectedChat.id)
     );
 
     const q2 = query(
       collection(db, 'messages'),
       where('sender_id', '==', selectedChat.id),
-      where('receiver_id', '==', currentUser.id),
-      limit(150)
+      where('receiver_id', '==', currentUser.id)
     );
 
     let messages1: any[] = [];
