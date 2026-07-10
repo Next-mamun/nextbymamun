@@ -301,27 +301,41 @@ const Messages: React.FC = () => {
       return;
     }
 
-    const q = query(
+    const q1 = query(
       collection(db, 'messages'),
-      or(
-        and(where('sender_id', '==', currentUser.id), where('receiver_id', '==', selectedChat.id)),
-        and(where('sender_id', '==', selectedChat.id), where('receiver_id', '==', currentUser.id))
-      ),
-      limit(200)
+      where('sender_id', '==', currentUser.id),
+      where('receiver_id', '==', selectedChat.id),
+      limit(150)
     );
 
-    const unsub = onSnapshot(q, { includeMetadataChanges: true }, (snapshot) => {
-      const data = snapshot.docs.map(d => {
-        const item = d.data();
-        const createdAt = item.created_at && typeof item.created_at.toDate === 'function' 
-          ? item.created_at.toDate().toISOString() 
-          : (item.created_at || item.local_created_at || new Date().toISOString());
-        return {id: d.id, ...item, created_at: createdAt} as any;
+    const q2 = query(
+      collection(db, 'messages'),
+      where('sender_id', '==', selectedChat.id),
+      where('receiver_id', '==', currentUser.id),
+      limit(150)
+    );
+
+    let messages1: any[] = [];
+    let messages2: any[] = [];
+
+    const handleMessagesUpdate = () => {
+      const combined = [...messages1, ...messages2];
+      
+      // Remove duplicate keys just in case
+      const uniqueMap = new Map<string, any>();
+      combined.forEach(m => {
+        uniqueMap.set(m.id, m);
       });
-      
-      data.sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
-      
-      const finalData = Array.from(new Map(data.map(m => [m.id, m])).values()).map(m => {
+      const data = Array.from(uniqueMap.values());
+
+      // Sort chronologically
+      data.sort((a, b) => {
+        const timeA = new Date(a.created_at).getTime();
+        const timeB = new Date(b.created_at).getTime();
+        return timeA - timeB;
+      });
+
+      const finalData = data.map(m => {
         let parsed: any = { ...m };
         if (typeof m.content === 'string') {
           if (m.content.includes('"JSON_PAYLOAD"')) {
@@ -340,7 +354,7 @@ const Messages: React.FC = () => {
         }
         return parsed;
       });
-      
+
       setMessages(finalData);
 
       // Check for incoming unread messages and mark them as read
@@ -357,9 +371,36 @@ const Messages: React.FC = () => {
           } catch(e) {}
         }
       });
+    };
+
+    const processSnapshot = (snapshot: any) => {
+      return snapshot.docs.map((d: any) => {
+        const item = d.data();
+        const createdAt = item.created_at && typeof item.created_at.toDate === 'function' 
+          ? item.created_at.toDate().toISOString() 
+          : (item.created_at || item.local_created_at || new Date().toISOString());
+        return { id: d.id, ...item, created_at: createdAt } as any;
+      });
+    };
+
+    const unsub1 = onSnapshot(q1, { includeMetadataChanges: true }, (snapshot) => {
+      messages1 = processSnapshot(snapshot);
+      handleMessagesUpdate();
+    }, (error) => {
+      console.error("onSnapshot messages q1 error:", error);
     });
 
-    return () => unsub();
+    const unsub2 = onSnapshot(q2, { includeMetadataChanges: true }, (snapshot) => {
+      messages2 = processSnapshot(snapshot);
+      handleMessagesUpdate();
+    }, (error) => {
+      console.error("onSnapshot messages q2 error:", error);
+    });
+
+    return () => {
+      unsub1();
+      unsub2();
+    };
   }, [selectedChat?.id, currentUser?.id]);
 
   const { data: blockData = null } = useQuery({

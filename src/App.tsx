@@ -124,7 +124,7 @@ const AppLayout: React.FC = () => {
   return (
     <div 
       className="w-full h-[100dvh] bg-[#f0f2f5] dark:bg-[#000000] flex flex-col transition-colors duration-300 overflow-hidden" 
-      style={{ paddingBottom: `${keyboardOffset}px` }}
+      style={{ paddingBottom: isMessages ? '0px' : `${keyboardOffset}px` }}
     >
       <div 
         className="flex w-full h-full max-w-[1920px] mx-auto overflow-hidden"
@@ -133,7 +133,7 @@ const AppLayout: React.FC = () => {
       >
         {currentUser && <Navbar />}
         {currentUser && <div className="hidden md:block xl:min-w-[300px] shrink-0 sticky top-14 h-[calc(100vh-3.5rem)] overflow-y-auto"><Sidebar /></div>}
-        <main className={`w-full flex-1 flex flex-col min-w-0 pt-14 pb-[60px] md:pb-0 ${isMessages ? 'overflow-hidden bg-white dark:bg-black' : 'overflow-x-hidden overflow-y-auto px-0 md:p-4'}`}>
+        <main className={`w-full flex-1 flex flex-col min-w-0 pt-14 ${isMessages ? (keyboardOffset > 50 ? 'pb-0' : 'pb-[60px]') : (keyboardOffset > 50 ? 'pb-0' : 'pb-[60px]')} md:pb-0 ${isMessages ? 'overflow-hidden bg-white dark:bg-black' : 'overflow-x-hidden overflow-y-auto px-0 md:p-4'}`}>
           <div className="flex-1 w-full flex flex-col min-h-0">
           <Suspense fallback={
             <div className="h-full flex items-center justify-center min-h-[50vh]">
@@ -159,7 +159,11 @@ const AppLayout: React.FC = () => {
           </div>
         </main>
       </div>
-      {currentUser && <div className="z-[100] relative bottom-nav-container"><BottomNav /></div>}
+      {currentUser && keyboardOffset <= 50 && (
+        <div className="z-[100] relative bottom-nav-container">
+          <BottomNav />
+        </div>
+      )}
     </div>
   );
 };
