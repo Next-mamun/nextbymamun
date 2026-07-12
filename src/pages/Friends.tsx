@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { UserMinus, MessageSquare, Check, X, UserPlus, Search, Users, Ban, UserCheck } from 'lucide-react';
 import { useAuth } from '@/contexts/AuthContext';
 import { db } from '../lib/firebase';
-import { collection, query, where, getDocs, updateDoc, doc, getDoc, deleteDoc, addDoc, onSnapshot, or, and, limit } from 'firebase/firestore';
+import { collection, query, where, getDocs, updateDoc, doc, getDoc, deleteDoc, addDoc, onSnapshot, or, and, limit, orderBy } from 'firebase/firestore';
 import { useNavigate } from 'react-router-dom';
 import { VerifiedBadge } from '@/components/VerifiedBadge';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
@@ -51,10 +51,17 @@ const Friends: React.FC = () => {
       const allRel = relSnap.docs.map(d => ({id: d.id, ...d.data()}) as any);
 
       // 2. Fetch profiles based on search query or default
-      // In Firestore, searching by ilike is hard. We just fetch 50 profiles and filter client side.
+      // Order by created_at desc to show new accounts first
       let qProf = query(collection(db, 'profiles'), limit(100));
       const profSnap = await getDocs(qProf);
       const allProfTemp = profSnap.docs.map(d => ({id: d.id, ...d.data()}) as any).filter(p => p.id !== currentUser.id);
+      
+      // Sort client side to show new accounts first
+      allProfTemp.sort((a, b) => {
+        const timeA = a.created_at ? new Date(a.created_at).getTime() : 0;
+        const timeB = b.created_at ? new Date(b.created_at).getTime() : 0;
+        return timeB - timeA;
+      });
 
       let allProf = allProfTemp;
       if (searchQuery.trim()) {
@@ -145,14 +152,14 @@ const Friends: React.FC = () => {
       };
 
       try {
-        await redis.setex(cacheKey, 600, JSON.stringify(result));
+        await redis.setex(cacheKey, 10, JSON.stringify(result));
       } catch (e) {
         console.warn('Redis write failed for friends cache', e);
       }
 
       return result;
     },
-    staleTime: 60 * 1000,
+    staleTime: 10 * 1000,
     gcTime: Infinity,
   });
 

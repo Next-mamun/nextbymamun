@@ -125,6 +125,66 @@ const Messages: React.FC = () => {
   const [selectedChat, setSelectedChat] = useState<any>(null);
   const [isInputFocused, setIsInputFocused] = useState(false);
   const [messageText, setMessageText] = useState('');
+  const [visibleLimit, setVisibleLimit] = useState(50);
+
+  const [inputOffset, setInputOffset] = useState(0);
+  const [isDraggingInput, setIsDraggingInput] = useState(false);
+  const dragStartYRef = useRef(0);
+  const dragStartOffsetRef = useRef(0);
+  const lastTapRef = useRef(0);
+
+  useEffect(() => {
+    if (isInputFocused && inputOffset === 0) {
+      setInputOffset(300);
+    } else if (!isInputFocused) {
+      setInputOffset(0);
+    }
+  }, [isInputFocused]);
+
+  useEffect(() => {
+    const handleMove = (e: any) => {
+      if (!isDraggingInput) return;
+      const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+      const deltaY = clientY - dragStartYRef.current;
+      setInputOffset(Math.max(0, dragStartOffsetRef.current - deltaY));
+    };
+    const handleUp = () => setIsDraggingInput(false);
+
+    if (isDraggingInput) {
+      document.addEventListener('mousemove', handleMove);
+      document.addEventListener('mouseup', handleUp);
+      document.addEventListener('touchmove', handleMove, { passive: false });
+      document.addEventListener('touchend', handleUp);
+    }
+    return () => {
+      document.removeEventListener('mousemove', handleMove);
+      document.removeEventListener('mouseup', handleUp);
+      document.removeEventListener('touchmove', handleMove);
+      document.removeEventListener('touchend', handleUp);
+    };
+  }, [isDraggingInput]);
+
+  const handleInputTouchStart = (e: React.TouchEvent | React.MouseEvent) => {
+    const now = Date.now();
+    if (now - lastTapRef.current < 300) {
+      setIsDraggingInput(true);
+      const clientY = 'touches' in e ? e.touches[0].clientY : e.clientY;
+      dragStartYRef.current = clientY;
+      dragStartOffsetRef.current = inputOffset;
+      if (e.cancelable) e.preventDefault();
+    }
+    lastTapRef.current = now;
+  };
+
+  const handleScroll = (e: any) => {
+    if (e.target.scrollTop === 0 && messages.length > visibleLimit) {
+      const oldHeight = e.target.scrollHeight;
+      setVisibleLimit(prev => prev + 50);
+      setTimeout(() => {
+        e.target.scrollTop = e.target.scrollHeight - oldHeight;
+      }, 0);
+    }
+  };
 
   useEffect(() => {
     if (selectedChat && currentUser) {
@@ -149,8 +209,34 @@ const Messages: React.FC = () => {
       } else {
         localStorage.setItem(draftKey, text);
       }
+
+      if (!isTyping) {
+        setIsTyping(true);
+        setDoc(doc(db, 'typing_status', `${currentUser.id}_${selectedChat.id}`), { is_typing: true, timestamp: serverTimestamp() }, { merge: true }).catch(() => {});
+      }
+      
+      if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
+      typingTimeoutRef.current = setTimeout(() => {
+        setIsTyping(false);
+        setDoc(doc(db, 'typing_status', `${currentUser.id}_${selectedChat.id}`), { is_typing: false, timestamp: serverTimestamp() }, { merge: true }).catch(() => {});
+      }, 2000);
     }
   };
+
+  useEffect(() => {
+    if (!currentUser || !selectedChat) {
+      setOtherUserTyping(false);
+      return;
+    }
+    const unsubscribe = onSnapshot(doc(db, 'typing_status', `${selectedChat.id}_${currentUser.id}`), (doc) => {
+      if (doc.exists() && doc.data()?.is_typing) {
+        setOtherUserTyping(true);
+      } else {
+        setOtherUserTyping(false);
+      }
+    });
+    return () => unsubscribe();
+  }, [selectedChat, currentUser]);
 
   const [onlineUsers, setOnlineUsers] = useState<Set<string>>(new Set());
   const [searchQuery, setSearchQuery] = useState('');
@@ -165,9 +251,15 @@ const Messages: React.FC = () => {
   const [recordingDuration, setRecordingDuration] = useState(0);
   const [recordedAudio, setRecordedAudio] = useState<{file: File, url: string} | null>(null);
   const [isVoiceViewOnce, setIsVoiceViewOnce] = useState(false);
+  const [activeViewOnceMedia, setActiveViewOnceMedia] = useState<any>(null);
+  
+  const [isTyping, setIsTyping] = useState(false);
+  const [otherUserTyping, setOtherUserTyping] = useState(false);
+
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
   const timerRef = useRef<NodeJS.Timeout | null>(null);
+  const typingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -300,8 +392,11 @@ const Messages: React.FC = () => {
   useEffect(() => {
     if (!selectedChat || !currentUser) {
       setMessages([]);
+      setVisibleLimit(50);
       return;
     }
+    
+    setVisibleLimit(50);
 
     const q1 = query(
       collection(db, 'messages'),
@@ -360,6 +455,27 @@ const Messages: React.FC = () => {
       // Check for incoming unread messages and mark them as read
       const unreadCount = finalData.filter(m => m.sender_id === selectedChat.id && !m.is_read).length;
       if (unreadCount > 0) {
+        // Play notification sound and vibrate
+        try {
+          if ('vibrate' in navigator) navigator.vibrate(200);
+          const AudioContext = window.AudioContext || (window as any).webkitAudioContext;
+          if (AudioContext) {
+            const ctx = new AudioContext();
+            const osc = ctx.createOscillator();
+            const gain = ctx.createGain();
+            osc.connect(gain);
+            gain.connect(ctx.destination);
+            osc.type = 'sine';
+            osc.frequency.setValueAtTime(600, ctx.currentTime);
+            osc.frequency.exponentialRampToValueAtTime(1000, ctx.currentTime + 0.1);
+            gain.gain.setValueAtTime(0, ctx.currentTime);
+            gain.gain.linearRampToValueAtTime(0.5, ctx.currentTime + 0.05);
+            gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.5);
+            osc.start(ctx.currentTime);
+            osc.stop(ctx.currentTime + 0.5);
+          }
+        } catch(e) {}
+
         queryClient.invalidateQueries({ queryKey: ['unreadCounts'] });
         queryClient.invalidateQueries({ queryKey: ['totalUnread'] });
       }
@@ -692,8 +808,14 @@ const Messages: React.FC = () => {
   };
 
   const handleViewOnce = async (msg: any) => {
-    window.open(msg.media_url, "_blank");
-    
+    setActiveViewOnceMedia(msg);
+  };
+
+  const closeViewOnce = async () => {
+    const msg = activeViewOnceMedia;
+    setActiveViewOnceMedia(null);
+    if (!msg) return;
+
     // Destroy
     const payloadExtra = { JSON_PAYLOAD: true, text: 'Viewed ' + (msg.media_type || 'media'), is_view_once: false, parent_message_id: msg.parent_message_id };
     try {
@@ -736,7 +858,7 @@ const Messages: React.FC = () => {
     }
   };
 
-  useEffect(() => { scrollRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages]);
+  useEffect(() => { scrollRef.current?.scrollIntoView({ behavior: 'auto' }); }, [messages]);
 
   useEffect(() => {
     const handleResize = () => {
@@ -966,16 +1088,28 @@ const Messages: React.FC = () => {
                   </div>
                 </div>
               </div>
-              <button 
-                onClick={handleBlockUser} 
-                className={`p-2 rounded-full transition-all ${isBlockedByMe ? 'bg-red-500 text-white shadow-lg' : 'hover:bg-red-50 dark:hover:bg-red-900/20 text-gray-400 hover:text-red-500'}`} 
-                title={isBlockedByMe ? "Unblock User" : "Block User"}
-              >
-                <Ban size={20} />
-              </button>
+              <div className="flex items-center gap-1">
+                <button 
+                  onClick={() => {
+                    queryClient.invalidateQueries({ queryKey: ['messages', selectedChat?.id] });
+                    queryClient.invalidateQueries({ queryKey: ['friendships', currentUser?.id] });
+                  }}
+                  className="p-2 rounded-full transition-all text-gray-400 hover:text-blue-500 hover:bg-blue-50 dark:hover:bg-blue-900/20"
+                  title="Refresh Chat"
+                >
+                  <RefreshCw size={20} />
+                </button>
+                <button 
+                  onClick={handleBlockUser} 
+                  className={`p-2 rounded-full transition-all ${isBlockedByMe ? 'bg-red-500 text-white shadow-lg' : 'hover:bg-red-50 dark:hover:bg-red-900/20 text-gray-400 hover:text-red-500'}`} 
+                  title={isBlockedByMe ? "Unblock User" : "Block User"}
+                >
+                  <Ban size={20} />
+                </button>
+              </div>
             </div>
             
-            <div id="chat-messages" className="flex-1 p-3 md:p-6 overflow-y-auto bg-gray-50/30 dark:bg-gray-900/30 flex flex-col gap-3 min-h-0 transition-all duration-300" style={{ paddingBottom: isInputFocused ? '40vh' : '1.5rem' }}>
+            <div id="chat-messages" onScroll={handleScroll} className="flex-1 p-3 md:p-6 overflow-y-auto bg-gray-50/30 dark:bg-gray-900/30 flex flex-col gap-3 min-h-0 transition-all duration-300" style={{ paddingBottom: inputOffset > 0 ? `${inputOffset + 24}px` : '1.5rem' }}>
               {isBlocked ? (
                 <div className="flex-1 flex flex-col items-center justify-center text-center p-8">
                   <div className="bg-red-100 dark:bg-red-900/20 p-6 rounded-full mb-4">
@@ -1009,7 +1143,7 @@ const Messages: React.FC = () => {
                     <p className="text-gray-500 font-bold bg-white dark:bg-black px-3 py-1 rounded-full border border-gray-100 dark:border-gray-800 shadow-sm mt-2 text-xs">@{selectedChat.username}</p>
                   </div>
 
-                  {messages.map((msg: any) => {
+                  {(messages.length > visibleLimit ? messages.slice(messages.length - visibleLimit) : messages).map((msg: any) => {
                     const parentMsg = msg.parent_message_id ? messages.find((m: any) => m.id === msg.parent_message_id) : null;
                     return (
                     <motion.div 
@@ -1065,13 +1199,26 @@ const Messages: React.FC = () => {
                             msg.id?.toString().startsWith('temp-') ? (
                               <Check size={12} className="opacity-50 animate-pulse" />
                             ) : (
-                              <CheckCheck size={12} className={msg.is_read ? "text-blue-400" : "text-blue-200 opacity-60"} />
+                              <CheckCheck size={12} className={msg.is_read ? "text-red-500" : "text-blue-200 opacity-60"} />
                             )
                           )}
                         </div>
                       </div>
                     </motion.div>
                   )})}
+                  {otherUserTyping && (
+                    <motion.div 
+                      initial={{ opacity: 0, y: 10 }} 
+                      animate={{ opacity: 1, y: 0 }} 
+                      className="flex justify-start mb-4"
+                    >
+                      <div className="bg-white dark:bg-gray-800 rounded-2xl rounded-bl-sm px-4 py-3 shadow-sm border border-gray-100 dark:border-gray-800 flex items-center gap-1">
+                         <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
+                         <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
+                         <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
+                      </div>
+                    </motion.div>
+                  )}
                   <div ref={scrollRef} />
                 </>
               )}
@@ -1089,7 +1236,24 @@ const Messages: React.FC = () => {
                   </button>
                 </div>
               )}
-              <form onSubmit={handleSendMessage} className="p-3 md:p-5 bg-white dark:bg-black border-t border-gray-100 dark:border-gray-800 flex items-center gap-2 md:gap-3 relative z-30 shrink-0">
+              <form 
+                onSubmit={handleSendMessage} 
+                className="p-3 md:p-5 bg-white dark:bg-black border-t border-gray-100 dark:border-gray-800 flex items-center gap-2 md:gap-3 relative z-30 shrink-0 select-none"
+                style={{ 
+                  transform: inputOffset > 0 ? `translateY(-${inputOffset}px)` : 'none', 
+                  transition: isDraggingInput ? 'none' : 'transform 0.2s cubic-bezier(0.4, 0, 0.2, 1)',
+                  touchAction: isDraggingInput ? 'none' : 'auto'
+                }}
+              >
+                {inputOffset > 0 && (
+                  <div 
+                    className="absolute -top-6 left-0 right-0 h-8 flex items-center justify-center cursor-ns-resize"
+                    onMouseDown={handleInputTouchStart}
+                    onTouchStart={handleInputTouchStart}
+                  >
+                    <div className="w-12 h-1.5 bg-gray-300 dark:bg-gray-600 rounded-full shadow-sm"></div>
+                  </div>
+                )}
                 {!recordedAudio && (
                   <input type="file" ref={fileInputRef} hidden onChange={handleFileSelect} accept="*/*" />
                 )}
@@ -1197,6 +1361,32 @@ const Messages: React.FC = () => {
                 )}
               </form>
             </div>
+            
+            {activeViewOnceMedia && (
+              <div className="fixed inset-0 z-50 bg-black/95 flex flex-col items-center justify-center p-4">
+                <button 
+                  onClick={closeViewOnce}
+                  className="absolute top-6 right-6 p-3 bg-white/10 hover:bg-white/20 rounded-full text-white transition-colors"
+                >
+                  <X size={24} />
+                </button>
+                <div className="max-w-4xl w-full max-h-[80vh] flex flex-col items-center justify-center relative">
+                   <div className="absolute top-4 left-4 bg-black/50 px-3 py-1.5 rounded-full text-white text-xs font-bold flex items-center gap-1.5 backdrop-blur-md">
+                     <Eye size={14} /> View Once Mode
+                   </div>
+                   {activeViewOnceMedia.media_type === 'image' ? (
+                     <img src={activeViewOnceMedia.media_url} className="max-w-full max-h-[80vh] object-contain rounded-xl shadow-2xl" />
+                   ) : activeViewOnceMedia.media_type === 'audio' ? (
+                     <div className="bg-white/10 p-8 rounded-3xl w-full max-w-md">
+                        <CustomAudioPlayer src={activeViewOnceMedia.media_url} isSender={false} />
+                     </div>
+                   ) : (
+                     <VideoPlayer src={activeViewOnceMedia.media_url} className="max-w-full max-h-[80vh] rounded-xl shadow-2xl" />
+                   )}
+                </div>
+                <p className="text-gray-400 mt-6 font-bold text-sm bg-white/5 px-4 py-2 rounded-full backdrop-blur-sm">This media will be destroyed when you close this window.</p>
+              </div>
+            )}
           </>
         ) : (
           <div className="flex-1 flex flex-col items-center justify-center text-gray-200 dark:text-gray-800 bg-gray-50/10 dark:bg-gray-900/10">
