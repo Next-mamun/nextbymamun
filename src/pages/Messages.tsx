@@ -123,6 +123,7 @@ const Messages: React.FC = () => {
   const location = useLocation();
   const queryClient = useQueryClient();
   const [selectedChat, setSelectedChat] = useState<any>(null);
+  const [isInputFocused, setIsInputFocused] = useState(false);
   const [messageText, setMessageText] = useState('');
 
   useEffect(() => {
@@ -170,31 +171,6 @@ const Messages: React.FC = () => {
   const scrollRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
-
-  useEffect(() => {
-    const viewport = window.visualViewport;
-    if (!viewport) return;
-
-    const handleResize = () => {
-      const chatContainer = document.getElementById('chat-page-container');
-      if (chatContainer) {
-        // User requested fix: set height explicitly to viewport height to avoid keyboard covering input
-        chatContainer.style.height = `${viewport.height}px`;
-        // Scroll to the latest message
-        setTimeout(() => {
-          scrollRef.current?.scrollIntoView({ behavior: 'auto' });
-        }, 100);
-      }
-    };
-
-    viewport.addEventListener('resize', handleResize);
-    viewport.addEventListener('scroll', handleResize);
-
-    return () => {
-      viewport.removeEventListener('resize', handleResize);
-      viewport.removeEventListener('scroll', handleResize);
-    };
-  }, []);
 
   useEffect(() => {
     if (location.state?.userId) {
@@ -893,7 +869,7 @@ const Messages: React.FC = () => {
             />
           </div>
         </div>
-        <div className="flex-1 overflow-y-auto p-2 space-y-1 min-h-0">
+        <div id="inbox-list" className="flex-1 overflow-y-auto p-2 space-y-1 min-h-0">
           {loadingContacts && contacts.length === 0 ? (
             <div className="flex flex-col gap-2 px-2 pt-2">
               {[...Array(6)].map((_, i) => (
@@ -999,7 +975,7 @@ const Messages: React.FC = () => {
               </button>
             </div>
             
-            <div className="flex-1 p-3 md:p-6 overflow-y-auto bg-gray-50/30 dark:bg-gray-900/30 flex flex-col gap-3 min-h-0">
+            <div id="chat-messages" className="flex-1 p-3 md:p-6 overflow-y-auto bg-gray-50/30 dark:bg-gray-900/30 flex flex-col gap-3 min-h-0 transition-all duration-300" style={{ paddingBottom: isInputFocused ? '40vh' : '1.5rem' }}>
               {isBlocked ? (
                 <div className="flex-1 flex flex-col items-center justify-center text-center p-8">
                   <div className="bg-red-100 dark:bg-red-900/20 p-6 rounded-full mb-4">
@@ -1162,10 +1138,17 @@ const Messages: React.FC = () => {
                   </div>
                 ) : (
                   <div className="flex-1 bg-[#f0f2f5] dark:bg-gray-900 rounded-2xl flex items-center px-4 py-2.5 border border-transparent focus-within:border-blue-300 transition-all relative">
-                     <input 
+                    <input 
                       ref={inputRef}
                       value={messageText} 
                       onChange={e => handleMessageTextChange(e.target.value)} 
+                      onFocus={() => {
+                        setIsInputFocused(true);
+                        setTimeout(() => {
+                          scrollRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
+                        }, 300);
+                      }}
+                      onBlur={() => setIsInputFocused(false)}
                       placeholder={isBlocked ? "You cannot message this user." : "Type a message..."}
                       disabled={isBlocked}
                       className="bg-transparent border-none outline-none text-[15px] w-full font-bold text-gray-800 dark:text-white placeholder-gray-500 disabled:cursor-not-allowed" 

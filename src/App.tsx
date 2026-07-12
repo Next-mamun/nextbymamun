@@ -112,19 +112,21 @@ const AppLayout: React.FC = () => {
   const onTouchMove = (e: React.TouchEvent) => {
     if (!touchStart || isRefreshing) return;
     
-    // For messages page, only allow pull-to-refresh if we are in the chat list (inbox)
-    // and not currently scrolling down inside a scrollable container.
-    // To be safe, let's just check if any ancestor has scrollTop > 0.
     let target = e.target as HTMLElement | null;
     let hasScrolledParent = false;
+    let inChatArea = false;
+    
     while (target && target !== document.body) {
+      if (target.id === 'chat-messages') {
+        inChatArea = true;
+      }
       if (target.scrollTop > 0) {
         hasScrolledParent = true;
-        break;
       }
       target = target.parentElement;
     }
 
+    if (inChatArea) return; // Never pull-to-refresh inside active chat area
     if (hasScrolledParent) return;
 
     // For non-messages pages, also check mainEl
