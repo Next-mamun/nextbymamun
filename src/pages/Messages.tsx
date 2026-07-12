@@ -172,19 +172,28 @@ const Messages: React.FC = () => {
   const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
+    const viewport = window.visualViewport;
+    if (!viewport) return;
+
     const handleResize = () => {
-      if (document.activeElement === inputRef.current) {
+      const chatContainer = document.getElementById('chat-page-container');
+      if (chatContainer) {
+        // User requested fix: set height explicitly to viewport height to avoid keyboard covering input
+        chatContainer.style.height = `${viewport.height}px`;
+        // Scroll to the latest message
         setTimeout(() => {
-          inputRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
           scrollRef.current?.scrollIntoView({ behavior: 'auto' });
-        }, 300);
+        }, 100);
       }
     };
 
-    if (window.visualViewport) {
-      window.visualViewport.addEventListener('resize', handleResize);
-      return () => window.visualViewport?.removeEventListener('resize', handleResize);
-    }
+    viewport.addEventListener('resize', handleResize);
+    viewport.addEventListener('scroll', handleResize);
+
+    return () => {
+      viewport.removeEventListener('resize', handleResize);
+      viewport.removeEventListener('scroll', handleResize);
+    };
   }, []);
 
   useEffect(() => {
@@ -861,7 +870,7 @@ const Messages: React.FC = () => {
   };
 
   return (
-    <div className="flex flex-1 min-h-0 h-full w-full bg-white dark:bg-black md:rounded-xl shadow-xl border-x-0 md:border border-gray-200 dark:border-gray-800 max-w-[1200px] mx-auto overflow-hidden">
+    <div id="chat-page-container" className="flex flex-1 md:flex-row min-h-0 h-full w-full bg-white dark:bg-black md:rounded-xl shadow-xl border-x-0 md:border border-gray-200 dark:border-gray-800 max-w-[1200px] mx-auto overflow-hidden">
       {/* Contact Sidebar */}
       <div className={`${selectedChat ? 'hidden md:flex' : 'flex'} min-h-0 w-full md:w-[350px] border-r border-gray-100 dark:border-gray-800 flex flex-col bg-gray-50/50 dark:bg-black/50`}>
         <div className="p-4 border-b border-gray-100 dark:border-gray-800 bg-white dark:bg-black sticky top-0 z-20">

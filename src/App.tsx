@@ -110,11 +110,26 @@ const AppLayout: React.FC = () => {
   };
 
   const onTouchMove = (e: React.TouchEvent) => {
-    if (!touchStart || isRefreshing || isMessages) return;
+    if (!touchStart || isRefreshing) return;
     
-    // Only handle pull-to-refresh if we are at the very top of the scrollable area
+    // For messages page, only allow pull-to-refresh if we are in the chat list (inbox)
+    // and not currently scrolling down inside a scrollable container.
+    // To be safe, let's just check if any ancestor has scrollTop > 0.
+    let target = e.target as HTMLElement | null;
+    let hasScrolledParent = false;
+    while (target && target !== document.body) {
+      if (target.scrollTop > 0) {
+        hasScrolledParent = true;
+        break;
+      }
+      target = target.parentElement;
+    }
+
+    if (hasScrolledParent) return;
+
+    // For non-messages pages, also check mainEl
     const mainEl = mainRef.current;
-    if (!mainEl || mainEl.scrollTop > 0) return;
+    if (!isMessages && (!mainEl || mainEl.scrollTop > 0)) return;
 
     const currentY = e.touches[0].clientY;
     const distanceY = currentY - touchStart.y;
@@ -136,7 +151,7 @@ const AppLayout: React.FC = () => {
     const distanceY = Math.abs(touchStart.y - touchEnd.y);
 
     // Pull to refresh trigger
-    if (pullProgress > 0.8 && !isRefreshing && !isMessages) {
+    if (pullProgress > 0.8 && !isRefreshing) {
       setIsRefreshing(true);
       try {
         await queryClient.refetchQueries();
@@ -197,7 +212,7 @@ const AppLayout: React.FC = () => {
           className={`w-full flex-1 flex flex-col min-w-0 pt-14 ${isMessages ? (isKeyboardOpen ? 'pb-0' : 'pb-[60px]') : (isKeyboardOpen ? 'pb-0' : 'pb-[60px]')} md:pb-0 ${isMessages ? 'overflow-hidden bg-white dark:bg-black' : 'overflow-x-hidden overflow-y-auto px-0 md:p-4'} relative`}
         >
           {/* Pull to Refresh Indicator */}
-          {!isMessages && (pullProgress > 0 || isRefreshing) && (
+          {(pullProgress > 0 || isRefreshing) && (
             <div 
               className="absolute top-14 left-0 w-full flex justify-center z-50 pointer-events-none transition-transform"
               style={{ transform: `translateY(${Math.min(pullProgress * 50, 50)}px)` }}
