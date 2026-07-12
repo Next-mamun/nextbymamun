@@ -169,6 +169,23 @@ const Messages: React.FC = () => {
   const timerRef = useRef<NodeJS.Timeout | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    const handleResize = () => {
+      if (document.activeElement === inputRef.current) {
+        setTimeout(() => {
+          inputRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
+          scrollRef.current?.scrollIntoView({ behavior: 'auto' });
+        }, 300);
+      }
+    };
+
+    if (window.visualViewport) {
+      window.visualViewport.addEventListener('resize', handleResize);
+      return () => window.visualViewport?.removeEventListener('resize', handleResize);
+    }
+  }, []);
 
   useEffect(() => {
     if (location.state?.userId) {
@@ -374,9 +391,14 @@ const Messages: React.FC = () => {
     const processSnapshot = (snapshot: any) => {
       return snapshot.docs.map((d: any) => {
         const item = d.data();
-        const createdAt = item.created_at && typeof item.created_at.toDate === 'function' 
-          ? item.created_at.toDate().toISOString() 
-          : (item.created_at || item.local_created_at || new Date().toISOString());
+        let createdAt = new Date().toISOString();
+        if (item.created_at && typeof item.created_at.toDate === 'function') {
+          createdAt = item.created_at.toDate().toISOString();
+        } else if (typeof item.created_at === 'string') {
+          createdAt = item.created_at;
+        } else if (item.local_created_at) {
+          createdAt = item.local_created_at;
+        }
         return { id: d.id, ...item, created_at: createdAt } as any;
       });
     };
@@ -1132,6 +1154,7 @@ const Messages: React.FC = () => {
                 ) : (
                   <div className="flex-1 bg-[#f0f2f5] dark:bg-gray-900 rounded-2xl flex items-center px-4 py-2.5 border border-transparent focus-within:border-blue-300 transition-all relative">
                      <input 
+                      ref={inputRef}
                       value={messageText} 
                       onChange={e => handleMessageTextChange(e.target.value)} 
                       placeholder={isBlocked ? "You cannot message this user." : "Type a message..."}

@@ -52,12 +52,19 @@ const AppLayout: React.FC = () => {
   const [touchStart, setTouchStart] = useState<{ x: number, y: number } | null>(null);
 
   const [isKeyboardOpen, setIsKeyboardOpen] = useState(false);
+  const [viewportHeight, setViewportHeight] = useState<string | number>('100dvh');
 
   useEffect(() => {
     const initialHeight = window.innerHeight;
     
     const handleResize = () => {
       let keyboardOpen = false;
+      
+      if (window.visualViewport) {
+        setViewportHeight(window.visualViewport.height);
+      } else {
+        setViewportHeight(window.innerHeight);
+      }
       
       // Check window shrink (Android)
       if (window.innerHeight < initialHeight * 0.8) {
@@ -114,10 +121,10 @@ const AppLayout: React.FC = () => {
     
     // If pulling down
     if (distanceY > 0) {
-      // Prevent default to stop native overscroll glow on some browsers if possible
-      // e.preventDefault() might not work in passive event listeners, but we can set state
       const progress = Math.min(distanceY / 150, 1);
       setPullProgress(progress);
+    } else {
+      setPullProgress(0);
     }
   };
 
@@ -174,8 +181,8 @@ const AppLayout: React.FC = () => {
 
   return (
     <div 
-      className="w-full h-[100dvh] bg-[#f0f2f5] dark:bg-[#000000] flex flex-col transition-colors duration-300 overflow-hidden" 
-      style={{ paddingBottom: '0px' }}
+      className="w-full bg-[#f0f2f5] dark:bg-[#000000] flex flex-col transition-colors duration-300 overflow-hidden" 
+      style={{ height: typeof viewportHeight === 'number' ? `${viewportHeight}px` : viewportHeight, paddingBottom: '0px' }}
     >
       <div 
         className="flex w-full h-full max-w-[1920px] mx-auto overflow-hidden relative"
