@@ -207,6 +207,8 @@ const Reels: React.FC = () => {
     const q = query(collection(db, 'posts'), where('media_type', '==', 'video'), orderBy('created_at', 'desc'), limit(1));
     const unsubscribe = onSnapshot(q, () => {
       queryClient.invalidateQueries({ queryKey: ['reels_infinite_firestore_v2'] });
+    }, (error) => {
+      console.warn("posts onSnapshot in Reels error:", error);
     });
 
     return () => unsubscribe();

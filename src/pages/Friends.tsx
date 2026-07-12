@@ -22,6 +22,8 @@ const Friends: React.FC = () => {
     const q = query(collection(db, 'friendships'), or(where('sender_id', '==', currentUser.id), where('receiver_id', '==', currentUser.id)));
     const unsub = onSnapshot(q, () => {
       queryClient.invalidateQueries({ queryKey: ['friends'] });
+    }, (error) => {
+      console.warn("friendships onSnapshot error:", error);
     });
 
     return () => unsub();

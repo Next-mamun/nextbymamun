@@ -34,7 +34,9 @@ const Notifications: React.FC = () => {
         limit(50)
       );
       const unreadMsgsSnap = await getDocs(qMsgs);
-      const unreadMsgs = unreadMsgsSnap.docs.map(d => ({id: d.id, ...d.data()}) as any);
+      const unreadMsgs = unreadMsgsSnap.docs
+        .map(d => ({id: d.id, ...d.data()}) as any)
+        .filter((msg: any) => !msg.deleted_for_everyone && !(msg.deleted_for || []).includes(currentUser.id));
         
       const validNotifs = notifs || [];
       const validMsgs = unreadMsgs || [];
@@ -95,6 +97,8 @@ const Notifications: React.FC = () => {
     const q = query(collection(db, 'notifications'), where('user_id', '==', currentUser.id));
     const unsub = onSnapshot(q, () => {
         queryClient.invalidateQueries({ queryKey: ['notifications', currentUser?.id] });
+    }, (error) => {
+      console.warn("notifications onSnapshot error:", error);
     });
 
     return () => unsub();

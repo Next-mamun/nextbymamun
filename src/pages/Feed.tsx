@@ -251,6 +251,8 @@ const Feed: React.FC = () => {
           }
         }
       });
+    }, (error) => {
+      console.warn("posts onSnapshot in Feed error:", error);
     });
     return () => unsubscribe();
   }, [selectedCategory, contentTypeFilter, currentUser?.id, queryClient]);

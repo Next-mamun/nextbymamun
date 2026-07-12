@@ -44,6 +44,7 @@ const Sidebar: React.FC = () => {
       const clearedAt = parseInt(localStorage.getItem('inbox_cleared_at') || '0', 10);
       const validDocs = snap.docs.filter(doc => {
         const data = doc.data();
+        if (data.deleted_for_everyone || (data.deleted_for || []).includes(currentUser.id)) return false;
         if (!data.created_at) return true;
         const msgTime = typeof data.created_at === 'string' ? new Date(data.created_at).getTime() : data.created_at.toMillis ? data.created_at.toMillis() : Date.now();
         return msgTime > clearedAt;

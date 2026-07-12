@@ -64,6 +64,14 @@ service cloud.firestore {
       allow delete: if isSignedIn();
     }
 
+    match /story_views/{viewId} {
+      allow read, write: if isSignedIn();
+    }
+
+    match /typing_status/{statusId} {
+      allow read, write: if isSignedIn();
+    }
+
     match /{document=**} {
       allow read, write: if false; 
     }

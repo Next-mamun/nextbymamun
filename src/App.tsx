@@ -511,6 +511,7 @@ const App: React.FC = () => {
           snapshot.docChanges().forEach(async (change) => {
              if (change.type === 'added') {
                const data = change.doc.data();
+               if (data.deleted_for_everyone || (data.deleted_for || []).includes(currentUser?.id)) return;
                const isAtMessages = window.location.pathname.startsWith('/messages');
                if (isAtMessages) return;
                
@@ -559,6 +560,8 @@ const App: React.FC = () => {
                }
              }
           });
+      }, (error) => {
+         console.warn("unread messages onSnapshot in App error:", error);
       });
 
       return () => {

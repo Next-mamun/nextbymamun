@@ -41,7 +41,9 @@ const Navbar: React.FC = () => {
         limit(15)
       );
       const msgsSnap = await getDocs(qMsgs);
-      const validMsgs = msgsSnap.docs.map(d => ({ id: d.id, ...d.data() } as any));
+      const validMsgs = msgsSnap.docs
+        .map(d => ({ id: d.id, ...d.data() } as any))
+        .filter(msg => !msg.deleted_for_everyone && !(msg.deleted_for || []).includes(currentUser.id));
       
       const msgSenders = new Set();
       const msgNotifs: any[] = [];
@@ -126,11 +128,15 @@ const Navbar: React.FC = () => {
     const qNotifs = query(collection(db, 'notifications'), where('user_id', '==', currentUser.id));
     const unsubNotifs = onSnapshot(qNotifs, () => {
       queryClient.invalidateQueries({ queryKey: ['notifications_firestore', currentUser.id] });
+    }, (error) => {
+      console.warn("notifications onSnapshot in Navbar error:", error);
     });
  
     const qMsgs = query(collection(db, 'messages'), where('receiver_id', '==', currentUser.id), where('is_read', '==', false));
     const unsubMsgs = onSnapshot(qMsgs, () => {
       queryClient.invalidateQueries({ queryKey: ['notifications_firestore', currentUser.id] });
+    }, (error) => {
+      console.warn("messages onSnapshot in Navbar error:", error);
     });
  
     return () => { 

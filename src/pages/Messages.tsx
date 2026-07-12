@@ -269,6 +269,8 @@ const Messages: React.FC = () => {
       } else {
         setOtherUserTyping(false);
       }
+    }, (error) => {
+      console.warn("typing_status listener error:", error);
     });
     return () => unsubscribe();
   }, [selectedChat, currentUser]);
@@ -325,7 +327,9 @@ const Messages: React.FC = () => {
         limit(500)
       );
       const msgSnap = await getDocs(msgQuery);
-      let messages = msgSnap.docs.map(d => ({id: d.id, ...d.data()} as any));
+      let messages = msgSnap.docs
+        .map(d => ({id: d.id, ...d.data()} as any))
+        .filter(m => !m.deleted_for_everyone && !(m.deleted_for || []).includes(currentUser.id));
       
       // Sort in memory to avoid composite index requirement
       messages.sort((a, b) => {
@@ -468,7 +472,7 @@ const Messages: React.FC = () => {
       });
 
       const finalData = data
-        .filter((m: any) => !(m.deleted_for || []).includes(currentUser.id))
+        .filter((m: any) => !m.deleted_for_everyone && !(m.deleted_for || []).includes(currentUser.id))
         .map((m: any) => {
         let parsed: any = { ...m };
         if (typeof m.content === 'string') {
@@ -626,6 +630,9 @@ const Messages: React.FC = () => {
         queryClient.invalidateQueries({ queryKey: ['messages'] });
         queryClient.invalidateQueries({ queryKey: ['contacts'] });
         queryClient.invalidateQueries({ queryKey: ['notifications', currentUser.id] });
+      },
+      (error) => {
+        console.warn("unsubMessages error:", error);
       }
     );
 
@@ -635,6 +642,9 @@ const Messages: React.FC = () => {
         queryClient.invalidateQueries({ queryKey: ['blockStatus'] });
         queryClient.invalidateQueries({ queryKey: ['isBlockedByMe'] });
         queryClient.invalidateQueries({ queryKey: ['contacts'] });
+      },
+      (error) => {
+        console.warn("unsubFriendships error:", error);
       }
     );
 
@@ -859,15 +869,30 @@ const Messages: React.FC = () => {
     if (!msg) return;
 
     // Destroy
-    const payloadExtra = { JSON_PAYLOAD: true, text: 'Viewed ' + (msg.media_type || 'media'), is_view_once: false, parent_message_id: msg.parent_message_id };
     try {
-        await updateDoc(doc(db, 'messages', msg.id), { media_url: null, content: JSON.stringify(payloadExtra) });
+        // Delete message document completely so it vanishes from both chats
+        await deleteDoc(doc(db, 'messages', msg.id));
         if (currentUser && selectedChat) {
           const cacheKey = `messages_cache_${[currentUser.id, selectedChat.id].sort().join('_')}`;
           try { await redis.del(cacheKey); } catch (e) {}
         }
         queryClient.invalidateQueries({ queryKey: ['messages', selectedChat?.id] });
-    } catch(e) {}
+        toast.success("Media destroyed successfully!");
+    } catch(e) {
+        console.error("Error deleting view-once message, attempting update fallback:", e);
+        // Fallback: update content to Viewed and clear media_url
+        try {
+          const payloadExtra = { JSON_PAYLOAD: true, text: 'Viewed ' + (msg.media_type || 'media'), is_view_once: false, parent_message_id: msg.parent_message_id };
+          await updateDoc(doc(db, 'messages', msg.id), { media_url: '', content: JSON.stringify(payloadExtra) });
+          if (currentUser && selectedChat) {
+            const cacheKey = `messages_cache_${[currentUser.id, selectedChat.id].sort().join('_')}`;
+            try { await redis.del(cacheKey); } catch (e) {}
+          }
+          queryClient.invalidateQueries({ queryKey: ['messages', selectedChat?.id] });
+        } catch (err) {
+          console.error("Failed both delete and update for view once message:", err);
+        }
+    }
   };
 
   // Intercept browser back button for selectedChat on mobile
@@ -1044,6 +1069,9 @@ const Messages: React.FC = () => {
     const id = deleteConfirmId;
     setDeleteConfirmId(null);
 
+    const msgObj = messages.find((m: any) => m.id === id);
+    const isMine = msgObj?.sender_id === currentUser?.id;
+
     // Optimistic delete
     if (selectedChat) {
       queryClient.setQueryData(['messages', selectedChat.id], (oldData: any[]) => {
@@ -1053,14 +1081,26 @@ const Messages: React.FC = () => {
     }
 
     try {
-        await deleteDoc(doc(db, 'messages', id));
-        if (selectedChat && currentUser) {
-          const cacheKey = `messages_cache_${[currentUser.id, selectedChat.id].sort().join('_')}`;
-          try { await redis.del(cacheKey); } catch (e) {}
-          queryClient.invalidateQueries({ queryKey: ['messages', selectedChat.id] });
-        }
-    } catch(error) { 
+      if (isMine) {
+        await updateDoc(doc(db, 'messages', id), {
+          deleted_for_everyone: true
+        });
+        toast.success("Message deleted for everyone!");
+      } else {
+        await updateDoc(doc(db, 'messages', id), {
+          deleted_for: arrayUnion(currentUser!.id)
+        });
+        toast.success("Message deleted for you!");
+      }
+
+      if (selectedChat && currentUser) {
+        const cacheKey = `messages_cache_${[currentUser.id, selectedChat.id].sort().join('_')}`;
+        try { await redis.del(cacheKey); } catch (e) {}
+        queryClient.invalidateQueries({ queryKey: ['messages', selectedChat.id] });
+      }
+    } catch(error: any) { 
        console.error(error);
+       toast.error("Failed to delete message: " + error.message);
        queryClient.invalidateQueries({ queryKey: ['messages', selectedChat?.id] });
     }
   };
@@ -1106,7 +1146,9 @@ const Messages: React.FC = () => {
     }
 
     try {
-      await Promise.all(idsToDelete.map(id => deleteDoc(doc(db, 'messages', id))));
+      await Promise.all(idsToDelete.map(id => updateDoc(doc(db, 'messages', id), {
+        deleted_for_everyone: true
+      })));
       if (selectedChat && currentUser) {
         const cacheKey = `messages_cache_${[currentUser.id, selectedChat.id].sort().join('_')}`;
         try { await redis.del(cacheKey); } catch (e) {}
@@ -1236,9 +1278,11 @@ const Messages: React.FC = () => {
                     <button onClick={handleDeleteForMe} className="px-3 py-1.5 rounded-full text-xs font-bold text-gray-700 bg-gray-100 hover:bg-gray-200 dark:text-gray-200 dark:bg-gray-800 dark:hover:bg-gray-700">
                       Delete for Me
                     </button>
-                    <button onClick={handleDeleteForEveryone} className="px-3 py-1.5 rounded-full text-xs font-bold text-white bg-red-500 hover:bg-red-600">
-                      Delete for Everyone
-                    </button>
+                    {selectedMessages.every(id => messages.find((m: any) => m.id === id)?.sender_id === currentUser?.id) && (
+                      <button onClick={handleDeleteForEveryone} className="px-3 py-1.5 rounded-full text-xs font-bold text-white bg-red-500 hover:bg-red-600">
+                        Delete for Everyone
+                      </button>
+                    )}
                   </div>
                 </div>
               ) : (
@@ -1343,9 +1387,16 @@ const Messages: React.FC = () => {
                         }
                       }}
                     >
-                      {msg.sender_id === currentUser?.id && (
-                        <button onClick={() => triggerDeleteMessage(msg.id)} className="opacity-0 group-hover:opacity-100 mr-2 self-center text-red-300 hover:text-red-500 transition-all"><Trash2 size={16} /></button>
-                      )}
+                      <button 
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          triggerDeleteMessage(msg.id);
+                        }} 
+                        className={`opacity-0 group-hover:opacity-100 transition-all self-center text-red-300 hover:text-red-500 ${msg.sender_id === currentUser?.id ? 'mr-2' : 'ml-2 order-last'}`}
+                        title={msg.sender_id === currentUser?.id ? "Delete for Everyone" : "Delete for Me"}
+                      >
+                        <Trash2 size={16} />
+                      </button>
                       
                       <div className={`p-3.5 rounded-2xl max-w-[75%] shadow-sm text-[15px] font-medium leading-relaxed ${msg.sender_id === currentUser?.id ? 'bg-[#1877F2] text-white rounded-tr-none' : 'bg-white dark:bg-gray-800 border border-gray-100 dark:border-gray-700 text-gray-800 dark:text-gray-200 rounded-tl-none'}`}>
                         {parentMsg && (
@@ -1569,9 +1620,15 @@ const Messages: React.FC = () => {
             </div>
             
             {activeViewOnceMedia && (
-              <div className="fixed inset-0 z-50 bg-black/95 flex flex-col items-center justify-center p-4">
+              <div 
+                className="fixed inset-0 z-[999] bg-black/95 flex flex-col items-center justify-center p-4 cursor-pointer select-none"
+                onClick={handleCloseViewOnce}
+              >
                 {/* Beautiful custom navbar for full-screen view */}
-                <div className="absolute top-0 left-0 right-0 h-16 bg-black/40 backdrop-blur-md px-6 flex items-center justify-between z-10 border-b border-white/5">
+                <div 
+                  className="absolute top-0 left-0 right-0 h-16 bg-black/40 backdrop-blur-md px-6 flex items-center justify-between z-50 border-b border-white/5 cursor-default"
+                  onClick={(e) => e.stopPropagation()}
+                >
                   <button 
                     onClick={handleCloseViewOnce}
                     className="flex items-center gap-2 text-white hover:text-blue-400 transition-colors bg-white/10 px-4 py-2 rounded-full font-bold text-sm"
@@ -1590,18 +1647,34 @@ const Messages: React.FC = () => {
                   </button>
                 </div>
 
-                <div className="max-w-4xl w-full max-h-[80vh] flex flex-col items-center justify-center relative mt-16">
+                <div 
+                  className="max-w-4xl w-full max-h-[70vh] flex flex-col items-center justify-center relative mt-16 cursor-default"
+                  onClick={(e) => e.stopPropagation()}
+                >
                    {activeViewOnceMedia.media_type === 'image' ? (
-                     <img src={activeViewOnceMedia.media_url} className="max-w-full max-h-[70vh] object-contain rounded-xl shadow-2xl" />
+                     <img src={activeViewOnceMedia.media_url} className="max-w-full max-h-[60vh] object-contain rounded-xl shadow-2xl" />
                    ) : activeViewOnceMedia.media_type === 'audio' ? (
                      <div className="bg-white/10 p-8 rounded-3xl w-full max-w-md">
                         <CustomAudioPlayer src={activeViewOnceMedia.media_url} isSender={false} />
                      </div>
                    ) : (
-                     <VideoPlayer src={activeViewOnceMedia.media_url} className="max-w-full max-h-[70vh] rounded-xl shadow-2xl" />
+                     <VideoPlayer src={activeViewOnceMedia.media_url} className="max-w-full max-h-[60vh] rounded-xl shadow-2xl" />
                    )}
                 </div>
-                <p className="text-gray-400 mt-6 font-bold text-xs bg-white/5 px-4 py-2 rounded-full backdrop-blur-sm select-none">This media will be destroyed when you close this window.</p>
+                
+                <div 
+                  className="mt-6 flex flex-col items-center gap-3 cursor-default"
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  <p className="text-gray-400 font-bold text-xs bg-white/5 px-4 py-2 rounded-full backdrop-blur-sm select-none">This media will be destroyed when you close this window.</p>
+                  <button 
+                    onClick={handleCloseViewOnce}
+                    className="px-6 py-2.5 bg-red-600 hover:bg-red-700 text-white rounded-full font-bold text-xs flex items-center gap-2 shadow-lg transition-colors"
+                  >
+                    <X size={14} />
+                    <span>Close & Destroy Media</span>
+                  </button>
+                </div>
               </div>
             )}
           </>
@@ -1627,7 +1700,11 @@ const Messages: React.FC = () => {
       <ConfirmDialog
         isOpen={!!deleteConfirmId}
         title="Delete Message"
-        message="Are you sure you want to delete this message for everyone?"
+        message={
+          deleteConfirmId && messages.find((m: any) => m.id === deleteConfirmId)?.sender_id === currentUser?.id
+            ? "Are you sure you want to delete this message for everyone?"
+            : "Are you sure you want to delete this message for yourself?"
+        }
         onConfirm={executeDeleteMessage}
         onCancel={() => setDeleteConfirmId(null)}
       />
