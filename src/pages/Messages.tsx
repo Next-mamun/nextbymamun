@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { motion } from 'motion/react';
-import { Search, Trash2, Send, Smile, Paperclip, MessageSquare, ArrowLeft, Check, CheckCheck, Ban, RefreshCw, X, CornerUpLeft, EyeOff, Mic, Eye, Play, Pause } from 'lucide-react';
+import { Search, Trash2, Send, Smile, Paperclip, MessageSquare, ArrowLeft, Check, CheckCheck, Ban, RefreshCw, X, CornerUpLeft, EyeOff, Mic, Eye, Play, Pause, BellOff, Bell } from 'lucide-react';
 import EmojiPicker, { Theme } from 'emoji-picker-react';
 import { useAuth } from '@/contexts/AuthContext';
 import { VerifiedBadge } from '@/components/VerifiedBadge';
@@ -12,7 +12,7 @@ import { redis } from '@/lib/redis';
 
 // Firebase imports
 import { db } from '../lib/firebase';
-import { collection, query, where, getDocs, deleteDoc, doc, getDoc, updateDoc, setDoc, onSnapshot, orderBy, limit, addDoc, serverTimestamp, or, and } from 'firebase/firestore';
+import { collection, query, where, getDocs, deleteDoc, doc, getDoc, updateDoc, setDoc, onSnapshot, orderBy, limit, addDoc, serverTimestamp, or, and, arrayUnion } from 'firebase/firestore';
 
 import { MediaEditor } from '../components/MediaTools';
 import { useUpload } from '@/contexts/UploadContext';
@@ -123,11 +123,16 @@ const Messages: React.FC = () => {
   const location = useLocation();
   const queryClient = useQueryClient();
   const [selectedChat, setSelectedChat] = useState<any>(null);
+  const [isMuted, setIsMuted] = useState(false);
   const [isInputFocused, setIsInputFocused] = useState(false);
   const [messageText, setMessageText] = useState('');
+  const [selectedMessages, setSelectedMessages] = useState<string[]>([]);
   const [visibleLimit, setVisibleLimit] = useState(50);
 
   const [inputOffset, setInputOffset] = useState(0);
+  const [savedInputOffset, setSavedInputOffset] = useState(() => {
+    return parseInt(localStorage.getItem('saved_keyboard_height') || '300', 10);
+  });
   const [isDraggingInput, setIsDraggingInput] = useState(false);
   const dragStartYRef = useRef(0);
   const dragStartOffsetRef = useRef(0);
@@ -135,8 +140,8 @@ const Messages: React.FC = () => {
 
   useEffect(() => {
     if (isInputFocused && inputOffset === 0) {
-      setInputOffset(300);
-    } else if (!isInputFocused) {
+      setInputOffset(savedInputOffset);
+    } else if (!isInputFocused && !isDraggingInput) {
       setInputOffset(0);
     }
   }, [isInputFocused]);
@@ -148,7 +153,17 @@ const Messages: React.FC = () => {
       const deltaY = clientY - dragStartYRef.current;
       setInputOffset(Math.max(0, dragStartOffsetRef.current - deltaY));
     };
-    const handleUp = () => setIsDraggingInput(false);
+    const handleUp = () => {
+      if (isDraggingInput) {
+        setIsDraggingInput(false);
+        if (inputOffset > 50) {
+          setSavedInputOffset(inputOffset);
+          localStorage.setItem('saved_keyboard_height', inputOffset.toString());
+        } else {
+          setInputOffset(0);
+        }
+      }
+    };
 
     if (isDraggingInput) {
       document.addEventListener('mousemove', handleMove);
@@ -162,18 +177,38 @@ const Messages: React.FC = () => {
       document.removeEventListener('touchmove', handleMove);
       document.removeEventListener('touchend', handleUp);
     };
-  }, [isDraggingInput]);
+  }, [isDraggingInput, inputOffset]);
 
-  const handleInputTouchStart = (e: React.TouchEvent | React.MouseEvent) => {
-    const now = Date.now();
-    if (now - lastTapRef.current < 300) {
-      setIsDraggingInput(true);
-      const clientY = 'touches' in e ? e.touches[0].clientY : e.clientY;
-      dragStartYRef.current = clientY;
-      dragStartOffsetRef.current = inputOffset;
-      if (e.cancelable) e.preventDefault();
+  const longPressTimer = useRef<any>(null);
+  const handleTouchStart = (id: string) => {
+    longPressTimer.current = setTimeout(() => {
+      if (!selectedMessages.includes(id)) {
+        if ('vibrate' in navigator) navigator.vibrate(50);
+        setSelectedMessages(prev => [...prev, id]);
+      }
+    }, 500);
+  };
+  const handleTouchEnd = () => {
+    if (longPressTimer.current) clearTimeout(longPressTimer.current);
+  };
+  const handleMessageClick = (id: string) => {
+    if (selectedMessages.length > 0) {
+      if (selectedMessages.includes(id)) {
+        setSelectedMessages(prev => prev.filter(m => m !== id));
+      } else {
+        setSelectedMessages(prev => [...prev, id]);
+      }
     }
-    lastTapRef.current = now;
+  };
+
+  const handleInputDragStart = (e: React.TouchEvent | React.MouseEvent) => {
+    setIsDraggingInput(true);
+    const clientY = 'touches' in e ? e.touches[0].clientY : e.clientY;
+    dragStartYRef.current = clientY;
+    dragStartOffsetRef.current = inputOffset;
+    if (inputRef.current) inputRef.current.blur();
+    setIsInputFocused(false);
+    if (e.cancelable) e.preventDefault();
   };
 
   const handleScroll = (e: any) => {
@@ -393,10 +428,12 @@ const Messages: React.FC = () => {
     if (!selectedChat || !currentUser) {
       setMessages([]);
       setVisibleLimit(50);
+      setIsMuted(false);
       return;
     }
     
     setVisibleLimit(50);
+    setIsMuted(localStorage.getItem(`muted_${selectedChat.id}`) === 'true');
 
     const q1 = query(
       collection(db, 'messages'),
@@ -430,7 +467,9 @@ const Messages: React.FC = () => {
         return timeA - timeB;
       });
 
-      const finalData = data.map(m => {
+      const finalData = data
+        .filter((m: any) => !(m.deleted_for || []).includes(currentUser.id))
+        .map((m: any) => {
         let parsed: any = { ...m };
         if (typeof m.content === 'string') {
           if (m.content.includes('"JSON_PAYLOAD"')) {
@@ -456,25 +495,28 @@ const Messages: React.FC = () => {
       const unreadCount = finalData.filter(m => m.sender_id === selectedChat.id && !m.is_read).length;
       if (unreadCount > 0) {
         // Play notification sound and vibrate
-        try {
-          if ('vibrate' in navigator) navigator.vibrate(200);
-          const AudioContext = window.AudioContext || (window as any).webkitAudioContext;
-          if (AudioContext) {
-            const ctx = new AudioContext();
-            const osc = ctx.createOscillator();
-            const gain = ctx.createGain();
-            osc.connect(gain);
-            gain.connect(ctx.destination);
-            osc.type = 'sine';
-            osc.frequency.setValueAtTime(600, ctx.currentTime);
-            osc.frequency.exponentialRampToValueAtTime(1000, ctx.currentTime + 0.1);
-            gain.gain.setValueAtTime(0, ctx.currentTime);
-            gain.gain.linearRampToValueAtTime(0.5, ctx.currentTime + 0.05);
-            gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.5);
-            osc.start(ctx.currentTime);
-            osc.stop(ctx.currentTime + 0.5);
-          }
-        } catch(e) {}
+        const isLocallyMuted = localStorage.getItem(`muted_${selectedChat.id}`) === 'true';
+        if (!isLocallyMuted) {
+          try {
+            if ('vibrate' in navigator) navigator.vibrate(200);
+            const AudioContext = window.AudioContext || (window as any).webkitAudioContext;
+            if (AudioContext) {
+              const ctx = new AudioContext();
+              const osc = ctx.createOscillator();
+              const gain = ctx.createGain();
+              osc.connect(gain);
+              gain.connect(ctx.destination);
+              osc.type = 'sine';
+              osc.frequency.setValueAtTime(600, ctx.currentTime);
+              osc.frequency.exponentialRampToValueAtTime(1000, ctx.currentTime + 0.1);
+              gain.gain.setValueAtTime(0, ctx.currentTime);
+              gain.gain.linearRampToValueAtTime(0.5, ctx.currentTime + 0.05);
+              gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.5);
+              osc.start(ctx.currentTime);
+              osc.stop(ctx.currentTime + 0.5);
+            }
+          } catch(e) {}
+        }
 
         queryClient.invalidateQueries({ queryKey: ['unreadCounts'] });
         queryClient.invalidateQueries({ queryKey: ['totalUnread'] });
@@ -828,6 +870,62 @@ const Messages: React.FC = () => {
     } catch(e) {}
   };
 
+  // Intercept browser back button for selectedChat on mobile
+  useEffect(() => {
+    if (!selectedChat) return;
+    const stateId = 'chat_' + selectedChat.id;
+    window.history.pushState({ chatOpen: stateId }, '');
+    const handlePopState = (e: PopStateEvent) => {
+      if (!e.state || e.state.chatOpen !== stateId) {
+        setSelectedChat(null);
+      }
+    };
+    window.addEventListener('popstate', handlePopState);
+    return () => {
+      window.removeEventListener('popstate', handlePopState);
+    };
+  }, [selectedChat]);
+
+  const handleBackToSidebar = () => {
+    setSelectedChat(null);
+    if (window.history.state?.chatOpen) {
+      window.history.back();
+    }
+  };
+
+  // Intercept browser back button for activeViewOnceMedia
+  useEffect(() => {
+    if (!activeViewOnceMedia) return;
+    window.history.pushState({ viewOnceOpen: true }, '');
+    const handlePopState = (e: PopStateEvent) => {
+      if (!e.state || !e.state.viewOnceOpen) {
+        closeViewOnce();
+      }
+    };
+    window.addEventListener('popstate', handlePopState);
+    return () => {
+      window.removeEventListener('popstate', handlePopState);
+    };
+  }, [activeViewOnceMedia]);
+
+  const handleCloseViewOnce = () => {
+    closeViewOnce();
+    if (window.history.state?.viewOnceOpen) {
+      window.history.back();
+    }
+  };
+
+  const handleToggleMute = () => {
+    if (!selectedChat) return;
+    const newState = !isMuted;
+    setIsMuted(newState);
+    if (newState) {
+      localStorage.setItem(`muted_${selectedChat.id}`, 'true');
+    } else {
+      localStorage.removeItem(`muted_${selectedChat.id}`);
+    }
+  };
+
   const handleBlockUser = async () => {
     if (!selectedChat) return;
     
@@ -961,6 +1059,59 @@ const Messages: React.FC = () => {
           try { await redis.del(cacheKey); } catch (e) {}
           queryClient.invalidateQueries({ queryKey: ['messages', selectedChat.id] });
         }
+    } catch(error) { 
+       console.error(error);
+       queryClient.invalidateQueries({ queryKey: ['messages', selectedChat?.id] });
+    }
+  };
+
+  const handleDeleteForMe = async () => {
+    const idsToDelete = selectedMessages;
+    setSelectedMessages([]);
+    setDeleteConfirmId(null);
+    if (!idsToDelete.length || !currentUser) return;
+
+    if (selectedChat) {
+      queryClient.setQueryData(['messages', selectedChat.id], (oldData: any[]) => {
+        if (!oldData) return oldData;
+        return oldData.filter(msg => !idsToDelete.includes(msg.id));
+      });
+    }
+
+    try {
+      await Promise.all(idsToDelete.map(id => 
+        updateDoc(doc(db, 'messages', id), { 
+          deleted_for: arrayUnion(currentUser.id) 
+        }).catch(e => console.error(e))
+      ));
+      if (selectedChat) {
+        queryClient.invalidateQueries({ queryKey: ['messages', selectedChat.id] });
+      }
+    } catch(error) {
+       console.error(error);
+    }
+  };
+
+  const handleDeleteForEveryone = async () => {
+    const idsToDelete = selectedMessages;
+    setSelectedMessages([]);
+    setDeleteConfirmId(null);
+    if (!idsToDelete.length) return;
+
+    if (selectedChat) {
+      queryClient.setQueryData(['messages', selectedChat.id], (oldData: any[]) => {
+        if (!oldData) return oldData;
+        return oldData.filter(msg => !idsToDelete.includes(msg.id));
+      });
+    }
+
+    try {
+      await Promise.all(idsToDelete.map(id => deleteDoc(doc(db, 'messages', id))));
+      if (selectedChat && currentUser) {
+        const cacheKey = `messages_cache_${[currentUser.id, selectedChat.id].sort().join('_')}`;
+        try { await redis.del(cacheKey); } catch (e) {}
+        queryClient.invalidateQueries({ queryKey: ['messages', selectedChat.id] });
+      }
     } catch(error) {
        console.error(error);
        queryClient.invalidateQueries({ queryKey: ['messages', selectedChat?.id] });
@@ -1072,44 +1223,72 @@ const Messages: React.FC = () => {
       <div className={`${!selectedChat ? 'hidden md:flex' : 'flex'} flex-1 flex-col bg-white dark:bg-black relative min-h-0`}>
         {selectedChat ? (
           <>
-            <div className="p-4 border-b border-gray-100 dark:border-gray-800 flex items-center justify-between shadow-sm bg-white dark:bg-black shrink-0 z-10">
-              <div className="flex items-center gap-3">
-                <button onClick={() => setSelectedChat(null)} className="md:hidden p-2 rounded-full hover:bg-gray-100 dark:hover:bg-gray-800"><ArrowLeft size={20} className="text-gray-600 dark:text-gray-300" /></button>
-                <div className="flex items-center gap-3 cursor-pointer hover:opacity-80 transition-opacity" onClick={() => navigate(`/profile/${selectedChat.username}`)}>
-                  <img src={selectedChat.avatar_url} className="w-10 h-10 rounded-full object-cover shadow-sm border border-gray-100 dark:border-gray-700" />
-                  <div>
-                    <p className="font-bold leading-none text-gray-900 dark:text-white flex items-center gap-1">
-                      {selectedChat.display_name}
-                      {selectedChat.is_verified && <VerifiedBadge />}
-                    </p>
-                    <p className={`text-[10px] mt-1 font-black tracking-widest ${onlineUsers.has(selectedChat.id) ? 'text-green-500' : 'text-gray-400'}`}>
-                      {onlineUsers.has(selectedChat.id) ? 'REALTIME ACTIVE' : 'OFFLINE'}
-                    </p>
+            <div className="p-4 border-b border-gray-100 dark:border-gray-800 flex items-center justify-between shadow-sm bg-white dark:bg-black shrink-0 z-10 min-h-[72px]">
+              {selectedMessages.length > 0 ? (
+                <div className="flex items-center justify-between w-full">
+                  <div className="flex items-center gap-3">
+                    <button onClick={() => setSelectedMessages([])} className="p-2 rounded-full hover:bg-gray-100 dark:hover:bg-gray-800">
+                      <X size={20} className="text-gray-600 dark:text-gray-300" />
+                    </button>
+                    <span className="font-bold">{selectedMessages.length} Selected</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <button onClick={handleDeleteForMe} className="px-3 py-1.5 rounded-full text-xs font-bold text-gray-700 bg-gray-100 hover:bg-gray-200 dark:text-gray-200 dark:bg-gray-800 dark:hover:bg-gray-700">
+                      Delete for Me
+                    </button>
+                    <button onClick={handleDeleteForEveryone} className="px-3 py-1.5 rounded-full text-xs font-bold text-white bg-red-500 hover:bg-red-600">
+                      Delete for Everyone
+                    </button>
                   </div>
                 </div>
-              </div>
-              <div className="flex items-center gap-1">
-                <button 
-                  onClick={() => {
-                    queryClient.invalidateQueries({ queryKey: ['messages', selectedChat?.id] });
-                    queryClient.invalidateQueries({ queryKey: ['friendships', currentUser?.id] });
-                  }}
-                  className="p-2 rounded-full transition-all text-gray-400 hover:text-blue-500 hover:bg-blue-50 dark:hover:bg-blue-900/20"
-                  title="Refresh Chat"
-                >
-                  <RefreshCw size={20} />
-                </button>
-                <button 
-                  onClick={handleBlockUser} 
-                  className={`p-2 rounded-full transition-all ${isBlockedByMe ? 'bg-red-500 text-white shadow-lg' : 'hover:bg-red-50 dark:hover:bg-red-900/20 text-gray-400 hover:text-red-500'}`} 
-                  title={isBlockedByMe ? "Unblock User" : "Block User"}
-                >
-                  <Ban size={20} />
-                </button>
-              </div>
+              ) : (
+                <>
+                  <div className="flex items-center gap-3">
+                    <button onClick={handleBackToSidebar} className="md:hidden p-2 rounded-full hover:bg-gray-100 dark:hover:bg-gray-800"><ArrowLeft size={20} className="text-gray-600 dark:text-gray-300" /></button>
+                    <div className="flex items-center gap-3 cursor-pointer hover:opacity-80 transition-opacity" onClick={() => navigate(`/profile/${selectedChat.username}`)}>
+                      <img src={selectedChat.avatar_url} className="w-10 h-10 rounded-full object-cover shadow-sm border border-gray-100 dark:border-gray-700" />
+                      <div>
+                        <p className="font-bold leading-none text-gray-900 dark:text-white flex items-center gap-1">
+                          {selectedChat.display_name}
+                          {selectedChat.is_verified && <VerifiedBadge />}
+                        </p>
+                        <p className={`text-[10px] mt-1 font-black tracking-widest ${onlineUsers.has(selectedChat.id) ? 'text-green-500' : 'text-gray-400'}`}>
+                          {onlineUsers.has(selectedChat.id) ? 'REALTIME ACTIVE' : 'OFFLINE'}
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-1">
+                    <button 
+                      onClick={handleToggleMute} 
+                      className={`p-2 rounded-full transition-all ${isMuted ? 'bg-orange-500 text-white shadow-lg' : 'hover:bg-orange-50 dark:hover:bg-orange-900/20 text-gray-400 hover:text-orange-500'}`} 
+                      title={isMuted ? "Unmute Notifications" : "Mute Notifications"}
+                    >
+                      {isMuted ? <BellOff size={20} /> : <Bell size={20} />}
+                    </button>
+                    <button 
+                      onClick={() => {
+                        queryClient.invalidateQueries({ queryKey: ['messages', selectedChat?.id] });
+                        queryClient.invalidateQueries({ queryKey: ['friendships', currentUser?.id] });
+                      }}
+                      className="p-2 rounded-full transition-all text-gray-400 hover:text-blue-500 hover:bg-blue-50 dark:hover:bg-blue-900/20"
+                      title="Refresh Chat"
+                    >
+                      <RefreshCw size={20} />
+                    </button>
+                    <button 
+                      onClick={handleBlockUser} 
+                      className={`p-2 rounded-full transition-all ${isBlockedByMe ? 'bg-red-500 text-white shadow-lg' : 'hover:bg-red-50 dark:hover:bg-red-900/20 text-gray-400 hover:text-red-500'}`} 
+                      title={isBlockedByMe ? "Unblock User" : "Block User"}
+                    >
+                      <Ban size={20} />
+                    </button>
+                  </div>
+                </>
+              )}
             </div>
             
-            <div id="chat-messages" onScroll={handleScroll} className="flex-1 p-3 md:p-6 overflow-y-auto bg-gray-50/30 dark:bg-gray-900/30 flex flex-col gap-3 min-h-0 transition-all duration-300" style={{ paddingBottom: inputOffset > 0 ? `${inputOffset + 24}px` : '1.5rem' }}>
+            <div id="chat-messages" onScroll={handleScroll} className="flex-1 p-3 md:p-6 overflow-y-auto bg-gray-50/30 dark:bg-gray-900/30 flex flex-col gap-3 min-h-0 transition-all duration-300" style={{ paddingBottom: '1.5rem' }}>
               {isBlocked ? (
                 <div className="flex-1 flex flex-col items-center justify-center text-center p-8">
                   <div className="bg-red-100 dark:bg-red-900/20 p-6 rounded-full mb-4">
@@ -1148,7 +1327,13 @@ const Messages: React.FC = () => {
                     return (
                     <motion.div 
                       key={msg.id} 
-                      className={`flex ${msg.sender_id === currentUser?.id ? 'justify-end' : 'justify-start'} group relative animate-in fade-in slide-in-from-bottom-2 duration-300 w-full`}
+                      onTouchStart={() => handleTouchStart(msg.id)}
+                      onTouchEnd={handleTouchEnd}
+                      onMouseDown={() => handleTouchStart(msg.id)}
+                      onMouseUp={handleTouchEnd}
+                      onMouseLeave={handleTouchEnd}
+                      onClick={() => handleMessageClick(msg.id)}
+                      className={`flex ${msg.sender_id === currentUser?.id ? 'justify-end' : 'justify-start'} group relative animate-in fade-in slide-in-from-bottom-2 duration-300 w-full ${selectedMessages.includes(msg.id) ? 'bg-blue-50/50 dark:bg-blue-900/20 rounded-lg' : ''}`}
                       drag="x"
                       dragConstraints={{ left: 0, right: 0 }}
                       dragElastic={{ left: 0, right: 0.5 }}
@@ -1223,8 +1408,16 @@ const Messages: React.FC = () => {
                 </>
               )}
             </div>
-            
-            <div className="relative">
+            <div className="relative bg-white dark:bg-black border-t border-gray-100 dark:border-gray-800 shrink-0 z-30 select-none">
+              {/* Always-visible drag handle */}
+              <div 
+                className="h-6 flex items-center justify-center cursor-ns-resize hover:bg-gray-100 dark:hover:bg-gray-900 transition-all select-none group/handle border-b border-gray-100/50 dark:border-gray-800/50"
+                onMouseDown={handleInputDragStart}
+                onTouchStart={handleInputDragStart}
+              >
+                <div className="w-12 h-1.5 bg-gray-300 dark:bg-gray-600 rounded-full group-hover/handle:bg-gray-400 dark:group-hover/handle:bg-gray-500 transition-all shadow-sm"></div>
+              </div>
+
               {replyingTo && (
                 <div className="absolute bottom-full left-0 right-0 bg-white/90 dark:bg-black/90 backdrop-blur border-t border-gray-100 dark:border-gray-800 p-3 px-5 flex items-center justify-between z-20 slide-in-from-bottom-2 animate-in duration-200">
                   <div className="border-l-4 border-[#1877F2] pl-3 flex-1">
@@ -1236,24 +1429,11 @@ const Messages: React.FC = () => {
                   </button>
                 </div>
               )}
+
               <form 
                 onSubmit={handleSendMessage} 
-                className="p-3 md:p-5 bg-white dark:bg-black border-t border-gray-100 dark:border-gray-800 flex items-center gap-2 md:gap-3 relative z-30 shrink-0 select-none"
-                style={{ 
-                  transform: inputOffset > 0 ? `translateY(-${inputOffset}px)` : 'none', 
-                  transition: isDraggingInput ? 'none' : 'transform 0.2s cubic-bezier(0.4, 0, 0.2, 1)',
-                  touchAction: isDraggingInput ? 'none' : 'auto'
-                }}
+                className="p-3 md:p-5 bg-white dark:bg-black flex items-center gap-2 md:gap-3 relative z-30 shrink-0"
               >
-                {inputOffset > 0 && (
-                  <div 
-                    className="absolute -top-6 left-0 right-0 h-8 flex items-center justify-center cursor-ns-resize"
-                    onMouseDown={handleInputTouchStart}
-                    onTouchStart={handleInputTouchStart}
-                  >
-                    <div className="w-12 h-1.5 bg-gray-300 dark:bg-gray-600 rounded-full shadow-sm"></div>
-                  </div>
-                )}
                 {!recordedAudio && (
                   <input type="file" ref={fileInputRef} hidden onChange={handleFileSelect} accept="*/*" />
                 )}
@@ -1325,7 +1505,6 @@ const Messages: React.FC = () => {
                     >
                       <Smile size={22} />
                     </button>
-
                     {showEmojiPicker && (
                       <div className="absolute bottom-full right-0 mb-2 z-50 shadow-2xl animate-in slide-in-from-bottom-2 duration-200">
                         <div className="fixed inset-0" onClick={() => setShowEmojiPicker(false)}></div>
@@ -1360,31 +1539,69 @@ const Messages: React.FC = () => {
                   </button>
                 )}
               </form>
+
+              {/* Dynamic Opaque Keyboard Simulation Block to prevent texts going below/behind */}
+              <div 
+                style={{ 
+                  height: inputOffset > 0 ? `${inputOffset}px` : '0px',
+                  transition: isDraggingInput ? 'none' : 'height 0.2s cubic-bezier(0.4, 0, 0.2, 1)'
+                }} 
+                className="bg-gray-100 dark:bg-gray-950 w-full border-t border-gray-200 dark:border-gray-800 overflow-hidden relative"
+              >
+                {/* Beautiful Keyboard Simulation visual to look premium and authentic */}
+                <div className="absolute inset-0 p-4 flex flex-col justify-between opacity-30 select-none pointer-events-none">
+                  <div className="flex justify-between gap-1">
+                    {['Q','W','E','R','T','Y','U','I','O','P'].map(k => <span key={k} className="flex-1 text-center py-2 bg-white dark:bg-gray-800 rounded shadow-sm text-xs font-bold text-gray-700 dark:text-gray-300">{k}</span>)}
+                  </div>
+                  <div className="flex justify-between gap-1 px-3">
+                    {['A','S','D','F','G','H','J','K','L'].map(k => <span key={k} className="flex-1 text-center py-2 bg-white dark:bg-gray-800 rounded shadow-sm text-xs font-bold text-gray-700 dark:text-gray-300">{k}</span>)}
+                  </div>
+                  <div className="flex justify-between gap-1 px-8">
+                    {['Z','X','C','V','B','N','M'].map(k => <span key={k} className="flex-1 text-center py-2 bg-white dark:bg-gray-800 rounded shadow-sm text-xs font-bold text-gray-700 dark:text-gray-300">{k}</span>)}
+                  </div>
+                  <div className="flex justify-between gap-2 px-1">
+                    <span className="px-4 py-2 bg-white dark:bg-gray-800 rounded shadow-sm text-xs font-bold text-gray-700 dark:text-gray-300">123</span>
+                    <span className="flex-1 py-2 bg-white dark:bg-gray-800 rounded shadow-sm text-xs font-bold text-gray-700 dark:text-gray-300 text-center">space</span>
+                    <span className="px-4 py-2 bg-white dark:bg-gray-800 rounded shadow-sm text-xs font-bold text-gray-700 dark:text-gray-300">return</span>
+                  </div>
+                </div>
+              </div>
             </div>
             
             {activeViewOnceMedia && (
               <div className="fixed inset-0 z-50 bg-black/95 flex flex-col items-center justify-center p-4">
-                <button 
-                  onClick={closeViewOnce}
-                  className="absolute top-6 right-6 p-3 bg-white/10 hover:bg-white/20 rounded-full text-white transition-colors"
-                >
-                  <X size={24} />
-                </button>
-                <div className="max-w-4xl w-full max-h-[80vh] flex flex-col items-center justify-center relative">
-                   <div className="absolute top-4 left-4 bg-black/50 px-3 py-1.5 rounded-full text-white text-xs font-bold flex items-center gap-1.5 backdrop-blur-md">
-                     <Eye size={14} /> View Once Mode
-                   </div>
+                {/* Beautiful custom navbar for full-screen view */}
+                <div className="absolute top-0 left-0 right-0 h-16 bg-black/40 backdrop-blur-md px-6 flex items-center justify-between z-10 border-b border-white/5">
+                  <button 
+                    onClick={handleCloseViewOnce}
+                    className="flex items-center gap-2 text-white hover:text-blue-400 transition-colors bg-white/10 px-4 py-2 rounded-full font-bold text-sm"
+                  >
+                    <ArrowLeft size={18} />
+                    <span>Back</span>
+                  </button>
+                  <div className="bg-black/50 px-4 py-1.5 rounded-full text-white text-xs font-bold flex items-center gap-1.5 backdrop-blur-md select-none pointer-events-none">
+                    <Eye size={14} className="text-red-500 animate-pulse" /> <span>View Once Mode</span>
+                  </div>
+                  <button 
+                    onClick={handleCloseViewOnce}
+                    className="p-2 bg-white/10 hover:bg-red-500 rounded-full text-white transition-colors"
+                  >
+                    <X size={18} />
+                  </button>
+                </div>
+
+                <div className="max-w-4xl w-full max-h-[80vh] flex flex-col items-center justify-center relative mt-16">
                    {activeViewOnceMedia.media_type === 'image' ? (
-                     <img src={activeViewOnceMedia.media_url} className="max-w-full max-h-[80vh] object-contain rounded-xl shadow-2xl" />
+                     <img src={activeViewOnceMedia.media_url} className="max-w-full max-h-[70vh] object-contain rounded-xl shadow-2xl" />
                    ) : activeViewOnceMedia.media_type === 'audio' ? (
                      <div className="bg-white/10 p-8 rounded-3xl w-full max-w-md">
                         <CustomAudioPlayer src={activeViewOnceMedia.media_url} isSender={false} />
                      </div>
                    ) : (
-                     <VideoPlayer src={activeViewOnceMedia.media_url} className="max-w-full max-h-[80vh] rounded-xl shadow-2xl" />
+                     <VideoPlayer src={activeViewOnceMedia.media_url} className="max-w-full max-h-[70vh] rounded-xl shadow-2xl" />
                    )}
                 </div>
-                <p className="text-gray-400 mt-6 font-bold text-sm bg-white/5 px-4 py-2 rounded-full backdrop-blur-sm">This media will be destroyed when you close this window.</p>
+                <p className="text-gray-400 mt-6 font-bold text-xs bg-white/5 px-4 py-2 rounded-full backdrop-blur-sm select-none">This media will be destroyed when you close this window.</p>
               </div>
             )}
           </>

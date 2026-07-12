@@ -58,8 +58,14 @@ const Friends: React.FC = () => {
       
       // Sort client side to show new accounts first
       allProfTemp.sort((a, b) => {
-        const timeA = a.created_at ? new Date(a.created_at).getTime() : 0;
-        const timeB = b.created_at ? new Date(b.created_at).getTime() : 0;
+        let timeA = 0;
+        let timeB = 0;
+        if (a.created_at) {
+          timeA = typeof a.created_at.toDate === 'function' ? a.created_at.toDate().getTime() : new Date(a.created_at).getTime();
+        }
+        if (b.created_at) {
+          timeB = typeof b.created_at.toDate === 'function' ? b.created_at.toDate().getTime() : new Date(b.created_at).getTime();
+        }
         return timeB - timeA;
       });
 
@@ -341,10 +347,10 @@ const Friends: React.FC = () => {
                         <div className="col-span-full text-center py-20 text-gray-400 font-medium">No pending friend requests.</div>
                     ) : requests.map((r: any) => (
                     <div key={r.id} className="bg-white dark:bg-black border border-gray-100 dark:border-gray-800 rounded-2xl shadow-sm p-5 flex flex-col items-center transition-all hover:shadow-md">
-                        <img src={r.profiles.avatar_url} onClick={() => navigate(`/profile/${r.profiles.username}`)} className="w-24 h-24 rounded-full object-cover shadow-lg border-2 border-white dark:border-gray-700 mb-4 cursor-pointer" />
+                        <img src={r.profiles?.avatar_url || r.avatar_url} onClick={() => navigate(`/profile/${r.profiles?.username || r.username}`)} className="w-24 h-24 rounded-full object-cover shadow-lg border-2 border-white dark:border-gray-700 mb-4 cursor-pointer" />
                         <p className="font-bold text-gray-900 dark:text-white text-lg mb-4 flex items-center gap-1">
-                          {r.profiles.display_name}
-                          {r.profiles.is_verified && <VerifiedBadge />}
+                          {r.profiles?.display_name || r.display_name}
+                          {(r.profiles?.is_verified || r.is_verified) && <VerifiedBadge />}
                         </p>
                         <div className="flex gap-2 w-full">
                         <button onClick={() => handleStatus(r.friendship_id, 'accepted')} className="flex-1 bg-[#1877F2] text-white py-2.5 rounded-xl font-bold flex items-center justify-center gap-2 shadow-sm hover:bg-[#166fe5] transition-all"><Check size={18}/> Accept</button>

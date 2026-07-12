@@ -532,7 +532,9 @@ const App: React.FC = () => {
                  }
                }
 
-               if (localStorage.getItem('next_media_sound') === 'true') {
+               const isMuted = localStorage.getItem(`muted_${data.sender_id}`) === 'true';
+
+               if (localStorage.getItem('next_media_sound') === 'true' && !isMuted) {
                  try {
                    const AudioContext = window.AudioContext || (window as any).webkitAudioContext;
                    const ctx = new AudioContext();
@@ -549,10 +551,12 @@ const App: React.FC = () => {
                  } catch(e) { console.warn('Audio play blocked', e); }
                }
 
-               toast(`New message from ${sender?.display_name || 'Someone'}`, {
-                 description: messageContent,
-                 id: 'message-' + data.sender_id
-               });
+               if (!isMuted) {
+                 toast(`New message from ${sender?.display_name || 'Someone'}`, {
+                   description: messageContent,
+                   id: 'message-' + data.sender_id
+                 });
+               }
              }
           });
       });
