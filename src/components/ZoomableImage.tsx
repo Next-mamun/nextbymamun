@@ -35,9 +35,10 @@ const ZoomableImage: React.FC<ZoomableImageProps> = ({ src, alt, className, refe
       e.preventDefault();
       e.stopPropagation();
     }
-    setIsOpen(false);
     if (window.history.state?.zoomableOpen) {
       window.history.back();
+    } else {
+      setIsOpen(false);
     }
   };
 

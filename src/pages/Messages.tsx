@@ -149,6 +149,7 @@ const Messages: React.FC = () => {
   useEffect(() => {
     const handleMove = (e: any) => {
       if (!isDraggingInput) return;
+      if (e.cancelable) e.preventDefault();
       const clientY = e.touches ? e.touches[0].clientY : e.clientY;
       const deltaY = clientY - dragStartYRef.current;
       setInputOffset(Math.max(0, dragStartOffsetRef.current - deltaY));
@@ -186,9 +187,12 @@ const Messages: React.FC = () => {
         if ('vibrate' in navigator) navigator.vibrate(50);
         setSelectedMessages(prev => [...prev, id]);
       }
-    }, 500);
+    }, 1500);
   };
   const handleTouchEnd = () => {
+    if (longPressTimer.current) clearTimeout(longPressTimer.current);
+  };
+  const handleTouchMove = () => {
     if (longPressTimer.current) clearTimeout(longPressTimer.current);
   };
   const handleMessageClick = (id: string) => {
@@ -685,15 +689,12 @@ const Messages: React.FC = () => {
       });
       setShowMediaEditor(true);
     } else {
-      const reader = new FileReader();
-      reader.onload = (e) => {
-        setSelectedMedia({
-          url: e.target?.result as string,
-          type: 'image'
-        });
-        setShowMediaEditor(true);
-      };
-      reader.readAsDataURL(file);
+      setSelectedMedia({
+        file: file,
+        url: URL.createObjectURL(file),
+        type: 'image'
+      });
+      setShowMediaEditor(true);
     }
   };
 
@@ -714,6 +715,20 @@ const Messages: React.FC = () => {
     
     const uploadData = selectedMedia.type === 'video' && selectedMedia.file ? selectedMedia.file : processedUrl;
     
+    queryClient.setQueryData(['contacts'], (old: any) => {
+      if (!old) return old;
+      const newContacts = [...old];
+      const chatIdx = newContacts.findIndex((c: any) => c.id === selectedChat.id);
+      if (chatIdx > -1) {
+        const chat = newContacts[chatIdx];
+        chat.last_message = { ...newMessage, created_at: new Date() };
+        chat.last_message_time = new Date();
+        newContacts.splice(chatIdx, 1);
+        newContacts.unshift(chat);
+      }
+      return newContacts;
+    });
+
     addUpload(uploadData, 'message', {
       payload: newMessage,
       receiver_id: selectedChat.id,
@@ -846,6 +861,20 @@ const Messages: React.FC = () => {
       return [...(old || []), optimisticMsg];
     });
 
+    queryClient.setQueryData(['contacts'], (old: any) => {
+      if (!old) return old;
+      const newContacts = [...old];
+      const chatIdx = newContacts.findIndex((c: any) => c.id === selectedChat.id);
+      if (chatIdx > -1) {
+        const chat = newContacts[chatIdx];
+        chat.last_message = { ...newMessage, created_at: new Date() };
+        chat.last_message_time = new Date();
+        newContacts.splice(chatIdx, 1);
+        newContacts.unshift(chat);
+      }
+      return newContacts;
+    });
+
     addUpload(uploadData, 'message', {
         payload: newMessage,
         receiver_id: selectedChat.id,
@@ -880,7 +909,6 @@ const Messages: React.FC = () => {
           try { await redis.del(cacheKey); } catch (e) {}
         }
         queryClient.invalidateQueries({ queryKey: ['messages', selectedChat?.id] });
-        toast.success("Media destroyed successfully!");
     } catch(e) {
         console.error("Error deleting view-once message, attempting update fallback:", e);
         // Fallback: update content to Viewed and clear media_url
@@ -937,9 +965,10 @@ const Messages: React.FC = () => {
   }, [activeViewOnceMedia]);
 
   const handleCloseViewOnce = () => {
-    closeViewOnce();
     if (window.history.state?.viewOnceOpen) {
       window.history.back();
+    } else {
+      closeViewOnce();
     }
   };
 
@@ -1030,6 +1059,20 @@ const Messages: React.FC = () => {
         created_at: new Date().toISOString() // for UI only
       };
       return [...(old || []), optimisticMsg];
+    });
+
+    queryClient.setQueryData(['contacts'], (old: any) => {
+      if (!old) return old;
+      const newContacts = [...old];
+      const chatIdx = newContacts.findIndex((c: any) => c.id === selectedChat.id);
+      if (chatIdx > -1) {
+        const chat = newContacts[chatIdx];
+        chat.last_message = { ...newMessage, created_at: new Date() };
+        chat.last_message_time = new Date();
+        newContacts.splice(chatIdx, 1);
+        newContacts.unshift(chat);
+      }
+      return newContacts;
     });
 
     handleMessageTextChange('');
@@ -1187,7 +1230,7 @@ const Messages: React.FC = () => {
             />
           </div>
         </div>
-        <div id="inbox-list" className="flex-1 overflow-y-auto p-2 space-y-1 min-h-0">
+        <div id="inbox-list" className="flex-1 overflow-y-auto overscroll-none p-2 space-y-1 min-h-0">
           {loadingContacts && contacts.length === 0 ? (
             <div className="flex flex-col gap-2 px-2 pt-2">
               {[...Array(6)].map((_, i) => (
@@ -1334,7 +1377,7 @@ const Messages: React.FC = () => {
               )}
             </div>
             
-            <div id="chat-messages" onScroll={handleScroll} className="flex-1 p-3 md:p-6 overflow-y-auto bg-gray-50/30 dark:bg-gray-900/30 flex flex-col gap-3 min-h-0 transition-all duration-300 select-none" style={{ paddingBottom: '1.5rem' }}>
+            <div id="chat-messages" onScroll={handleScroll} className="flex-1 p-3 md:p-6 overflow-y-auto overscroll-none bg-gray-50/30 dark:bg-gray-900/30 flex flex-col gap-3 min-h-0 transition-all duration-300 select-none" style={{ paddingBottom: '1.5rem' }}>
               {isBlocked ? (
                 <div className="flex-1 flex flex-col items-center justify-center text-center p-8">
                   <div className="bg-red-100 dark:bg-red-900/20 p-6 rounded-full mb-4">
@@ -1375,6 +1418,7 @@ const Messages: React.FC = () => {
                       key={msg.id} 
                       onTouchStart={() => handleTouchStart(msg.id)}
                       onTouchEnd={handleTouchEnd}
+                      onTouchMove={handleTouchMove}
                       onMouseDown={() => handleTouchStart(msg.id)}
                       onMouseUp={handleTouchEnd}
                       onMouseLeave={handleTouchEnd}
@@ -1464,7 +1508,7 @@ const Messages: React.FC = () => {
             <div className="relative bg-white dark:bg-black border-t border-gray-100 dark:border-gray-800 shrink-0 z-30 select-none">
               {/* Always-visible drag handle */}
               <div 
-                className="h-6 flex items-center justify-center cursor-ns-resize hover:bg-gray-100 dark:hover:bg-gray-900 transition-all select-none group/handle border-b border-gray-100/50 dark:border-gray-800/50"
+                className="h-6 flex items-center justify-center cursor-ns-resize hover:bg-gray-100 dark:hover:bg-gray-900 transition-all select-none group/handle border-b border-gray-100/50 dark:border-gray-800/50 touch-none"
                 onMouseDown={handleInputDragStart}
                 onTouchStart={handleInputDragStart}
               >
@@ -1607,6 +1651,7 @@ const Messages: React.FC = () => {
             {activeViewOnceMedia && (
               <div 
                 className="fixed inset-0 z-[999] bg-black/95 flex flex-col items-center justify-center p-4 cursor-pointer select-none"
+                onContextMenu={(e) => e.preventDefault()}
                 onClick={handleCloseViewOnce}
               >
                 {/* Beautiful custom navbar for full-screen view */}

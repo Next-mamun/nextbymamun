@@ -245,7 +245,7 @@ export const UploadProvider: React.FC<{ children: React.ReactNode }> = ({ childr
             
             // Fallback to base64 if storage fails for images
             if (file instanceof File) {
-              if (file.size > 1024 * 1024 * 50) { // 50MB limit for base64 fallback
+              if (file.size > 1024 * 1024 * 500) { // 500MB limit for base64 fallback
                 throw new Error("File is too large for base64 fallback.");
               }
               mediaUrl = await new Promise<string>((resolve, reject) => {
