@@ -207,8 +207,12 @@ export const UploadProvider: React.FC<{ children: React.ReactNode }> = ({ childr
                 xhr.onload = () => {
                   if (xhr.status === 200) {
                     const response = JSON.parse(xhr.responseText);
-                    resolve(response.secure_url);
-                    console.log('Upload to Cloudinary successful:', response.secure_url);
+                    let finalUrl = response.secure_url;
+                    if (mediaType === 'video' && finalUrl.includes('/upload/')) {
+                      finalUrl = finalUrl.replace('/upload/', '/upload/q_auto,w_640,h_360,c_scale/');
+                    }
+                    resolve(finalUrl);
+                    console.log('Upload to Cloudinary successful:', finalUrl);
                   } else {
                     reject(new Error(`Cloudinary Upload Error: ${xhr.statusText} ${xhr.responseText}`));
                   }

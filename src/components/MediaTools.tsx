@@ -1,6 +1,6 @@
 
 import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { X, Camera, Video, RotateCcw, Check, Scissors, Type, Smile, Download, Crop, Eye, EyeOff } from 'lucide-react';
+import { X, Camera, Video, RotateCcw, Check, Scissors, Type, Smile, Download, Crop, Eye, EyeOff, PenTool } from 'lucide-react';
 import Draggable from 'react-draggable';
 import EmojiPicker, { Theme } from 'emoji-picker-react';
 import Cropper from 'react-easy-crop';
@@ -36,6 +36,9 @@ export const MediaEditor: React.FC<MediaEditorProps> = ({ mediaUrl, mediaType, o
   const [textSize, setTextSize] = useState(24);
   const [showTextInput, setShowTextInput] = useState(false);
   const [stickers, setStickers] = useState<{ id: string, emoji: string, x: number, y: number, size: number }[]>([]);
+  const [isDrawingMode, setIsDrawingMode] = useState(false);
+  const [paths, setPaths] = useState<{ color: string, points: { x: number, y: number }[] }[]>([]);
+  const [currentPath, setCurrentPath] = useState<{ x: number, y: number }[]>([]);
   const [textPosition, setTextPosition] = useState({ x: 50, y: 50 }); // percentages
   const [trimStart, setTrimStart] = useState(0);
   const [trimEnd, setTrimEnd] = useState(100);
@@ -134,33 +137,52 @@ export const MediaEditor: React.FC<MediaEditorProps> = ({ mediaUrl, mediaType, o
     setShowEmojiPicker(false);
   };
 
+  const handlePointerDown = (e: any) => {
+    if (!isDrawingMode) return;
+    const rect = e.currentTarget.getBoundingClientRect();
+    const x = (e.clientX || e.touches?.[0]?.clientX) - rect.left;
+    const y = (e.clientY || e.touches?.[0]?.clientY) - rect.top;
+    setCurrentPath([{ x: (x / rect.width) * 100, y: (y / rect.height) * 100 }]);
+  };
+
+  const handlePointerMove = (e: any) => {
+    if (!isDrawingMode || currentPath.length === 0) return;
+    const rect = e.currentTarget.getBoundingClientRect();
+    const x = (e.clientX || e.touches?.[0]?.clientX) - rect.left;
+    const y = (e.clientY || e.touches?.[0]?.clientY) - rect.top;
+    setCurrentPath([...currentPath, { x: (x / rect.width) * 100, y: (y / rect.height) * 100 }]);
+  };
+
+  const handlePointerUp = () => {
+    if (!isDrawingMode || currentPath.length === 0) return;
+    setPaths([...paths, { color: textColor, points: currentPath }]);
+    setCurrentPath([]);
+  };
+
   const processMedia = async () => {
     const canvas = canvasRef.current;
     if (!canvas) return;
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
 
-    const targetHeight = 360;
-    let targetWidth = 640;
-
     if (mediaType === 'image') {
       const img = new Image();
       img.src = currentMediaUrl;
       await new Promise((resolve) => (img.onload = resolve));
       
-      const aspectRatio = img.width / img.height;
-      targetWidth = Math.round(targetHeight * aspectRatio);
-      
+      const targetHeight = img.height;
+      const targetWidth = img.width;
+
       canvas.width = targetWidth;
       canvas.height = targetHeight;
       
       ctx.drawImage(img, 0, 0, targetWidth, targetHeight);
       
       if (text) {
-        ctx.font = `bold ${textSize}px Arial`;
+        ctx.font = `bold ${textSize * (targetHeight / 360)}px Arial`;
         ctx.fillStyle = textColor;
         ctx.strokeStyle = 'black';
-        ctx.lineWidth = 2;
+        ctx.lineWidth = 2 * (targetHeight / 360);
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
         ctx.strokeText(text, (textPosition.x / 100) * targetWidth, (textPosition.y / 100) * targetHeight);
@@ -168,13 +190,28 @@ export const MediaEditor: React.FC<MediaEditorProps> = ({ mediaUrl, mediaType, o
       }
 
       stickers.forEach(s => {
-        ctx.font = `${s.size || 40}px Arial`;
+        ctx.font = `${(s.size || 40) * (targetHeight / 360)}px Arial`;
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
         ctx.fillText(s.emoji, (s.x / 100) * targetWidth, (s.y / 100) * targetHeight);
       });
 
-      onSave(canvas.toDataURL('image/jpeg', 0.8), isViewOnce);
+      paths.forEach(p => {
+        ctx.beginPath();
+        ctx.strokeStyle = p.color;
+        ctx.lineWidth = 4 * (targetHeight / 360);
+        ctx.lineJoin = 'round';
+        ctx.lineCap = 'round';
+        p.points.forEach((pt, i) => {
+          const px = (pt.x / 100) * targetWidth;
+          const py = (pt.y / 100) * targetHeight;
+          if (i === 0) ctx.moveTo(px, py);
+          else ctx.lineTo(px, py);
+        });
+        ctx.stroke();
+      });
+
+      onSave(canvas.toDataURL('image/jpeg', 0.9), isViewOnce);
     } else {
       // Video processing logic remains similar but needs to account for positions if possible
       onSave(mediaUrl, isViewOnce); // Fallback for video simplicity
@@ -234,13 +271,48 @@ export const MediaEditor: React.FC<MediaEditorProps> = ({ mediaUrl, mediaType, o
         <button onClick={onCancel} className="p-2 bg-white/10 rounded-full text-white hover:bg-white/20"><X /></button>
       </div>
 
-      <div ref={containerRef} className="relative inline-block max-w-full max-h-[70vh] bg-black rounded-lg overflow-hidden shadow-2xl">
+      <div 
+        ref={containerRef} 
+        className="relative inline-block max-w-full max-h-[70vh] bg-black rounded-lg overflow-hidden shadow-2xl"
+        onMouseDown={handlePointerDown}
+        onMouseMove={handlePointerMove}
+        onMouseUp={handlePointerUp}
+        onMouseLeave={handlePointerUp}
+        onTouchStart={handlePointerDown}
+        onTouchMove={handlePointerMove}
+        onTouchEnd={handlePointerUp}
+      >
         {mediaType === 'image' ? (
           <img src={currentMediaUrl} className="max-w-full max-h-[70vh] object-contain block" />
         ) : (
           <video ref={videoRef} src={currentMediaUrl} className="max-w-full max-h-[70vh] block" />
         )}
         
+        {/* Drawing Canvas Overlay */}
+        <svg className={`absolute inset-0 w-full h-full pointer-events-none ${isDrawingMode ? '!pointer-events-auto cursor-crosshair' : ''}`}>
+          {paths.map((p, i) => (
+            <polyline 
+              key={i} 
+              points={p.points.map(pt => `${(pt.x / 100) * containerSize.width},${(pt.y / 100) * containerSize.height}`).join(' ')} 
+              fill="none" 
+              stroke={p.color} 
+              strokeWidth="4" 
+              strokeLinecap="round" 
+              strokeLinejoin="round" 
+            />
+          ))}
+          {currentPath.length > 0 && (
+            <polyline 
+              points={currentPath.map(pt => `${(pt.x / 100) * containerSize.width},${(pt.y / 100) * containerSize.height}`).join(' ')} 
+              fill="none" 
+              stroke={textColor} 
+              strokeWidth="4" 
+              strokeLinecap="round" 
+              strokeLinejoin="round" 
+            />
+          )}
+        </svg>
+
         {/* Draggable Overlays */}
         {text && containerSize.width > 0 && (
           <Draggable 
@@ -279,6 +351,12 @@ export const MediaEditor: React.FC<MediaEditorProps> = ({ mediaUrl, mediaType, o
             <button onClick={() => setIsCropping(true)} className="flex flex-col items-center gap-1 text-gray-600 dark:text-gray-300">
               <Crop size={24} />
               <span className="text-xs font-bold">Crop</span>
+            </button>
+          )}
+          {mediaType === 'image' && (
+            <button onClick={() => setIsDrawingMode(!isDrawingMode)} className={`flex flex-col items-center gap-1 ${isDrawingMode ? 'text-blue-500' : 'text-gray-600 dark:text-gray-300'}`}>
+              <PenTool size={24} />
+              <span className="text-xs font-bold">Draw</span>
             </button>
           )}
           <button onClick={() => setShowTextInput(!showTextInput)} className="flex flex-col items-center gap-1 text-gray-600 dark:text-gray-300">
@@ -330,29 +408,38 @@ export const MediaEditor: React.FC<MediaEditorProps> = ({ mediaUrl, mediaType, o
           </div>
         )}
 
-        {showTextInput && (
+        {(showTextInput || isDrawingMode) && (
           <div className="mb-4">
-            <input 
-              autoFocus
-              value={text}
-              onChange={(e) => setText(e.target.value)}
-              placeholder="Add text..."
-              className="w-full bg-gray-100 dark:bg-gray-800 rounded-xl px-4 py-2 mb-3 outline-none focus:ring-2 focus:ring-blue-500 text-gray-900 dark:text-white font-bold"
-            />
-            <div className="flex items-center justify-between mb-3">
-              <div className="flex items-center gap-2 flex-1">
-                <span className="text-xs text-gray-500 font-bold">Size</span>
+            {showTextInput && (
+              <>
                 <input 
-                  type="range" 
-                  min="12" 
-                  max="72" 
-                  value={textSize} 
-                  onChange={(e) => setTextSize(Number(e.target.value))} 
-                  className="flex-1"
+                  autoFocus
+                  value={text}
+                  onChange={(e) => setText(e.target.value)}
+                  placeholder="Add text..."
+                  className="w-full bg-gray-100 dark:bg-gray-800 rounded-xl px-4 py-2 mb-3 outline-none focus:ring-2 focus:ring-blue-500 text-gray-900 dark:text-white font-bold"
                 />
+                <div className="flex items-center justify-between mb-3">
+                  <div className="flex items-center gap-2 flex-1">
+                    <span className="text-xs text-gray-500 font-bold">Size</span>
+                    <input 
+                      type="range" 
+                      min="12" 
+                      max="72" 
+                      value={textSize} 
+                      onChange={(e) => setTextSize(Number(e.target.value))} 
+                      className="flex-1"
+                    />
+                  </div>
+                  <button onClick={() => setText('')} className="text-red-500 hover:text-red-700 font-bold text-xs uppercase ml-4">Clear Text</button>
+                </div>
+              </>
+            )}
+            {isDrawingMode && paths.length > 0 && (
+              <div className="flex justify-end mb-3">
+                <button onClick={() => setPaths([])} className="text-red-500 hover:text-red-700 font-bold text-xs uppercase">Clear Drawing</button>
               </div>
-              <button onClick={() => setText('')} className="text-red-500 hover:text-red-700 font-bold text-xs uppercase ml-4">Clear Text</button>
-            </div>
+            )}
             <div className="flex gap-2 justify-center">
               {['#ffffff', '#000000', '#ff0000', '#00ff00', '#0000ff', '#ffff00', '#ff00ff', '#00ffff'].map(color => (
                 <button
@@ -380,7 +467,7 @@ export const MediaEditor: React.FC<MediaEditorProps> = ({ mediaUrl, mediaType, o
           onClick={processMedia}
           className="w-full bg-[#1877F2] text-white py-3 rounded-xl font-bold flex items-center justify-center gap-2 hover:brightness-110 transition-all shadow-lg"
         >
-          <Check size={20} /> Apply & Save (360p)
+          <Check size={20} /> Save and Send
         </button>
       </div>
 

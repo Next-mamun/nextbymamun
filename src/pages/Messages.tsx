@@ -669,12 +669,15 @@ const Messages: React.FC = () => {
     const file = e.target.files?.[0];
     if (!file || !selectedChat) return;
 
-    if (!file.type.startsWith('image/') && !file.type.startsWith('video/')) {
+    const isImage = file.type.startsWith('image/') || file.name.match(/\.(jpg|jpeg|png|gif|webp|heic|heif)$/i);
+    const isVideo = file.type.startsWith('video/') || file.name.match(/\.(mp4|mov|webm|avi|mkv)$/i);
+
+    if (!isImage && !isVideo) {
       alert('Please select a valid image or video file.');
       return;
     }
 
-    if (file.type.startsWith('video/')) {
+    if (isVideo) {
       setSelectedMedia({
         file: file,
         url: URL.createObjectURL(file),
@@ -1312,8 +1315,7 @@ const Messages: React.FC = () => {
                     </button>
                     <button 
                       onClick={() => {
-                        queryClient.invalidateQueries({ queryKey: ['messages', selectedChat?.id] });
-                        queryClient.invalidateQueries({ queryKey: ['friendships', currentUser?.id] });
+                        scrollRef.current?.scrollIntoView({ behavior: 'auto' });
                       }}
                       className="p-2 rounded-full transition-all text-gray-400 hover:text-blue-500 hover:bg-blue-50 dark:hover:bg-blue-900/20"
                       title="Refresh Chat"
@@ -1332,7 +1334,7 @@ const Messages: React.FC = () => {
               )}
             </div>
             
-            <div id="chat-messages" onScroll={handleScroll} className="flex-1 p-3 md:p-6 overflow-y-auto bg-gray-50/30 dark:bg-gray-900/30 flex flex-col gap-3 min-h-0 transition-all duration-300" style={{ paddingBottom: '1.5rem' }}>
+            <div id="chat-messages" onScroll={handleScroll} className="flex-1 p-3 md:p-6 overflow-y-auto bg-gray-50/30 dark:bg-gray-900/30 flex flex-col gap-3 min-h-0 transition-all duration-300 select-none" style={{ paddingBottom: '1.5rem' }}>
               {isBlocked ? (
                 <div className="flex-1 flex flex-col items-center justify-center text-center p-8">
                   <div className="bg-red-100 dark:bg-red-900/20 p-6 rounded-full mb-4">
@@ -1597,25 +1599,8 @@ const Messages: React.FC = () => {
                   height: inputOffset > 0 ? `${inputOffset}px` : '0px',
                   transition: isDraggingInput ? 'none' : 'height 0.2s cubic-bezier(0.4, 0, 0.2, 1)'
                 }} 
-                className="bg-gray-100 dark:bg-gray-950 w-full border-t border-gray-200 dark:border-gray-800 overflow-hidden relative"
+                className="bg-white dark:bg-black w-full border-t border-gray-200 dark:border-gray-800 overflow-hidden relative"
               >
-                {/* Beautiful Keyboard Simulation visual to look premium and authentic */}
-                <div className="absolute inset-0 p-4 flex flex-col justify-between opacity-30 select-none pointer-events-none">
-                  <div className="flex justify-between gap-1">
-                    {['Q','W','E','R','T','Y','U','I','O','P'].map(k => <span key={k} className="flex-1 text-center py-2 bg-white dark:bg-gray-800 rounded shadow-sm text-xs font-bold text-gray-700 dark:text-gray-300">{k}</span>)}
-                  </div>
-                  <div className="flex justify-between gap-1 px-3">
-                    {['A','S','D','F','G','H','J','K','L'].map(k => <span key={k} className="flex-1 text-center py-2 bg-white dark:bg-gray-800 rounded shadow-sm text-xs font-bold text-gray-700 dark:text-gray-300">{k}</span>)}
-                  </div>
-                  <div className="flex justify-between gap-1 px-8">
-                    {['Z','X','C','V','B','N','M'].map(k => <span key={k} className="flex-1 text-center py-2 bg-white dark:bg-gray-800 rounded shadow-sm text-xs font-bold text-gray-700 dark:text-gray-300">{k}</span>)}
-                  </div>
-                  <div className="flex justify-between gap-2 px-1">
-                    <span className="px-4 py-2 bg-white dark:bg-gray-800 rounded shadow-sm text-xs font-bold text-gray-700 dark:text-gray-300">123</span>
-                    <span className="flex-1 py-2 bg-white dark:bg-gray-800 rounded shadow-sm text-xs font-bold text-gray-700 dark:text-gray-300 text-center">space</span>
-                    <span className="px-4 py-2 bg-white dark:bg-gray-800 rounded shadow-sm text-xs font-bold text-gray-700 dark:text-gray-300">return</span>
-                  </div>
-                </div>
               </div>
             </div>
             
