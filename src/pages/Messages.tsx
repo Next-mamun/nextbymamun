@@ -13,6 +13,8 @@ import { redis } from '@/lib/redis';
 // Firebase imports
 import { db } from '../lib/firebase';
 import { collection, query, where, getDocs, deleteDoc, doc, getDoc, updateDoc, setDoc, onSnapshot, orderBy, limit, addDoc, serverTimestamp, or, and, arrayUnion } from 'firebase/firestore';
+import { activeDB, switchDB, dualWriteMessage } from '@/lib/dbHelper';
+import { supabase } from '@/lib/supabase';
 
 import { MediaEditor } from '../components/MediaTools';
 import { useUpload } from '@/contexts/UploadContext';
@@ -187,7 +189,7 @@ const Messages: React.FC = () => {
         if ('vibrate' in navigator) navigator.vibrate(50);
         setSelectedMessages(prev => [...prev, id]);
       }
-    }, 1500);
+    }, 2500);
   };
   const handleTouchEnd = () => {
     if (longPressTimer.current) clearTimeout(longPressTimer.current);
@@ -554,23 +556,62 @@ const Messages: React.FC = () => {
       });
     };
 
-    const unsub1 = onSnapshot(q1, { includeMetadataChanges: true }, (snapshot) => {
-      messages1 = processSnapshot(snapshot);
-      handleMessagesUpdate();
-    }, (error) => {
-      console.error("onSnapshot messages q1 error:", error);
-    });
+    const fetchFromSupabase = async () => {
+      try {
+        console.log('Fetching messages from Supabase fallback...');
+        const { data: data1, error: err1 } = await supabase
+          .from('messages')
+          .select('*')
+          .eq('sender_id', currentUser.id)
+          .eq('receiver_id', selectedChat.id);
+          
+        const { data: data2, error: err2 } = await supabase
+          .from('messages')
+          .select('*')
+          .eq('sender_id', selectedChat.id)
+          .eq('receiver_id', currentUser.id);
 
-    const unsub2 = onSnapshot(q2, { includeMetadataChanges: true }, (snapshot) => {
-      messages2 = processSnapshot(snapshot);
-      handleMessagesUpdate();
-    }, (error) => {
-      console.error("onSnapshot messages q2 error:", error);
-    });
+        if (!err1 && !err2) {
+          messages1 = data1 || [];
+          messages2 = data2 || [];
+          handleMessagesUpdate();
+        } else {
+          switchDB('supabase'); // If Supabase also fails, fall back to Firebase
+        }
+      } catch (e) {
+        console.error('Supabase fallback failed', e);
+        switchDB('supabase'); // If Supabase also fails, fall back to Firebase
+      }
+    };
+
+    let unsub1: any;
+    let unsub2: any;
+
+    if (activeDB === 'firebase') {
+      unsub1 = onSnapshot(q1, { includeMetadataChanges: true }, (snapshot) => {
+        messages1 = processSnapshot(snapshot);
+        handleMessagesUpdate();
+      }, (error) => {
+        console.error("onSnapshot messages q1 error:", error);
+        switchDB('firebase');
+        fetchFromSupabase();
+      });
+
+      unsub2 = onSnapshot(q2, { includeMetadataChanges: true }, (snapshot) => {
+        messages2 = processSnapshot(snapshot);
+        handleMessagesUpdate();
+      }, (error) => {
+        console.error("onSnapshot messages q2 error:", error);
+        switchDB('firebase');
+        fetchFromSupabase();
+      });
+    } else {
+      fetchFromSupabase();
+    }
 
     return () => {
-      unsub1();
-      unsub2();
+      if (unsub1) unsub1();
+      if (unsub2) unsub2();
     };
   }, [selectedChat?.id, currentUser?.id]);
 
@@ -671,10 +712,11 @@ const Messages: React.FC = () => {
 
   const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
+    e.target.value = '';
     if (!file || !selectedChat) return;
 
-    const isImage = file.type.startsWith('image/') || file.name.match(/\.(jpg|jpeg|png|gif|webp|heic|heif)$/i);
-    const isVideo = file.type.startsWith('video/') || file.name.match(/\.(mp4|mov|webm|avi|mkv)$/i);
+    const isImage = file.type?.startsWith('image/') || (file.name && file.name.match(/\.(jpg|jpeg|png|gif|webp|heic|heif)$/i));
+    const isVideo = file.type?.startsWith('video/') || (file.name && file.name.match(/\.(mp4|mov|webm|avi|mkv)$/i));
 
     if (!isImage && !isVideo) {
       alert('Please select a valid image or video file.');
@@ -950,12 +992,24 @@ const Messages: React.FC = () => {
   };
 
   // Intercept browser back button for activeViewOnceMedia
+  const activeViewOnceMediaRef = useRef(activeViewOnceMedia);
+  useEffect(() => {
+    activeViewOnceMediaRef.current = activeViewOnceMedia;
+  }, [activeViewOnceMedia]);
+
   useEffect(() => {
     if (!activeViewOnceMedia) return;
-    window.history.pushState({ viewOnceOpen: true }, '');
+    if (!window.history.state?.viewOnceOpen) {
+      window.history.pushState({ ...window.history.state, viewOnceOpen: true }, '');
+    }
     const handlePopState = (e: PopStateEvent) => {
       if (!e.state || !e.state.viewOnceOpen) {
-        closeViewOnce();
+        if (activeViewOnceMediaRef.current) {
+           setActiveViewOnceMedia(null);
+           if (activeViewOnceMediaRef.current.id) {
+               deleteDoc(doc(db, 'messages', activeViewOnceMediaRef.current.id)).catch(console.error);
+           }
+        }
       }
     };
     window.addEventListener('popstate', handlePopState);
@@ -1080,7 +1134,7 @@ const Messages: React.FC = () => {
     setShowEmojiPicker(false);
     
     try {
-      await addDoc(collection(db, 'messages'), newMessage);
+      await dualWriteMessage(newMessage);
       
       // Trigger Push Notification
       try {

@@ -9,6 +9,8 @@ import EmbedPlayer from '@/components/EmbedPlayer';
 import { useAuth, useTheme } from '@/contexts/AuthContext';
 import { db } from '../lib/firebase';
 import { collection, query, where, orderBy, limit, getDocs, doc, getDoc, updateDoc, startAfter, onSnapshot } from 'firebase/firestore';
+import { supabase } from '@/lib/supabase';
+import { activeDB, switchDB } from '@/lib/dbHelper';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { useQuery, useInfiniteQuery, useQueryClient } from '@tanstack/react-query';
 import { CameraCapture, MediaEditor } from '@/components/MediaTools';
@@ -192,10 +194,72 @@ const Feed: React.FC = () => {
          q = query(q, startAfter(pageParam));
       }
 
-      const snapshot = await getDocs(q);
-      const lastVisible = snapshot.docs[snapshot.docs.length - 1];
+      let docs = [];
+      let lastVisible = null;
 
-      let populatedPosts = await Promise.all(snapshot.docs.map(getPopulatedPost));
+      const fetchFromFirebase = async () => {
+         const snapshot = await getDocs(q);
+         docs = snapshot.docs;
+         lastVisible = snapshot.docs[snapshot.docs.length - 1];
+      };
+
+      const fetchFromSupabase = async () => {
+         let supaQuery = supabase.from('posts').select('*').order('created_at', { ascending: false }).limit(POSTS_PER_PAGE);
+        
+         if (selectedCategory !== 'All') {
+           supaQuery = supaQuery.eq('category', selectedCategory);
+         }
+        
+         if (contentTypeFilter !== 'All') {
+           const type = contentTypeFilter === 'Video' ? 'video' : contentTypeFilter.toLowerCase();
+           supaQuery = supaQuery.eq('media_type', type);
+         }
+        
+         // Basic pagination for Supabase using pageParam if it's an object with created_at
+         if (pageParam) {
+            const pageData = typeof pageParam.data === 'function' ? pageParam.data() : pageParam;
+            if (pageData && pageData.created_at) {
+               const dateVal = typeof pageData.created_at === 'string' ? pageData.created_at : 
+                 (pageData.created_at.toDate ? pageData.created_at.toDate().toISOString() : new Date().toISOString());
+               supaQuery = supaQuery.lt('created_at', dateVal);
+            }
+         }
+        
+         const { data: supaData, error: supaErr } = await supaQuery;
+         if (supaErr) throw supaErr;
+         if (supaData) {
+            docs = supaData.map((d: any) => ({
+              id: d.id,
+              data: () => d,
+              ...d
+            }));
+            lastVisible = docs.length > 0 ? docs[docs.length - 1] : null;
+         }
+      };
+
+      try {
+        if (activeDB === 'firebase') {
+          try {
+            await fetchFromFirebase();
+          } catch (err) {
+            console.warn("Firebase fetch failed, switching to Supabase:", err);
+            switchDB('firebase');
+            await fetchFromSupabase();
+          }
+        } else {
+          try {
+            await fetchFromSupabase();
+          } catch (err) {
+            console.warn("Supabase fetch failed, switching to Firebase:", err);
+            switchDB('supabase');
+            await fetchFromFirebase();
+          }
+        }
+      } catch (err) {
+        console.error("Both databases failed.", err);
+      }
+
+      let populatedPosts = await Promise.all(docs.map(getPopulatedPost));
       
       // If we are on the first page and results are low, try fetching from 'reels' collection as well
       if (!pageParam && populatedPosts.length < POSTS_PER_PAGE && selectedCategory === 'All' && contentTypeFilter !== 'Text') {

@@ -4,6 +4,8 @@ import { Camera, Edit2, Plus, Save, X, MessageCircle, UserPlus, Check, Users, Re
 import { useAuth } from '@/contexts/AuthContext';
 import { db, OperationType, handleFirestoreError } from '../lib/firebase';
 import { doc, getDoc, updateDoc, collection, query, where, getDocs, addDoc, deleteDoc, orderBy } from 'firebase/firestore';
+import { supabase } from '@/lib/supabase';
+import { activeDB, switchDB } from '@/lib/dbHelper';
 import { VerifiedBadge } from '@/components/VerifiedBadge';
 import ZoomableImage from '@/components/ZoomableImage';
 import { Link } from 'react-router-dom';
@@ -85,9 +87,52 @@ const Profile: React.FC = () => {
     queryFn: async () => {
       if (!profile?.id) return [];
       const q = query(collection(db, 'posts'), where('user_id', '==', profile.id), orderBy('created_at', 'desc'));
-      const snapshot = await getDocs(q);
+      let docs = [];
       
-      return await Promise.all(snapshot.docs.map(async d => {
+      const fetchFromFirebase = async () => {
+         const snapshot = await getDocs(q);
+         docs = snapshot.docs;
+      };
+      
+      const fetchFromSupabase = async () => {
+        const { data: supaData, error: supaErr } = await supabase
+          .from('posts')
+          .select('*')
+          .eq('user_id', profile.id)
+          .order('created_at', { ascending: false });
+        
+        if (supaErr) throw supaErr;
+        if (supaData) {
+          docs = supaData.map((d: any) => ({
+            id: d.id,
+            data: () => d
+          }));
+        }
+      };
+
+      try {
+        if (activeDB === 'firebase') {
+          try {
+            await fetchFromFirebase();
+          } catch (err) {
+            console.warn("Firebase fetch failed, falling back to Supabase:", err);
+            switchDB('firebase');
+            await fetchFromSupabase();
+          }
+        } else {
+          try {
+            await fetchFromSupabase();
+          } catch (err) {
+            console.warn("Supabase fetch failed, falling back to Firebase:", err);
+            switchDB('supabase');
+            await fetchFromFirebase();
+          }
+        }
+      } catch (err) {
+        console.error("Both databases failed.", err);
+      }
+      
+      return await Promise.all(docs.map(async (d: any) => {
         const postData = d.data();
         const profiles = profile; // We already have the profile
         

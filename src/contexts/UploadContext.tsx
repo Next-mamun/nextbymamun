@@ -1,6 +1,7 @@
 import React, { createContext, useContext, useState, useCallback, useEffect, useRef } from 'react';
 import { db, storage, auth } from '../lib/firebase';
 import { collection, addDoc, updateDoc, doc, serverTimestamp } from 'firebase/firestore';
+import { dualWritePost, dualWriteMessage } from '@/lib/dbHelper';
 import { ref, uploadBytesResumable, getDownloadURL } from 'firebase/storage';
 import Draggable from 'react-draggable';
 import { Pause, Play, X, RefreshCw } from 'lucide-react';
@@ -8,6 +9,7 @@ import * as idb from 'idb-keyval';
 import * as tus from 'tus-js-client';
 import { invalidatePostsCache, redis } from '@/lib/redis';
 import { triggerNotification } from '@/services/notificationService';
+import { toast } from 'sonner';
 
 import imageCompression from 'browser-image-compression';
 
@@ -171,10 +173,6 @@ export const UploadProvider: React.FC<{ children: React.ReactNode }> = ({ childr
               setUploads(prev => prev.map(x => x.id === id ? { ...x, progress: 100 } : x));
 
             } else {
-              console.log(`Uploading ${mediaType} to Cloudinary...`);
-              setUploads(prev => prev.map(x => x.id === id ? { ...x, status: 'uploading', progress: 0 } : x));
-              clearInterval(interval);
-
               if (isImage) {
                 try {
                   const options = {
@@ -188,50 +186,110 @@ export const UploadProvider: React.FC<{ children: React.ReactNode }> = ({ childr
                 }
               }
 
-              const formData = new FormData();
-              formData.append('file', fileBody);
-              formData.append('upload_preset', 'next_app_uploads'); // User-provided upload preset
+              try {
+                console.log(`Uploading ${mediaType} to Cloudinary...`);
+                setUploads(prev => prev.map(x => x.id === id ? { ...x, status: 'uploading', progress: 0 } : x));
+                clearInterval(interval);
 
-              mediaUrl = await new Promise((resolve, reject) => {
-                const xhr = new XMLHttpRequest();
-                const cloudName = 'dcwe6ln0h'; // User-provided cloud name
-                xhr.open('POST', `https://api.cloudinary.com/v1_1/${cloudName}/auto/upload`);
-                
-                xhr.upload.onprogress = (e) => {
-                  if (e.lengthComputable) {
-                    const percentage = (e.loaded / e.total) * 100;
-                    setUploads(prev => prev.map(x => x.id === id ? { ...x, progress: percentage } : x));
-                  }
-                };
+                const formData = new FormData();
+                formData.append('file', fileBody);
+                formData.append('upload_preset', 'next_app_uploads'); // User-provided upload preset
 
-                xhr.onload = () => {
-                  if (xhr.status === 200) {
-                    const response = JSON.parse(xhr.responseText);
-                    let finalUrl = response.secure_url;
-                    if (mediaType === 'video' && finalUrl.includes('/upload/')) {
-                      finalUrl = finalUrl.replace('/upload/', '/upload/q_auto,w_640,h_360,c_scale/');
+                mediaUrl = await new Promise((resolve, reject) => {
+                  const xhr = new XMLHttpRequest();
+                  const cloudName = 'dcwe6ln0h'; // User-provided cloud name
+                  xhr.open('POST', `https://api.cloudinary.com/v1_1/${cloudName}/auto/upload`);
+                  
+                  xhr.upload.onprogress = (e) => {
+                    if (e.lengthComputable) {
+                      const percentage = (e.loaded / e.total) * 100;
+                      setUploads(prev => prev.map(x => x.id === id ? { ...x, progress: percentage } : x));
                     }
-                    resolve(finalUrl);
-                    console.log('Upload to Cloudinary successful:', finalUrl);
-                  } else {
-                    reject(new Error(`Cloudinary Upload Error: ${xhr.statusText} ${xhr.responseText}`));
+                  };
+
+                  xhr.onload = () => {
+                    if (xhr.status === 200) {
+                      const response = JSON.parse(xhr.responseText);
+                      let finalUrl = response.secure_url;
+                      if (mediaType === 'video' && finalUrl.includes('/upload/')) {
+                        finalUrl = finalUrl.replace('/upload/', '/upload/q_auto,w_640,h_360,c_scale/');
+                      }
+                      resolve(finalUrl);
+                      console.log('Upload to Cloudinary successful:', finalUrl);
+                    } else {
+                      reject(new Error(`Cloudinary Upload Error: ${xhr.statusText} ${xhr.responseText}`));
+                    }
+                  };
+
+                  xhr.onerror = () => reject(new Error('Cloudinary Upload failed due to network error.'));
+                  
+                  if (controller.signal.aborted) {
+                    xhr.abort();
+                    return reject(new Error('Aborted'));
                   }
-                };
 
-                xhr.onerror = () => reject(new Error('Cloudinary Upload failed due to network error.'));
-                
-                if (controller.signal.aborted) {
-                  xhr.abort();
-                  return reject(new Error('Aborted'));
-                }
+                  controller.signal.addEventListener('abort', () => {
+                    xhr.abort();
+                    reject(new Error('Aborted'));
+                  });
 
-                controller.signal.addEventListener('abort', () => {
-                  xhr.abort();
-                  reject(new Error('Aborted'));
+                  xhr.send(formData);
                 });
+              } catch (cloudinaryError: any) {
+                console.warn('Cloudinary upload failed, attempting Firebase Storage fallback...', cloudinaryError);
+                
+                // Let's check if the abort signal has already been called
+                if (controller.signal.aborted) throw new Error('Aborted');
 
-                xhr.send(formData);
-              });
+                // Inform the user of fallback
+                toast.loading('Cloudinary limit/quota reached. Automatically uploading via Firebase Storage...', { id: `fallback-${id}` });
+
+                setUploads(prev => prev.map(x => x.id === id ? { ...x, status: 'uploading', progress: 0 } : x));
+                
+                let fileExt = 'jpeg';
+                if (file instanceof File) {
+                  fileExt = file.name.split('.').pop() || 'jpeg';
+                } else if (fileBody instanceof File) {
+                  fileExt = fileBody.name.split('.').pop() || 'jpeg';
+                } else if (mediaType === 'video') {
+                  fileExt = 'mp4';
+                } else if (mediaType === 'audio') {
+                  fileExt = 'mp3';
+                }
+                
+                const fileName = `${Date.now()}_${Math.random().toString(36).substring(7)}.${fileExt}`;
+                const userId = metadata?.userId || auth.currentUser?.uid || 'anonymous';
+                const filePath = `uploads/${userId}/${type}/${fileName}`;
+                
+                const storageRef = ref(storage, filePath);
+                const uploadTask = uploadBytesResumable(storageRef, fileBody);
+                uploadTasks.current[id] = uploadTask;
+
+                mediaUrl = await new Promise((resolve, reject) => {
+                  uploadTask.on('state_changed', 
+                    (snapshot) => {
+                      const progress = (snapshot.bytesTransferred / snapshot.totalBytes) * 100;
+                      setUploads(prev => prev.map(x => x.id === id ? { ...x, progress } : x));
+                    }, 
+                    (error) => {
+                      reject(error);
+                    }, 
+                    async () => {
+                      const downloadURL = await getDownloadURL(uploadTask.snapshot.ref);
+                      resolve(downloadURL);
+                    }
+                  );
+                  
+                  controller.signal.addEventListener('abort', () => {
+                    uploadTask.cancel();
+                    reject(new Error('Aborted'));
+                  });
+                });
+                
+                console.log('Firebase Storage fallback successful:', mediaUrl);
+                toast.dismiss(`fallback-${id}`);
+                toast.success('Media successfully sent!');
+              }
             }
             
           } catch (storageError: any) {
@@ -294,7 +352,7 @@ export const UploadProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         }
 
         postData.created_at = serverTimestamp();
-        const postDoc = await addDoc(collection(db, 'posts'), postData);
+        const postDoc = await dualWritePost(postData);
         await invalidatePostsCache();
       } else if (type === 'story') {
         await addDoc(collection(db, 'stories'), {
@@ -315,11 +373,11 @@ export const UploadProvider: React.FC<{ children: React.ReactNode }> = ({ childr
           youtube_id: metadata.payload.youtube_id || null,
           views: 0
         };
-        await addDoc(collection(db, 'posts'), payload);
+        await dualWritePost(payload);
       } else if (type === 'message') {
         const payload = { ...metadata.payload, created_at: serverTimestamp() };
         if (mediaUrl) payload.media_url = mediaUrl;
-        await addDoc(collection(db, 'messages'), payload);
+        await dualWriteMessage(payload);
         
         // Trigger Push Notification
         try {
@@ -375,7 +433,7 @@ export const UploadProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       } else {
         console.error('Upload failed:', error);
         const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-        alert(`Upload Failed: ${errorMessage}`);
+        toast.error(`Upload Failed: ${errorMessage}`);
         setUploads(prev => prev.map(u => u.id === id ? { ...u, status: 'error' } : u));
       }
     }

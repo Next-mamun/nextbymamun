@@ -5,8 +5,6 @@ import { createServer as createViteServer } from 'vite';
 import admin from 'firebase-admin';
 import fs from 'fs';
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
 
 async function startServer() {
   const app = express();

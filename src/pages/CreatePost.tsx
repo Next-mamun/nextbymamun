@@ -3,6 +3,7 @@ import { UploadCloud, X, RefreshCw, Link as LinkIcon, Clapperboard, Image } from
 import { useDropzone } from 'react-dropzone';
 import { db } from '../lib/firebase';
 import { collection, addDoc } from 'firebase/firestore';
+import { dualWritePost } from '@/lib/dbHelper';
 import { useAuth } from '@/contexts/AuthContext';
 import { useNavigate } from 'react-router-dom';
 import { useUpload } from '@/contexts/UploadContext';
@@ -160,7 +161,7 @@ const CreatePost = () => {
       });
     } else {
       try {
-        await addDoc(collection(db, 'posts'), { ...postData, created_at: new Date().toISOString() });
+        await dualWritePost({ ...postData, created_at: new Date().toISOString() });
         await invalidatePostsCache();
         navigate('/');
       } catch (error: any) {
