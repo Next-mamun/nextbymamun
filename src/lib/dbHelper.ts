@@ -18,20 +18,33 @@ export const dualWritePost = async (postData: any) => {
   // 2. Write to Supabase (Backup)
   try {
     const supabaseData = { ...postData };
-    // Supabase handles timestamp differently or we can pass string
     if (supabaseData.created_at && typeof supabaseData.created_at !== 'string' && supabaseData.created_at.toDate) {
        supabaseData.created_at = supabaseData.created_at.toDate().toISOString();
     } else if (!supabaseData.created_at || supabaseData.created_at?.isEqual) {
        supabaseData.created_at = new Date().toISOString();
     }
+
+    // Ensure user_id or userId mapping
+    if (!supabaseData.user_id && supabaseData.userId) {
+      supabaseData.user_id = supabaseData.userId;
+    }
     
-    // Convert array/objects to JSON or let Supabase handle if column is JSONB
-    const { error } = await supabase.from('posts').insert({
-      id: postRef.id,
+    // Attempt insert with firebase id
+    const payload: any = {
+      firebase_id: postRef.id,
       ...supabaseData
-    });
+    };
+
+    // If id is present and valid string, include it
+    if (postRef.id && postRef.id.length === 36) {
+      payload.id = postRef.id;
+    }
+
+    const { error } = await supabase.from('posts').insert(payload);
     if (error) {
-      console.error('Supabase dual-write error (posts):', error);
+      console.error('Supabase dual-write error (posts):', error.message || error);
+    } else {
+      console.log('Successfully written to Supabase posts!');
     }
   } catch (error) {
     console.error('Supabase dual-write catch (posts):', error);
@@ -52,15 +65,24 @@ export const dualWriteMessage = async (messageData: any) => {
        supabaseData.created_at = new Date().toISOString();
     }
 
-    const { error } = await supabase.from('messages').insert({
-      id: msgRef.id,
+    const payload: any = {
+      firebase_id: msgRef.id,
       ...supabaseData
-    });
+    };
+
+    if (msgRef.id && msgRef.id.length === 36) {
+      payload.id = msgRef.id;
+    }
+
+    const { error } = await supabase.from('messages').insert(payload);
     if (error) {
-      console.error('Supabase dual-write error (messages):', error);
+      console.error('Supabase dual-write error (messages):', error.message || error);
+    } else {
+      console.log('Successfully written to Supabase messages!');
     }
   } catch (error) {
     console.error('Supabase dual-write catch (messages):', error);
   }
   return msgRef;
 };
+
