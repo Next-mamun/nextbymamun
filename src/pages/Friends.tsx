@@ -16,11 +16,21 @@ const Friends: React.FC = () => {
   const [searchQuery, setSearchQuery] = useState('');
   const [activeTab, setActiveTab] = useState<'friends' | 'requests' | 'discover' | 'blocked'>('discover');
 
+  const [localPendingRequests, setLocalPendingRequests] = useState<Record<string, boolean>>({});
+  const [localCancelledRequests, setLocalCancelledRequests] = useState<Record<string, boolean>>({});
+  const [localAcceptedRequests, setLocalAcceptedRequests] = useState<Record<string, boolean>>({});
+  const [localDeletedRequests, setLocalDeletedRequests] = useState<Record<string, boolean>>({});
+
   useEffect(() => {
     if (!currentUser) return;
 
+    let isFirst = true;
     const q = query(collection(db, 'friendships'), or(where('sender_id', '==', currentUser.id), where('receiver_id', '==', currentUser.id)));
     const unsub = onSnapshot(q, () => {
+      if (isFirst) {
+        isFirst = false;
+        return;
+      }
       queryClient.invalidateQueries({ queryKey: ['friends'] });
     }, (error) => {
       console.warn("friendships onSnapshot error:", error);
@@ -173,8 +183,39 @@ const Friends: React.FC = () => {
 
   const { requests = [], friends = [], discovery = [], blockedUsers = [] } = friendsData || {};
 
+  const displayedRequests = requests.filter((r: any) => !localAcceptedRequests[r.friendship_id] && !localDeletedRequests[r.friendship_id]);
+  
+  const acceptedFriends = requests
+    .filter((r: any) => localAcceptedRequests[r.friendship_id])
+    .map((r: any) => ({
+      id: r.id,
+      display_name: r.profiles?.display_name || r.display_name,
+      username: r.profiles?.username || r.username,
+      avatar_url: r.profiles?.avatar_url || r.avatar_url,
+      is_verified: r.profiles?.is_verified || r.is_verified,
+      friendship_id: r.friendship_id
+    }));
+  
+  const displayedFriends = [...friends, ...acceptedFriends].filter((f: any) => !localDeletedRequests[f.friendship_id]);
+
+  const displayedDiscovery = discovery
+    .map((p: any) => {
+      let isPending = p.is_pending;
+      if (localPendingRequests[p.id]) isPending = true;
+      if (localCancelledRequests[p.id]) isPending = false;
+      return { ...p, is_pending: isPending };
+    })
+    .filter((p: any) => !localDeletedRequests[p.friendship_id || p.id]);
+
   const handleStatus = async (id: string, status: 'accepted' | 'delete' | 'blocked') => {
-    // Optimistic Update
+    // Local state optimistic update for instant rendering
+    if (status === 'accepted') {
+      setLocalAcceptedRequests(prev => ({ ...prev, [id]: true }));
+    } else if (status === 'delete') {
+      setLocalDeletedRequests(prev => ({ ...prev, [id]: true }));
+    }
+
+    // Query Client optimistic Update as backup
     const previousData = queryClient.getQueryData(['friends', searchQuery]);
     queryClient.setQueryData(['friends', searchQuery], (old: any) => {
       if (!old) return old;
@@ -229,13 +270,22 @@ const Friends: React.FC = () => {
       }
     } catch (err) {
       console.error("Error updating status:", err);
+      // Revert states
+      if (status === 'accepted') {
+        setLocalAcceptedRequests(prev => ({ ...prev, [id]: false }));
+      } else if (status === 'delete') {
+        setLocalDeletedRequests(prev => ({ ...prev, [id]: false }));
+      }
       queryClient.setQueryData(['friends', searchQuery], previousData);
     }
-    queryClient.invalidateQueries({ queryKey: ['friends'] });
   };
 
   const sendRequest = async (targetId: string) => {
-    // Optimistic Update
+    // Local state optimistic update for instant rendering
+    setLocalPendingRequests(prev => ({ ...prev, [targetId]: true }));
+    setLocalCancelledRequests(prev => ({ ...prev, [targetId]: false }));
+
+    // Query Client optimistic Update as backup
     const previousData = queryClient.getQueryData(['friends', searchQuery]);
     queryClient.setQueryData(['friends', searchQuery], (old: any) => {
       if (!old) return old;
@@ -267,16 +317,37 @@ const Friends: React.FC = () => {
       queryClient.invalidateQueries({ queryKey: ['notifications', targetId] });
     } catch (err) {
       console.error("Error sending request:", err);
+      // Revert states
+      setLocalPendingRequests(prev => ({ ...prev, [targetId]: false }));
       queryClient.setQueryData(['friends', searchQuery], previousData);
     }
-    queryClient.invalidateQueries({ queryKey: ['friends'] });
   };
 
   const cancelRequest = async (friendshipId: string) => {
+    // Local state optimistic update for instant rendering
+    // Find the profile ID from discovery or requests
+    const targetInDiscovery = discovery.find((u: any) => u.friendship_id === friendshipId);
+    if (targetInDiscovery) {
+      setLocalPendingRequests(prev => ({ ...prev, [targetInDiscovery.id]: false }));
+      setLocalCancelledRequests(prev => ({ ...prev, [targetInDiscovery.id]: true }));
+    }
+
+    queryClient.setQueryData(['friends', searchQuery], (old: any) => {
+      if (!old) return old;
+      return {
+        ...old,
+        discovery: old.discovery.map((u: any) => u.friendship_id === friendshipId ? { ...u, is_pending: false, friendship_id: null } : u),
+        requests: old.requests.filter((u: any) => u.friendship_id !== friendshipId)
+      };
+    });
     try {
         await deleteDoc(doc(db, 'friendships', friendshipId));
-        queryClient.invalidateQueries({ queryKey: ['friends'] });
-    } catch(e) {}
+    } catch(e) {
+      if (targetInDiscovery) {
+        setLocalPendingRequests(prev => ({ ...prev, [targetInDiscovery.id]: true }));
+        setLocalCancelledRequests(prev => ({ ...prev, [targetInDiscovery.id]: false }));
+      }
+    }
   };
 
   const blockUser = async (targetId: string, friendshipId?: string) => {
@@ -286,14 +357,14 @@ const Friends: React.FC = () => {
         } else {
             await addDoc(collection(db, 'friendships'), { sender_id: currentUser?.id, receiver_id: targetId, status: 'blocked' });
         }
-        queryClient.invalidateQueries({ queryKey: ['friends'] });
+        // invalidated by onSnapshot
     } catch(e) {}
   };
 
   const unblockUser = async (friendshipId: string) => {
       try {
           await deleteDoc(doc(db, 'friendships', friendshipId));
-          queryClient.invalidateQueries({ queryKey: ['friends'] });
+          // invalidated by onSnapshot
       } catch(e) {}
   }
 
@@ -320,10 +391,10 @@ const Friends: React.FC = () => {
             Discover
         </button>
         <button onClick={() => setActiveTab('friends')} className={`px-6 py-2 rounded-full font-bold whitespace-nowrap transition-all ${activeTab === 'friends' ? 'bg-[#1877F2] text-white shadow-md' : 'bg-white dark:bg-black text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-900 border border-gray-200 dark:border-gray-800'}`}>
-            My Friends <span className="ml-1 opacity-80 text-xs bg-white/20 px-1.5 py-0.5 rounded-full">{friends.length}</span>
+            My Friends <span className="ml-1 opacity-80 text-xs bg-white/20 px-1.5 py-0.5 rounded-full">{displayedFriends.length}</span>
         </button>
         <button onClick={() => setActiveTab('requests')} className={`px-6 py-2 rounded-full font-bold whitespace-nowrap transition-all ${activeTab === 'requests' ? 'bg-[#1877F2] text-white shadow-md' : 'bg-white dark:bg-black text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-900 border border-gray-200 dark:border-gray-800'}`}>
-            Requests <span className={`ml-1 text-xs px-1.5 py-0.5 rounded-full ${requests.length > 0 ? 'bg-red-500 text-white' : 'bg-gray-200 dark:bg-gray-800 text-gray-600 dark:text-gray-400'}`}>{requests.length}</span>
+            Requests <span className={`ml-1 text-xs px-1.5 py-0.5 rounded-full ${displayedRequests.length > 0 ? 'bg-red-500 text-white' : 'bg-gray-200 dark:bg-gray-800 text-gray-600 dark:text-gray-400'}`}>{displayedRequests.length}</span>
         </button>
         <button onClick={() => setActiveTab('blocked')} className={`px-6 py-2 rounded-full font-bold whitespace-nowrap transition-all ${activeTab === 'blocked' ? 'bg-[#1877F2] text-white shadow-md' : 'bg-white dark:bg-black text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-900 border border-gray-200 dark:border-gray-800'}`}>
             Blocked
@@ -345,9 +416,9 @@ const Friends: React.FC = () => {
         <>
             {activeTab === 'requests' && (
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 animate-in fade-in duration-300">
-                    {requests.length === 0 ? (
+                    {displayedRequests.length === 0 ? (
                         <div className="col-span-full text-center py-20 text-gray-400 font-medium">No pending friend requests.</div>
-                    ) : requests.map((r: any) => (
+                    ) : displayedRequests.map((r: any) => (
                     <div key={r.id} className="bg-white dark:bg-black border border-gray-100 dark:border-gray-800 rounded-2xl shadow-sm p-5 flex flex-col items-center transition-all hover:shadow-md">
                         <img src={r.profiles?.avatar_url || r.avatar_url} onClick={() => navigate(`/profile/${r.profiles?.username || r.username}`)} className="w-24 h-24 rounded-full object-cover shadow-lg border-2 border-white dark:border-gray-700 mb-4 cursor-pointer" />
                         <p className="font-bold text-gray-900 dark:text-white text-lg mb-4 flex items-center gap-1">
@@ -365,9 +436,9 @@ const Friends: React.FC = () => {
 
             {activeTab === 'discover' && (
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 animate-in fade-in duration-300">
-                    {discovery.length === 0 ? (
+                    {displayedDiscovery.length === 0 ? (
                         <div className="col-span-full text-center py-20 text-gray-400 font-medium">No new users found. Try searching!</div>
-                    ) : discovery.map((p: any) => (
+                    ) : displayedDiscovery.map((p: any) => (
                     <div key={p.id} className="bg-white dark:bg-black border border-gray-100 dark:border-gray-800 rounded-2xl p-4 flex flex-col items-center text-center transition-all hover:shadow-md relative group">
                         <img src={p.avatar_url} onClick={() => navigate(`/profile/${p.username}`)} className="w-20 h-20 rounded-full object-cover shadow-md mb-3 cursor-pointer border-2 border-white dark:border-gray-700" />
                         <p className="font-bold text-gray-900 dark:text-white truncate w-full flex items-center justify-center gap-1">
@@ -394,9 +465,9 @@ const Friends: React.FC = () => {
 
             {activeTab === 'friends' && (
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 animate-in fade-in duration-300">
-                    {friends.length === 0 ? (
+                    {displayedFriends.length === 0 ? (
                         <div className="col-span-full text-center py-20 text-gray-400 font-medium">You haven't added any friends yet.</div>
-                    ) : friends.map((f: any) => (
+                    ) : displayedFriends.map((f: any) => (
                     <div key={f.id} className="bg-white dark:bg-black border border-gray-100 dark:border-gray-800 rounded-2xl p-4 flex items-center justify-between shadow-sm hover:shadow-md transition-all group">
                         <div className="flex items-center gap-4 cursor-pointer" onClick={() => navigate(`/profile/${f.username}`)}>
                         <img src={f.avatar_url} className="w-16 h-16 rounded-full border shadow-sm object-cover" />

@@ -14,7 +14,7 @@ import { useUpload } from '@/contexts/UploadContext';
 
 import { db, auth } from '../lib/firebase';
 import { collection, query, where, getDocs, deleteDoc, doc, getDoc, updateDoc } from 'firebase/firestore';
-import { updatePassword } from 'firebase/auth';
+import { updatePassword, signOut, signInWithEmailAndPassword } from 'firebase/auth';
 import { VerifiedBadge } from '@/components/VerifiedBadge';
 
 // Reusable Toggle Component
@@ -182,6 +182,231 @@ const Settings: React.FC = () => {
     const docSnap = await getDoc(doc(db, 'profiles', currentUser.id));
     if (docSnap.exists()) {
        setProfile(docSnap.data());
+    }
+  };
+
+  const queryClient = useQueryClient();
+  const [savedAccounts, setSavedAccounts] = useState<any[]>(() => {
+    try {
+      const saved = localStorage.getItem('next_saved_accounts');
+      return saved ? JSON.parse(saved) : [];
+    } catch {
+      return [];
+    }
+  });
+
+  const [isSwitching, setIsSwitching] = useState(false);
+  const [showAddAccountModal, setShowAddAccountModal] = useState(false);
+  const [addAccountUsername, setAddAccountUsername] = useState('');
+  const [addAccountPassword, setAddAccountPassword] = useState('');
+  const [addAccountError, setAddAccountError] = useState('');
+  const [addAccountLoading, setAddAccountLoading] = useState(false);
+
+  // Auto-save current user on load if not present
+  useEffect(() => {
+    if (currentUser && profile) {
+      const exists = savedAccounts.some((a: any) => a.id === currentUser.id);
+      if (!exists && profile.password) {
+        const currAny = currentUser as any;
+        const newAcc = {
+          id: currentUser.id,
+          username: profile.username || currAny.username,
+          display_name: profile.display_name || currAny.display_name,
+          email: profile.email || currAny.email || `${profile.username || currAny.username}@nextmedia.app`,
+          password: profile.password,
+          avatar_url: profile.avatar_url || currAny.avatar_url || ''
+        };
+        const updated = [...savedAccounts, newAcc];
+        setSavedAccounts(updated);
+        localStorage.setItem('next_saved_accounts', JSON.stringify(updated));
+      }
+    }
+  }, [currentUser, profile, savedAccounts]);
+
+  const handleSwitchAccount = async (targetAccount: any) => {
+    if (!targetAccount.email || !targetAccount.password) {
+      toast.error('Cannot switch: missing credentials. Please log in again.');
+      return;
+    }
+    
+    setIsSwitching(true);
+    const toastId = toast.loading(`Switching to @${targetAccount.username}...`);
+    
+    try {
+      // 1. Clear current user profile and auth
+      await signOut(auth);
+      
+      // 2. Sign in to target
+      const result = await signInWithEmailAndPassword(auth, targetAccount.email, targetAccount.password);
+      
+      // 3. Clear react-query cache completely to delete all old data cache
+      queryClient.clear();
+      try {
+        const idb = await import('idb-keyval');
+        await idb.clear();
+      } catch (e) {
+        console.error(e);
+      }
+      
+      // 4. Update state and localStorage
+      const userDoc = await getDoc(doc(db, 'profiles', result.user.uid));
+      if (userDoc.exists()) {
+        const profileData = userDoc.data();
+        const freshUser = { id: userDoc.id, ...profileData };
+        
+        // Ensure accurate state
+        const updatedAccounts = savedAccounts.map((acc: any) => {
+          if (acc.id === targetAccount.id) {
+            return {
+              ...acc,
+              display_name: profileData.display_name,
+              avatar_url: profileData.avatar_url || acc.avatar_url
+            };
+          }
+          return acc;
+        });
+
+        // Preserve system settings
+        const savedTheme = localStorage.getItem('next_media_theme');
+        const savedDesktop = localStorage.getItem('next_media_desktop');
+        const savedNexto = localStorage.getItem('next_media_nexto');
+        const savedKeyboard = localStorage.getItem('saved_keyboard_height');
+
+        // Wipe local storage clean
+        localStorage.clear();
+        sessionStorage.clear();
+
+        // Restore preserved keys
+        localStorage.setItem('next_saved_accounts', JSON.stringify(updatedAccounts));
+        if (savedTheme) localStorage.setItem('next_media_theme', savedTheme);
+        if (savedDesktop) localStorage.setItem('next_media_desktop', savedDesktop);
+        if (savedNexto) localStorage.setItem('next_media_nexto', savedNexto);
+        if (savedKeyboard) localStorage.setItem('saved_keyboard_height', savedKeyboard);
+        
+        localStorage.setItem('next_media_user', JSON.stringify(freshUser));
+        setCurrentUser(freshUser as any);
+      }
+      
+      toast.success(`Switched to @${targetAccount.username}!`, { id: toastId });
+      setTimeout(() => {
+        window.location.href = '/';
+      }, 500);
+    } catch (err: any) {
+      console.error(err);
+      toast.error(`Switch failed: ${err.message}`, { id: toastId });
+    } finally {
+      setIsSwitching(false);
+    }
+  };
+
+  const handleAddSavedAccount = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setAddAccountError('');
+    setAddAccountLoading(true);
+
+    if (!addAccountUsername || !addAccountPassword) {
+      setAddAccountError('Please enter both username/email and password.');
+      setAddAccountLoading(false);
+      return;
+    }
+
+    try {
+      const q = query(collection(db, 'profiles'), where('username', '==', addAccountUsername.toLowerCase()));
+      const querySnapshot = await getDocs(q);
+      
+      let profileDoc = null;
+      let profileData = null;
+
+      if (!querySnapshot.empty) {
+        profileDoc = querySnapshot.docs[0];
+        profileData = profileDoc.data();
+      } else {
+        const qEmail = query(collection(db, 'profiles'), where('email', '==', addAccountUsername.toLowerCase()));
+        const snapEmail = await getDocs(qEmail);
+        if (!snapEmail.empty) {
+          profileDoc = snapEmail.docs[0];
+          profileData = profileDoc.data();
+        }
+      }
+
+      if (!profileDoc || !profileData) {
+        setAddAccountError('User not found.');
+        setAddAccountLoading(false);
+        return;
+      }
+
+      if (profileData.password !== addAccountPassword) {
+        setAddAccountError('Invalid password.');
+        setAddAccountLoading(false);
+        return;
+      }
+
+      const targetEmail = profileData.email || `${profileData.username}@nextmedia.app`;
+      const newAcc = {
+        id: profileDoc.id,
+        username: profileData.username,
+        display_name: profileData.display_name,
+        email: targetEmail,
+        password: addAccountPassword,
+        avatar_url: profileData.avatar_url || `https://api.dicebear.com/7.x/avataaars/svg?seed=${profileData.username}`
+      };
+
+      const updatedList = [...savedAccounts];
+      const idx = updatedList.findIndex((a: any) => a.id === newAcc.id);
+      if (idx > -1) {
+        updatedList[idx] = { ...updatedList[idx], ...newAcc };
+      } else {
+        updatedList.push(newAcc);
+      }
+      setSavedAccounts(updatedList);
+      localStorage.setItem('next_saved_accounts', JSON.stringify(updatedList));
+
+      await signOut(auth);
+      const result = await signInWithEmailAndPassword(auth, targetEmail, addAccountPassword);
+      
+      queryClient.clear();
+      try {
+        const idb = await import('idb-keyval');
+        await idb.clear();
+      } catch (e) {
+        console.error(e);
+      }
+      
+      const freshUser = { id: profileDoc.id, ...profileData };
+
+      // Preserve system settings
+      const savedTheme = localStorage.getItem('next_media_theme');
+      const savedDesktop = localStorage.getItem('next_media_desktop');
+      const savedNexto = localStorage.getItem('next_media_nexto');
+      const savedKeyboard = localStorage.getItem('saved_keyboard_height');
+
+      // Wipe local storage clean
+      localStorage.clear();
+      sessionStorage.clear();
+
+      // Restore preserved keys
+      localStorage.setItem('next_saved_accounts', JSON.stringify(updatedList));
+      if (savedTheme) localStorage.setItem('next_media_theme', savedTheme);
+      if (savedDesktop) localStorage.setItem('next_media_desktop', savedDesktop);
+      if (savedNexto) localStorage.setItem('next_media_nexto', savedNexto);
+      if (savedKeyboard) localStorage.setItem('saved_keyboard_height', savedKeyboard);
+      
+      localStorage.setItem('next_media_user', JSON.stringify(freshUser));
+      setCurrentUser(freshUser as any);
+
+      toast.success(`Account @${profileData.username} added and activated!`);
+      setShowAddAccountModal(false);
+      setAddAccountUsername('');
+      setAddAccountPassword('');
+
+      setTimeout(() => {
+        window.location.href = '/';
+      }, 500);
+    } catch (err: any) {
+      console.error(err);
+      setAddAccountError(err.message || 'Verification or sign-in failed.');
+    } finally {
+      setAddAccountLoading(false);
     }
   };
 
@@ -635,6 +860,127 @@ const Settings: React.FC = () => {
               <Section title="Security">
                 <Row icon={<Lock size={20}/>} title="Password" description="Change your password" action={renderAction('password', '', true)} border={false} />
               </Section>
+
+              <Section title="Saved Accounts">
+                <div className="p-4 flex flex-col gap-3">
+                  {savedAccounts.map((acc: any) => {
+                    const isActive = acc.id === currentUser?.id;
+                    return (
+                      <div key={acc.id} className="flex items-center justify-between p-3 bg-gray-50 dark:bg-gray-800/40 rounded-xl border border-gray-100 dark:border-gray-800 transition-all hover:bg-gray-100 dark:hover:bg-gray-800">
+                        <div className="flex items-center gap-3">
+                          <img src={acc.avatar_url || `https://api.dicebear.com/7.x/avataaars/svg?seed=${acc.username}`} className="w-10 h-10 rounded-full object-cover border border-gray-200 dark:border-gray-700" />
+                          <div>
+                            <p className="font-bold text-gray-900 dark:text-white flex items-center gap-1.5 text-sm">
+                              {acc.display_name}
+                              {isActive && <span className="inline-block w-2.5 h-2.5 bg-green-500 rounded-full animate-pulse" title="Active" />}
+                            </p>
+                            <p className="text-xs text-gray-500">@{acc.username}</p>
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          {!isActive ? (
+                            <button
+                              disabled={isSwitching}
+                              onClick={() => handleSwitchAccount(acc)}
+                              className="px-3 py-1.5 bg-[#1877F2] text-white hover:bg-blue-600 disabled:opacity-50 font-bold text-xs rounded-lg transition-all"
+                            >
+                              Switch
+                            </button>
+                          ) : (
+                            <span className="text-xs text-green-500 font-bold px-2 py-1 bg-green-500/10 rounded-lg">Active</span>
+                          )}
+                          <button
+                            onClick={() => {
+                              if (confirm(`Remove @${acc.username} from saved accounts?`)) {
+                                const updated = savedAccounts.filter((a: any) => a.id !== acc.id);
+                                setSavedAccounts(updated);
+                                localStorage.setItem('next_saved_accounts', JSON.stringify(updated));
+                                toast.success('Account removed.');
+                              }
+                            }}
+                            className="p-1.5 text-gray-400 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-950/20 rounded-lg transition-all"
+                          >
+                            <Trash2 size={16} />
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                  
+                  <button
+                    onClick={() => setShowAddAccountModal(true)}
+                    className="w-full py-3 border-2 border-dashed border-gray-200 dark:border-gray-700 hover:border-[#1877F2] dark:hover:border-[#1877F2] text-gray-500 hover:text-[#1877F2] dark:text-gray-400 dark:hover:text-[#1877F2] font-bold rounded-xl text-sm flex items-center justify-center gap-2 transition-all mt-2"
+                  >
+                    <Users size={16} />
+                    <span>Add New Account</span>
+                  </button>
+                </div>
+              </Section>
+            </div>
+          )}
+
+          {showAddAccountModal && (
+            <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-[999] p-4 animate-in fade-in duration-200">
+              <div className="bg-white dark:bg-gray-900 rounded-3xl p-6 w-full max-w-md shadow-2xl border border-gray-150 dark:border-gray-800 animate-in zoom-in-95 duration-200" onClick={(e) => e.stopPropagation()}>
+                <div className="flex justify-between items-center mb-6">
+                  <h3 className="text-xl font-black text-gray-900 dark:text-white">Add Next Account</h3>
+                  <button onClick={() => setShowAddAccountModal(false)} className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 transition-colors">
+                    <Minimize2 size={20} />
+                  </button>
+                </div>
+                
+                <form onSubmit={handleAddSavedAccount} className="flex flex-col gap-4">
+                  <div>
+                    <label className="block text-xs font-bold text-gray-500 uppercase tracking-wider mb-2">Username or Email</label>
+                    <div className="relative">
+                      <User size={18} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-gray-400" />
+                      <input 
+                        type="text" 
+                        value={addAccountUsername}
+                        onChange={(e) => setAddAccountUsername(e.target.value)}
+                        placeholder="e.g. johndoe"
+                        className="w-full p-3 pl-10 bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl text-sm outline-none focus:border-[#1877F2] dark:text-white transition-all font-bold"
+                      />
+                    </div>
+                  </div>
+                  
+                  <div>
+                    <label className="block text-xs font-bold text-gray-500 uppercase tracking-wider mb-2">Password</label>
+                    <div className="relative">
+                      <Lock size={18} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-gray-400" />
+                      <input 
+                        type="password" 
+                        value={addAccountPassword}
+                        onChange={(e) => setAddAccountPassword(e.target.value)}
+                        placeholder="••••••••"
+                        className="w-full p-3 pl-10 bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl text-sm outline-none focus:border-[#1877F2] dark:text-white transition-all font-bold"
+                      />
+                    </div>
+                  </div>
+                  
+                  {addAccountError && (
+                    <p className="text-xs text-red-500 font-bold bg-red-500/10 p-3 rounded-lg border border-red-500/20">{addAccountError}</p>
+                  )}
+                  
+                  <div className="flex gap-3 mt-4">
+                    <button 
+                      type="button" 
+                      onClick={() => setShowAddAccountModal(false)}
+                      className="flex-1 py-3 bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-300 font-bold rounded-xl text-sm hover:bg-gray-200 dark:hover:bg-gray-750 transition-all"
+                    >
+                      Cancel
+                    </button>
+                    <button 
+                      type="submit" 
+                      disabled={addAccountLoading}
+                      className="flex-1 py-3 bg-[#1877F2] text-white font-bold rounded-xl text-sm hover:bg-blue-600 transition-all flex items-center justify-center gap-2 disabled:opacity-50"
+                    >
+                      {addAccountLoading && <RefreshCw size={16} className="animate-spin" />}
+                      {addAccountLoading ? 'Verifying...' : 'Add & Switch'}
+                    </button>
+                  </div>
+                </form>
+              </div>
             </div>
           )}
 

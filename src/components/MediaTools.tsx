@@ -248,12 +248,14 @@ export const MediaEditor: React.FC<MediaEditorProps> = ({ mediaUrl, mediaType, o
           </div>
           <div className="flex gap-4">
             <button 
+              type="button"
               onClick={() => setIsCropping(false)}
               className="flex-1 py-3 rounded-xl font-bold bg-gray-200 dark:bg-gray-800 text-gray-900 dark:text-white"
             >
               Cancel
             </button>
             <button 
+              type="button"
               onClick={handleCropSave}
               className="flex-1 py-3 rounded-xl font-bold bg-[#1877F2] text-white"
             >
@@ -268,7 +270,7 @@ export const MediaEditor: React.FC<MediaEditorProps> = ({ mediaUrl, mediaType, o
   return (
     <div className="fixed inset-0 bg-black/90 z-[1000] flex flex-col items-center justify-center p-4">
       <div className="absolute top-4 right-4 flex gap-2">
-        <button onClick={onCancel} className="p-2 bg-white/10 rounded-full text-white hover:bg-white/20"><X /></button>
+        <button type="button" onClick={onCancel} className="p-2 bg-white/10 rounded-full text-white hover:bg-white/20"><X /></button>
       </div>
 
       <div 
@@ -348,32 +350,32 @@ export const MediaEditor: React.FC<MediaEditorProps> = ({ mediaUrl, mediaType, o
       <div className="mt-6 w-full max-w-md bg-white dark:bg-gray-900 rounded-2xl p-6 shadow-xl">
         <div className="flex justify-around mb-6">
           {mediaType === 'image' && (
-            <button onClick={() => setIsCropping(true)} className="flex flex-col items-center gap-1 text-gray-600 dark:text-gray-300">
+            <button type="button" onClick={() => setIsCropping(true)} className="flex flex-col items-center gap-1 text-gray-600 dark:text-gray-300">
               <Crop size={24} />
               <span className="text-xs font-bold">Crop</span>
             </button>
           )}
           {mediaType === 'image' && (
-            <button onClick={() => setIsDrawingMode(!isDrawingMode)} className={`flex flex-col items-center gap-1 ${isDrawingMode ? 'text-blue-500' : 'text-gray-600 dark:text-gray-300'}`}>
+            <button type="button" onClick={() => setIsDrawingMode(!isDrawingMode)} className={`flex flex-col items-center gap-1 ${isDrawingMode ? 'text-blue-500' : 'text-gray-600 dark:text-gray-300'}`}>
               <PenTool size={24} />
               <span className="text-xs font-bold">Draw</span>
             </button>
           )}
-          <button onClick={() => setShowTextInput(!showTextInput)} className="flex flex-col items-center gap-1 text-gray-600 dark:text-gray-300">
+          <button type="button" onClick={() => setShowTextInput(!showTextInput)} className="flex flex-col items-center gap-1 text-gray-600 dark:text-gray-300">
             <Type size={24} />
             <span className="text-xs font-bold">Text</span>
           </button>
-          <button onClick={() => setShowEmojiPicker(!showEmojiPicker)} className="flex flex-col items-center gap-1 text-gray-600 dark:text-gray-300">
+          <button type="button" onClick={() => setShowEmojiPicker(!showEmojiPicker)} className="flex flex-col items-center gap-1 text-gray-600 dark:text-gray-300">
             <Smile size={24} />
             <span className="text-xs font-bold">Sticker</span>
           </button>
           {mediaType === 'video' && (
-            <button className="flex flex-col items-center gap-1 text-gray-600 dark:text-gray-300">
+            <button type="button" className="flex flex-col items-center gap-1 text-gray-600 dark:text-gray-300">
               <Scissors size={24} />
               <span className="text-xs font-bold">Trim</span>
             </button>
           )}
-          <button onClick={() => setIsViewOnce(!isViewOnce)} className={`flex flex-col items-center gap-1 ${isViewOnce ? 'text-red-500' : 'text-gray-600 dark:text-gray-300'}`}>
+          <button type="button" onClick={() => setIsViewOnce(!isViewOnce)} className={`flex flex-col items-center gap-1 ${isViewOnce ? 'text-red-500' : 'text-gray-600 dark:text-gray-300'}`}>
             {isViewOnce ? <EyeOff size={24} /> : <Eye size={24} />}
             <span className="text-xs font-bold">1x View</span>
           </button>
@@ -390,8 +392,8 @@ export const MediaEditor: React.FC<MediaEditorProps> = ({ mediaUrl, mediaType, o
             <div className="flex items-center justify-between mb-2">
               <span className="text-xs font-black text-blue-600 dark:text-blue-400 uppercase">Sticker Size</span>
               <div className="flex items-center gap-2">
-                <button onClick={() => setStickers(stickers.filter(s => s.id !== selectedStickerId))} className="text-red-500 hover:text-red-700 font-bold text-xs uppercase">Delete</button>
-                <button onClick={() => setSelectedStickerId(null)} className="text-gray-400 hover:text-gray-600"><X size={14} /></button>
+                <button type="button" onClick={() => setStickers(stickers.filter(s => s.id !== selectedStickerId))} className="text-red-500 hover:text-red-700 font-bold text-xs uppercase">Delete</button>
+                <button type="button" onClick={() => setSelectedStickerId(null)} className="text-gray-400 hover:text-gray-600"><X size={14} /></button>
               </div>
             </div>
             <input 
@@ -431,18 +433,19 @@ export const MediaEditor: React.FC<MediaEditorProps> = ({ mediaUrl, mediaType, o
                       className="flex-1"
                     />
                   </div>
-                  <button onClick={() => setText('')} className="text-red-500 hover:text-red-700 font-bold text-xs uppercase ml-4">Clear Text</button>
+                  <button type="button" onClick={() => setText('')} className="text-red-500 hover:text-red-700 font-bold text-xs uppercase ml-4">Clear Text</button>
                 </div>
               </>
             )}
             {isDrawingMode && paths.length > 0 && (
               <div className="flex justify-end mb-3">
-                <button onClick={() => setPaths([])} className="text-red-500 hover:text-red-700 font-bold text-xs uppercase">Clear Drawing</button>
+                <button type="button" onClick={() => setPaths([])} className="text-red-500 hover:text-red-700 font-bold text-xs uppercase">Clear Drawing</button>
               </div>
             )}
             <div className="flex gap-2 justify-center">
               {['#ffffff', '#000000', '#ff0000', '#00ff00', '#0000ff', '#ffff00', '#ff00ff', '#00ffff'].map(color => (
                 <button
+                  type="button"
                   key={color}
                   onClick={() => setTextColor(color)}
                   className={`w-8 h-8 rounded-full border-2 ${textColor === color ? 'border-blue-500 scale-110' : 'border-gray-300'} transition-all`}
@@ -464,6 +467,7 @@ export const MediaEditor: React.FC<MediaEditorProps> = ({ mediaUrl, mediaType, o
         )}
 
         <button 
+          type="button"
           onClick={processMedia}
           className="w-full bg-[#1877F2] text-white py-3 rounded-xl font-bold flex items-center justify-center gap-2 hover:brightness-110 transition-all shadow-lg"
         >
@@ -545,12 +549,13 @@ export const CameraCapture: React.FC<CameraCaptureProps> = ({ onCapture, onCance
       <video ref={videoRef} autoPlay playsInline muted className="w-full h-full object-cover" />
       
       <div className="absolute top-6 left-6 right-6 flex justify-between">
-        <button onClick={onCancel} className="p-3 bg-black/50 rounded-full text-white"><X /></button>
-        <button onClick={() => setFacingMode(facingMode === 'user' ? 'environment' : 'user')} className="p-3 bg-black/50 rounded-full text-white"><RotateCcw /></button>
+        <button type="button" onClick={onCancel} className="p-3 bg-black/50 rounded-full text-white"><X /></button>
+        <button type="button" onClick={() => setFacingMode(facingMode === 'user' ? 'environment' : 'user')} className="p-3 bg-black/50 rounded-full text-white"><RotateCcw /></button>
       </div>
 
       <div className="absolute bottom-10 flex items-center gap-10">
         <button 
+          type="button"
           onClick={isRecording ? stopRecording : startRecording}
           className={`w-20 h-20 rounded-full border-4 border-white flex items-center justify-center transition-all ${isRecording ? 'bg-red-500 scale-110' : 'bg-transparent'}`}
         >
@@ -558,6 +563,7 @@ export const CameraCapture: React.FC<CameraCaptureProps> = ({ onCapture, onCance
         </button>
         
         <button 
+          type="button"
           onClick={takePhoto}
           className="w-16 h-16 rounded-full bg-white flex items-center justify-center shadow-xl hover:scale-110 transition-all"
         >

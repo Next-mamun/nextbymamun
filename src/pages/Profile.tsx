@@ -5,7 +5,7 @@ import { useAuth } from '@/contexts/AuthContext';
 import { db, OperationType, handleFirestoreError } from '../lib/firebase';
 import { doc, getDoc, updateDoc, collection, query, where, getDocs, addDoc, deleteDoc, orderBy } from 'firebase/firestore';
 import { supabase } from '@/lib/supabase';
-import { activeDB, switchDB } from '@/lib/dbHelper';
+import { getActiveDB, switchDB } from '@/lib/dbHelper';
 import { VerifiedBadge } from '@/components/VerifiedBadge';
 import ZoomableImage from '@/components/ZoomableImage';
 import { Link } from 'react-router-dom';
@@ -111,7 +111,7 @@ const Profile: React.FC = () => {
       };
 
       try {
-        if (activeDB === 'firebase') {
+        if (getActiveDB() === 'firebase') {
           try {
             await fetchFromFirebase();
           } catch (err) {

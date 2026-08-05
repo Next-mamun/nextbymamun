@@ -13,7 +13,7 @@ import { redis } from '@/lib/redis';
 // Firebase imports
 import { db } from '../lib/firebase';
 import { collection, query, where, getDocs, deleteDoc, doc, getDoc, updateDoc, setDoc, onSnapshot, orderBy, limit, addDoc, serverTimestamp, or, and, arrayUnion } from 'firebase/firestore';
-import { activeDB, switchDB, dualWriteMessage } from '@/lib/dbHelper';
+import { getActiveDB, switchDB, dualWriteMessage } from '@/lib/dbHelper';
 import { supabase } from '@/lib/supabase';
 
 import { MediaEditor } from '../components/MediaTools';
@@ -125,6 +125,84 @@ const Messages: React.FC = () => {
   const location = useLocation();
   const queryClient = useQueryClient();
   const [selectedChat, setSelectedChat] = useState<any>(null);
+  const [chatToDelete, setChatToDelete] = useState<any>(null);
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+
+  const longPressTimerRef = useRef<any>(null);
+  const isLongPressRef = useRef<boolean>(false);
+
+  const startLongPress = (contact: any) => {
+    isLongPressRef.current = false;
+    longPressTimerRef.current = setTimeout(() => {
+      isLongPressRef.current = true;
+      setChatToDelete(contact);
+      setShowDeleteConfirm(true);
+      if ('vibrate' in navigator) navigator.vibrate(80);
+    }, 600);
+  };
+
+  const cancelLongPress = () => {
+    if (longPressTimerRef.current) {
+      clearTimeout(longPressTimerRef.current);
+      longPressTimerRef.current = null;
+    }
+  };
+
+  const handleItemClick = (contact: any) => {
+    if (isLongPressRef.current) {
+      isLongPressRef.current = false;
+      return;
+    }
+    setSelectedChat(contact);
+    if (showNewFriends) setShowNewFriends(false);
+  };
+
+  const handleDeleteChat = async (contactId: string) => {
+    if (!currentUser) return;
+    const toastId = toast.loading("Deleting chat...");
+    try {
+      // 1. Fetch messages of this conversation
+      const q1 = query(
+        collection(db, 'messages'),
+        where('sender_id', '==', currentUser.id),
+        where('receiver_id', '==', contactId)
+      );
+      const q2 = query(
+        collection(db, 'messages'),
+        where('sender_id', '==', contactId),
+        where('receiver_id', '==', currentUser.id)
+      );
+
+      const [snap1, snap2] = await Promise.all([getDocs(q1), getDocs(q2)]);
+      const allMsgs = [...snap1.docs, ...snap2.docs];
+
+      await Promise.all(allMsgs.map(d => 
+        updateDoc(doc(db, 'messages', d.id), {
+          deleted_for: arrayUnion(currentUser.id)
+        }).catch(e => console.error("Error updating message for deletion:", e))
+      ));
+
+      // 2. Add to deleted_chats in localStorage
+      const deletedKey = 'deleted_chats_' + currentUser.id;
+      const deletedIds = JSON.parse(localStorage.getItem(deletedKey) || '[]');
+      if (!deletedIds.includes(contactId)) {
+        deletedIds.push(contactId);
+        localStorage.setItem(deletedKey, JSON.stringify(deletedIds));
+      }
+
+      // If the currently selected chat is deleted, clear it
+      if (selectedChat?.id === contactId) {
+        setSelectedChat(null);
+      }
+
+      // Invalidate contacts query
+      queryClient.invalidateQueries({ queryKey: ['contacts'] });
+      toast.success("Chat deleted successfully!", { id: toastId });
+    } catch (err: any) {
+      console.error("Error deleting chat:", err);
+      toast.error("Failed to delete chat: " + err.message, { id: toastId });
+    }
+  };
   const [isMuted, setIsMuted] = useState(false);
   const [isInputFocused, setIsInputFocused] = useState(false);
   const [messageText, setMessageText] = useState('');
@@ -414,7 +492,9 @@ const Messages: React.FC = () => {
         };
       });
 
-      const sortedContacts = contactsWithMessages.sort((a, b) => {
+      const deletedIds = JSON.parse(localStorage.getItem('deleted_chats_' + currentUser?.id) || '[]');
+      const filteredForDeletion = contactsWithMessages.filter(c => !deletedIds.includes(c.id));
+      const sortedContacts = filteredForDeletion.sort((a, b) => {
         if (a.lastMessage && b.lastMessage) {
           const timeA = typeof a.lastMessage.created_at === 'string' ? new Date(a.lastMessage.created_at).getTime() : a.lastMessage.created_at?.toMillis ? a.lastMessage.created_at.toMillis() : Date.now();
           const timeB = typeof b.lastMessage.created_at === 'string' ? new Date(b.lastMessage.created_at).getTime() : b.lastMessage.created_at?.toMillis ? b.lastMessage.created_at.toMillis() : Date.now();
@@ -587,7 +667,7 @@ const Messages: React.FC = () => {
     let unsub1: any;
     let unsub2: any;
 
-    if (activeDB === 'firebase') {
+    if (getActiveDB() === 'firebase') {
       unsub1 = onSnapshot(q1, { includeMetadataChanges: true }, (snapshot) => {
         messages1 = processSnapshot(snapshot);
         handleMessagesUpdate();
@@ -670,10 +750,47 @@ const Messages: React.FC = () => {
     // Listen to all incoming messages where we are receiver
     const unsubMessages = onSnapshot(
       query(collection(db, 'messages'), where('receiver_id', '==', currentUser.id)),
-      () => {
+      (snapshot) => {
+        snapshot.docChanges().forEach(change => {
+          if (change.type === 'added') {
+            const newMsg = { id: change.doc.id, ...change.doc.data() } as any;
+            
+            // Parse text content if JSON
+            let parsedM = { ...newMsg };
+            if (typeof newMsg.content === 'string') {
+              if (newMsg.content.includes('"JSON_PAYLOAD"')) {
+                try {
+                  const obj = JSON.parse(newMsg.content);
+                  parsedM.content = obj.text;
+                } catch(e) {}
+              }
+            }
+
+            // Move contact to the top of the list in local query cache
+            queryClient.setQueryData(['contacts'], (old: any) => {
+              if (!old) return old;
+              const newContacts = [...old];
+              const partnerId = newMsg.sender_id === currentUser.id ? newMsg.receiver_id : newMsg.sender_id;
+              const chatIdx = newContacts.findIndex((c: any) => c.id === partnerId);
+              if (chatIdx > -1) {
+                const chat = { ...newContacts[chatIdx] };
+                chat.lastMessage = parsedM;
+                chat.lastMessageTime = new Date();
+                newContacts.splice(chatIdx, 1);
+                newContacts.unshift(chat);
+              } else {
+                // If the contact is not in the list, invalidate so they appear
+                setTimeout(() => {
+                  queryClient.invalidateQueries({ queryKey: ['contacts'] });
+                }, 100);
+              }
+              return newContacts;
+            });
+          }
+        });
+
         queryClient.invalidateQueries({ queryKey: ['unreadCounts'] });
         queryClient.invalidateQueries({ queryKey: ['messages'] });
-        queryClient.invalidateQueries({ queryKey: ['contacts'] });
         queryClient.invalidateQueries({ queryKey: ['notifications', currentUser.id] });
       },
       (error) => {
@@ -681,9 +798,14 @@ const Messages: React.FC = () => {
       }
     );
 
+    let isFirstFriendship = true;
     const unsubFriendships = onSnapshot(
       query(collection(db, 'friendships'), or(where('receiver_id', '==', currentUser.id), where('sender_id', '==', currentUser.id))),
       () => {
+        if (isFirstFriendship) {
+          isFirstFriendship = false;
+          return;
+        }
         queryClient.invalidateQueries({ queryKey: ['blockStatus'] });
         queryClient.invalidateQueries({ queryKey: ['isBlockedByMe'] });
         queryClient.invalidateQueries({ queryKey: ['contacts'] });
@@ -763,8 +885,8 @@ const Messages: React.FC = () => {
       const chatIdx = newContacts.findIndex((c: any) => c.id === selectedChat.id);
       if (chatIdx > -1) {
         const chat = newContacts[chatIdx];
-        chat.last_message = { ...newMessage, created_at: new Date() };
-        chat.last_message_time = new Date();
+        chat.lastMessage = { ...newMessage, created_at: new Date() };
+        chat.lastMessageTime = new Date();
         newContacts.splice(chatIdx, 1);
         newContacts.unshift(chat);
       }
@@ -909,8 +1031,8 @@ const Messages: React.FC = () => {
       const chatIdx = newContacts.findIndex((c: any) => c.id === selectedChat.id);
       if (chatIdx > -1) {
         const chat = newContacts[chatIdx];
-        chat.last_message = { ...newMessage, created_at: new Date() };
-        chat.last_message_time = new Date();
+        chat.lastMessage = { ...newMessage, created_at: new Date() };
+        chat.lastMessageTime = new Date();
         newContacts.splice(chatIdx, 1);
         newContacts.unshift(chat);
       }
@@ -1121,8 +1243,8 @@ const Messages: React.FC = () => {
       const chatIdx = newContacts.findIndex((c: any) => c.id === selectedChat.id);
       if (chatIdx > -1) {
         const chat = newContacts[chatIdx];
-        chat.last_message = { ...newMessage, created_at: new Date() };
-        chat.last_message_time = new Date();
+        chat.lastMessage = { ...newMessage, created_at: new Date() };
+        chat.lastMessageTime = new Date();
         newContacts.splice(chatIdx, 1);
         newContacts.unshift(chat);
       }
@@ -1307,8 +1429,13 @@ const Messages: React.FC = () => {
             return (
               <div 
                 key={c.id} 
-                onClick={() => { setSelectedChat(c); if(showNewFriends) setShowNewFriends(false); }} 
-                className={`flex items-center gap-3 p-3 cursor-pointer rounded-2xl transition-all ${selectedChat?.id === c.id ? 'bg-[#e7f3ff] dark:bg-gray-800 text-[#1877F2] dark:text-blue-400 shadow-sm' : 'hover:bg-white dark:hover:bg-gray-900 text-gray-700 dark:text-gray-300 hover:shadow-sm'}`}
+                onMouseDown={() => startLongPress(c)}
+                onMouseUp={cancelLongPress}
+                onMouseLeave={cancelLongPress}
+                onTouchStart={() => startLongPress(c)}
+                onTouchEnd={cancelLongPress}
+                onClick={() => handleItemClick(c)}
+                className={`flex items-center gap-3 p-3 cursor-pointer select-none rounded-2xl transition-all ${selectedChat?.id === c.id ? 'bg-[#e7f3ff] dark:bg-gray-800 text-[#1877F2] dark:text-blue-400 shadow-sm' : 'hover:bg-white dark:hover:bg-gray-900 text-gray-700 dark:text-gray-300 hover:shadow-sm'}`}
               >
                 <div className="relative flex-shrink-0">
                   <img src={c.avatar_url} className="w-14 h-14 rounded-full object-cover border-2 border-white dark:border-gray-700 shadow-sm" />
@@ -1791,6 +1918,23 @@ const Messages: React.FC = () => {
         }
         onConfirm={executeDeleteMessage}
         onCancel={() => setDeleteConfirmId(null)}
+      />
+
+      <ConfirmDialog
+        isOpen={showDeleteConfirm}
+        title="Delete Chat"
+        message={`Are you sure you want to delete all chat history with ${chatToDelete?.display_name}? This will hide and delete the chat history only on your phone.`}
+        onConfirm={() => {
+          if (chatToDelete) {
+            handleDeleteChat(chatToDelete.id);
+          }
+          setShowDeleteConfirm(false);
+          setChatToDelete(null);
+        }}
+        onCancel={() => {
+          setShowDeleteConfirm(false);
+          setChatToDelete(null);
+        }}
       />
     </div>
   );

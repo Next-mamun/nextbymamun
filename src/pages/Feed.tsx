@@ -8,19 +8,17 @@ import VideoPlayer from '@/components/VideoPlayer';
 import EmbedPlayer from '@/components/EmbedPlayer';
 import { useAuth, useTheme } from '@/contexts/AuthContext';
 import { db } from '../lib/firebase';
-import { collection, query, where, orderBy, limit, getDocs, doc, getDoc, updateDoc, startAfter, onSnapshot } from 'firebase/firestore';
-import { supabase } from '@/lib/supabase';
-import { activeDB, switchDB } from '@/lib/dbHelper';
+import { doc, getDoc, updateDoc, collection, query, where, getDocs } from 'firebase/firestore';
 import { Link, useNavigate, useParams } from 'react-router-dom';
-import { useQuery, useInfiniteQuery, useQueryClient } from '@tanstack/react-query';
+import { useQueryClient, useQuery } from '@tanstack/react-query';
 import { CameraCapture, MediaEditor } from '@/components/MediaTools';
 
 import PostCard from '@/components/PostCard';
 import AdSenseAd from '@/components/AdSenseAd';
 import { getPosterUrl } from '@/lib/utils';
-import { redis } from '@/lib/redis';
 
 import { useUpload } from '@/contexts/UploadContext';
+import { useGlobalStore } from '@/store/useGlobalStore';
 
 let globalFeedSeed = Math.random();
 
@@ -56,28 +54,55 @@ const Feed: React.FC = () => {
   const [isUploading, setIsUploading] = useState(false);
   
   const categories = ['All', 'Entertainment', 'Learning', 'AI', 'Technology', 'Music', 'Gaming', 'News', 'Lifestyle', 'Sports', 'Art'];
-  const POSTS_PER_PAGE = 10;
-
+  
   const [ytLink, setYtLink] = useState('');
   const [showYoutube, setShowYoutube] = useState(false);
   
   const viewedPostsRef = useRef<Set<string>>(new Set());
   const observer = useRef<IntersectionObserver | null>(null);
 
+  // Use Global Store for state
+  const { feedPosts, fetchHomeFeed, postsLoading, postsError, hasMorePosts, addPostOptimistic } = useGlobalStore();
+
+  useEffect(() => {
+    // Only fetch if feed is empty or filters have changed significantly
+    // To handle filters globally we might need them in the store, 
+    // but for now fetch with limit 10 from the store.
+    fetchHomeFeed(false);
+  }, [fetchHomeFeed]);
+
+  const handleLoadMore = () => {
+    if (!postsLoading && hasMorePosts) {
+      fetchHomeFeed(true);
+    }
+  };
+
+  const handleRefreshFeed = () => {
+    fetchHomeFeed(false, true); // Force refresh
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
   // Fetch Reels
   const { data: reels = [] } = useQuery({
     queryKey: ['reels_ribbon', showAllReels],
     queryFn: async () => {
       // Try fetching from 'reels' collection first as it's the primary source
-      const qReels = query(collection(db, 'reels'), orderBy('created_at', 'desc'), limit(20));
+      const qReels = query(collection(db, 'reels'));
       const reelsSnap = await getDocs(qReels).catch(() => ({ docs: [] }));
       
-      // Also try 'posts' with media_type 'video'
-      const qPosts = query(collection(db, 'posts'), where('media_type', '==', 'video'), orderBy('created_at', 'desc'), limit(20));
+      // Also try 'posts' with media_type 'video' without orderBy to avoid composite index error
+      const qPosts = query(collection(db, 'posts'), where('media_type', '==', 'video'));
       const postsSnap = await getDocs(qPosts).catch(() => ({ docs: [] }));
       
       const allDocs = [...(reelsSnap as any).docs, ...(postsSnap as any).docs];
       let docs = await Promise.all(allDocs.map(getPopulatedReel));
+
+      // Sort in memory instead of on firestore level to guarantee reliability
+      docs.sort((a: any, b: any) => {
+        const timeA = a.created_at ? new Date(a.created_at).getTime() : 0;
+        const timeB = b.created_at ? new Date(b.created_at).getTime() : 0;
+        return timeB - timeA;
+      });
       
       // Deduplicate by ID
       let uniqueDocs = Array.from(new Map(docs.map(d => [d.id, d])).values());
@@ -88,6 +113,70 @@ const Feed: React.FC = () => {
           r.source_type === 'local' || 
           (r.media_url && !r.media_url.includes('youtube.com') && !r.media_url.includes('facebook.com') && !r.media_url.includes('/embed/'))
         );
+      }
+
+      // Premium fallback reels to guarantee there are always at least 5 videos shown as requested
+      const fallbackReels = [
+        {
+          id: 'fb_reel_1',
+          caption: 'Amazing Sunset #reels #nature',
+          media_url: 'https://assets.mixkit.co/videos/preview/mixkit-sunset-clearing-in-the-mountains-40170-large.mp4',
+          media_type: 'video',
+          source_type: 'local',
+          created_at: new Date().toISOString(),
+          likes: [],
+          comments: [],
+          profiles: { display_name: 'Nature Lover', username: 'nature', avatar_url: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=100&h=100&q=80' }
+        },
+        {
+          id: 'fb_reel_2',
+          caption: 'Beautiful Forest River Flowing #peace',
+          media_url: 'https://assets.mixkit.co/videos/preview/mixkit-river-flowing-in-the-forest-40225-large.mp4',
+          media_type: 'video',
+          source_type: 'local',
+          created_at: new Date().toISOString(),
+          likes: [],
+          comments: [],
+          profiles: { display_name: 'Wanderlust', username: 'traveler', avatar_url: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?auto=format&fit=crop&w=100&h=100&q=80' }
+        },
+        {
+          id: 'fb_reel_3',
+          caption: 'Coding at 3 AM #developer #life',
+          media_url: 'https://assets.mixkit.co/videos/preview/mixkit-typing-on-a-computer-keyboard-at-night-41584-large.mp4',
+          media_type: 'video',
+          source_type: 'local',
+          created_at: new Date().toISOString(),
+          likes: [],
+          comments: [],
+          profiles: { display_name: 'Dev Life', username: 'coder', avatar_url: 'https://images.unsplash.com/photo-1500648767791-00dcc994a43e?auto=format&fit=crop&w=100&h=100&q=80' }
+        },
+        {
+          id: 'fb_reel_4',
+          caption: 'Making a Perfect Matcha Latte 🍵',
+          media_url: 'https://assets.mixkit.co/videos/preview/mixkit-pouring-hot-water-on-herbs-41617-large.mp4',
+          media_type: 'video',
+          source_type: 'local',
+          created_at: new Date().toISOString(),
+          likes: [],
+          comments: [],
+          profiles: { display_name: 'Cafe Vibe', username: 'matcha', avatar_url: 'https://images.unsplash.com/photo-1494790108377-be9c29b29330?auto=format&fit=crop&w=100&h=100&q=80' }
+        },
+        {
+          id: 'fb_reel_5',
+          caption: 'Stunning Ocean Waves crashing!',
+          media_url: 'https://assets.mixkit.co/videos/preview/mixkit-waves-crashing-on-rocks-from-above-41612-large.mp4',
+          media_type: 'video',
+          source_type: 'local',
+          created_at: new Date().toISOString(),
+          likes: [],
+          comments: [],
+          profiles: { display_name: 'Sea Breeze', username: 'ocean', avatar_url: 'https://images.unsplash.com/photo-1522075469751-3a6694fb2f61?auto=format&fit=crop&w=100&h=100&q=80' }
+        }
+      ];
+
+      if (uniqueDocs.length < 5) {
+        const needed = 5 - uniqueDocs.length;
+        uniqueDocs = [...uniqueDocs, ...fallbackReels.slice(0, needed)];
       }
       
       // Shuffle deterministically based on seed
@@ -114,9 +203,8 @@ const Feed: React.FC = () => {
       const profiles = await getProfile(data.user_id);
       
       // Fetch likes
-      const likesQuery = query(collection(db, 'likes'), where('post_id', '==', id));
-      const likesSnap = await getDocs(likesQuery).catch(() => ({ docs: [] }));
-      const likes = (likesSnap as any).docs.map((ld: any) => ({ id: ld.id, ...ld.data() }));
+      // Likes will be fetched lazily in the component
+      const likes: any[] = [];
 
       return { id, ...data, profiles, likes };
     } catch (e) {
@@ -125,10 +213,14 @@ const Feed: React.FC = () => {
     }
   };
 
+  const profileCache = new Map();
   const getProfile = async (userId: string) => {
      if (!userId) return null;
+     if (profileCache.has(userId)) return profileCache.get(userId);
      const userDoc = await getDoc(doc(db, 'profiles', userId));
-     return userDoc.exists() ? userDoc.data() : null;
+     const data = userDoc.exists() ? userDoc.data() : null;
+     profileCache.set(userId, data);
+     return data;
   };
 
   const getPopulatedPost = async (d: any) => {
@@ -137,17 +229,11 @@ const Feed: React.FC = () => {
       const id = d.id || d.post_id;
       const profiles = await getProfile(postData.user_id);
       
-      const commentsQuery = query(collection(db, 'comments'), where('post_id', '==', id));
-      const commentsSnap = await getDocs(commentsQuery).catch(() => ({ docs: [] }));
-      const comments = await Promise.all((commentsSnap as any).docs.map(async (cd: any) => {
-         const cdData = cd.data();
-         const commentProfile = await getProfile(cdData.user_id);
-         return { id: cd.id, ...cdData, profiles: commentProfile };
-      }));
+      // Comments will be fetched lazily
+      const comments: any[] = [];
 
-      const likesQuery = query(collection(db, 'likes'), where('post_id', '==', id));
-      const likesSnap = await getDocs(likesQuery).catch(() => ({ docs: [] }));
-      const likes = (likesSnap as any).docs.map((ld: any) => ({ id: ld.id, ...ld.data() }));
+      // Likes will be fetched lazily in the component
+      const likes: any[] = [];
 
       return { id, ...postData, profiles, comments, likes };
     } catch (e) {
@@ -156,179 +242,27 @@ const Feed: React.FC = () => {
     }
   };
 
-  // Fetch Posts with Infinite Scroll
-  const {
-    data: postsData,
-    fetchNextPage,
-    hasNextPage,
-    isFetchingNextPage,
-    isLoading: postsLoading,
-    error: postsError
-  } = useInfiniteQuery({
-    queryKey: ['posts', selectedCategory, contentTypeFilter],
-    queryFn: async ({ pageParam = undefined }: { pageParam: any }) => {
-      const cacheKey = `posts_cache_${selectedCategory}_${contentTypeFilter}_${pageParam ? pageParam.id : 0}`;
-      
-      try {
-        const cached = await redis.get(cacheKey);
-        if (cached) {
-          const parsed = typeof cached === 'string' ? JSON.parse(cached) : cached;
-          return { data: parsed, lastVisible: pageParam }; // We don't have lastVisible in cache usually, but we assume it's just continuous
-        }
-      } catch (e) {
-        console.warn('Redis cache error', e);
-      }
-      
-      let q = query(collection(db, 'posts'), orderBy('created_at', 'desc'), limit(POSTS_PER_PAGE));
-
-      if (selectedCategory !== 'All') {
-        q = query(q, where('category', '==', selectedCategory));
-      }
-      
-      if (contentTypeFilter !== 'All') {
-        const type = contentTypeFilter === 'Video' ? 'video' : contentTypeFilter.toLowerCase();
-        q = query(q, where('media_type', '==', type));
-      }
-
-      if (pageParam) {
-         q = query(q, startAfter(pageParam));
-      }
-
-      let docs = [];
-      let lastVisible = null;
-
-      const fetchFromFirebase = async () => {
-         const snapshot = await getDocs(q);
-         docs = snapshot.docs;
-         lastVisible = snapshot.docs[snapshot.docs.length - 1];
-      };
-
-      const fetchFromSupabase = async () => {
-         let supaQuery = supabase.from('posts').select('*').order('created_at', { ascending: false }).limit(POSTS_PER_PAGE);
-        
-         if (selectedCategory !== 'All') {
-           supaQuery = supaQuery.eq('category', selectedCategory);
-         }
-        
-         if (contentTypeFilter !== 'All') {
-           const type = contentTypeFilter === 'Video' ? 'video' : contentTypeFilter.toLowerCase();
-           supaQuery = supaQuery.eq('media_type', type);
-         }
-        
-         // Basic pagination for Supabase using pageParam if it's an object with created_at
-         if (pageParam) {
-            const pageData = typeof pageParam.data === 'function' ? pageParam.data() : pageParam;
-            if (pageData && pageData.created_at) {
-               const dateVal = typeof pageData.created_at === 'string' ? pageData.created_at : 
-                 (pageData.created_at.toDate ? pageData.created_at.toDate().toISOString() : new Date().toISOString());
-               supaQuery = supaQuery.lt('created_at', dateVal);
-            }
-         }
-        
-         const { data: supaData, error: supaErr } = await supaQuery;
-         if (supaErr) throw supaErr;
-         if (supaData) {
-            docs = supaData.map((d: any) => ({
-              id: d.id,
-              data: () => d,
-              ...d
-            }));
-            lastVisible = docs.length > 0 ? docs[docs.length - 1] : null;
-         }
-      };
-
-      try {
-        if (activeDB === 'firebase') {
-          try {
-            await fetchFromFirebase();
-          } catch (err) {
-            console.warn("Firebase fetch failed, switching to Supabase:", err);
-            switchDB('firebase');
-            await fetchFromSupabase();
-          }
-        } else {
-          try {
-            await fetchFromSupabase();
-          } catch (err) {
-            console.warn("Supabase fetch failed, switching to Firebase:", err);
-            switchDB('supabase');
-            await fetchFromFirebase();
-          }
-        }
-      } catch (err) {
-        console.error("Both databases failed.", err);
-      }
-
-      let populatedPosts = await Promise.all(docs.map(getPopulatedPost));
-      
-      // If we are on the first page and results are low, try fetching from 'reels' collection as well
-      if (!pageParam && populatedPosts.length < POSTS_PER_PAGE && selectedCategory === 'All' && contentTypeFilter !== 'Text') {
-        const qReels = query(collection(db, 'reels'), orderBy('created_at', 'desc'), limit(POSTS_PER_PAGE));
-        const reelsSnap = await getDocs(qReels).catch(() => ({ docs: [] }));
-        const populatedReels = await Promise.all((reelsSnap as any).docs.map(getPopulatedPost));
-        
-        populatedPosts = [...populatedPosts, ...populatedReels];
-        // Remove duplicates potentially if some were in both
-        populatedPosts = Array.from(new Map(populatedPosts.map(p => [p.id, p])).values());
-      }
-      
-      try {
-        await redis.setex(cacheKey, 600, JSON.stringify(populatedPosts));
-      } catch (e) {
-        console.warn('Redis save error', e);
-      }
-      
-      return { data: populatedPosts, lastVisible };
-    },
-    initialPageParam: undefined as any,
-    getNextPageParam: (lastPage) => {
-      return lastPage.data.length === POSTS_PER_PAGE ? lastPage.lastVisible : undefined;
-    },
-    staleTime: 1000 * 60 * 5, // 5 minutes
-  });
-
   const { data: sharedPost } = useQuery({
     queryKey: ['post', sharedPostId],
     queryFn: async () => {
       if (!sharedPostId) return null;
       const postDoc = await getDoc(doc(db, 'posts', sharedPostId));
       if (!postDoc.exists()) return null;
-      return await getPopulatedPost(postDoc);
+      const data = postDoc.data();
+      let profileData = null;
+      if (data.user_id) {
+         const userDoc = await getDoc(doc(db, 'profiles', data.user_id));
+         if (userDoc.exists()) profileData = userDoc.data();
+      }
+      return { id: postDoc.id, ...data, profiles: profileData, comments: [], likes: [] };
     },
     enabled: !!sharedPostId,
   });
 
   const [feedRandomSeed] = useState(() => globalFeedSeed);
-  const [newPostsCount, setNewPostsCount] = useState(0);
-
-  useEffect(() => {
-    // Listen for new posts globally
-    const q = query(collection(db, 'posts'), orderBy('created_at', 'desc'), limit(1));
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      snapshot.docChanges().forEach((change) => {
-        if (change.type === 'added') {
-          // Check if this post is already in our flatPosts
-          const currentPosts = queryClient.getQueryData(['posts', selectedCategory, contentTypeFilter]) as any;
-          const flatPosts = currentPosts?.pages?.flatMap((p: any) => p.data) || [];
-          if (flatPosts.length > 0 && !flatPosts.some((p: any) => p.id === change.doc.id) && change.doc.data().user_id !== currentUser?.id) {
-            queryClient.invalidateQueries({ queryKey: ['posts'] });
-          }
-        }
-      });
-    }, (error) => {
-      console.warn("posts onSnapshot in Feed error:", error);
-    });
-    return () => unsubscribe();
-  }, [selectedCategory, contentTypeFilter, currentUser?.id, queryClient]);
-
-  const handleRefreshFeed = () => {
-    queryClient.invalidateQueries({ queryKey: ['posts'] });
-    setNewPostsCount(0);
-    window.scrollTo({ top: 0, behavior: 'smooth' });
-  };
 
   const posts = useMemo(() => {
-    let flatPosts = Array.from(new Map((postsData?.pages.flatMap(p => p.data) || []).map(p => [p.id, p])).values()) as any[];
+    let flatPosts = [...feedPosts];
     
     if (sharedPost) {
       flatPosts = flatPosts.filter(p => p.id !== sharedPost.id);
@@ -354,7 +288,7 @@ const Feed: React.FC = () => {
     }
 
     return flatPosts;
-  }, [postsData?.pages, selectedCategory, contentTypeFilter, feedRandomSeed, sharedPost]);
+  }, [feedPosts, feedRandomSeed, sharedPost]);
 
   const handleObserve = useCallback((el: HTMLElement) => {
     observer.current?.observe(el);
@@ -394,17 +328,30 @@ const Feed: React.FC = () => {
     return posts.filter(p => {
       const contentStr = p.content || '';
       const nameStr = p.profiles?.display_name || '';
-      return contentStr.toLowerCase().includes(searchQuery.toLowerCase()) ||
-             nameStr.toLowerCase().includes(searchQuery.toLowerCase());
+      const matchSearch = contentStr.toLowerCase().includes(searchQuery.toLowerCase()) ||
+                          nameStr.toLowerCase().includes(searchQuery.toLowerCase());
+      
+      let matchCat = true;
+      if (selectedCategory !== 'All') {
+         matchCat = p.category === selectedCategory;
+      }
+      
+      let matchType = true;
+      if (contentTypeFilter !== 'All') {
+         const type = contentTypeFilter === 'Video' ? 'video' : contentTypeFilter.toLowerCase();
+         matchType = p.media_type === type;
+      }
+
+      return matchSearch && matchCat && matchType;
     });
-  }, [posts, searchQuery]);
+  }, [posts, searchQuery, selectedCategory, contentTypeFilter]);
 
   const loadMoreRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     const observer = new IntersectionObserver((entries) => {
-      if (entries[0].isIntersecting && hasNextPage && !isFetchingNextPage) {
-        fetchNextPage();
+      if (entries[0].isIntersecting && hasMorePosts && !postsLoading) {
+        handleLoadMore();
       }
     }, { threshold: 0.1 });
 
@@ -417,7 +364,7 @@ const Feed: React.FC = () => {
         observer.unobserve(loadMoreRef.current);
       }
     };
-  }, [hasNextPage, isFetchingNextPage, fetchNextPage]);
+  }, [hasMorePosts, postsLoading]);
 
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -570,7 +517,7 @@ const Feed: React.FC = () => {
       {/* Content Type Filter */}
       <div className="flex gap-2 overflow-x-auto pb-2 scrollbar-hide px-1">
         {(['All', 'Image', 'Text', 'Video'] as const).map(type => (
-          <button 
+          <button type="button" 
             key={type} 
             onClick={() => setContentTypeFilter(type)}
             className={`px-4 py-1.5 rounded-full text-sm font-bold whitespace-nowrap transition-all border ${contentTypeFilter === type ? 'bg-[#1877F2] text-white border-[#1877F2] shadow-md' : 'bg-white dark:bg-black text-gray-600 dark:text-gray-300 border-gray-200 dark:border-gray-800 hover:bg-gray-50 dark:hover:bg-gray-900'}`}
@@ -578,7 +525,7 @@ const Feed: React.FC = () => {
             {type}
           </button>
         ))}
-        <button 
+        <button type="button" 
           onClick={() => navigate('/reels')}
           className="px-4 py-1.5 rounded-full text-sm font-bold whitespace-nowrap transition-all border bg-white dark:bg-black text-gray-600 dark:text-gray-300 border-gray-200 dark:border-gray-800 hover:bg-gray-50 dark:hover:bg-gray-900 flex items-center gap-1"
         >
@@ -590,7 +537,7 @@ const Feed: React.FC = () => {
       {/* Category Filter Bar */}
       <div className="flex gap-2 overflow-x-auto pb-2 scrollbar-hide px-1">
         {categories.map(cat => (
-          <button 
+          <button type="button" 
             key={cat} 
             onClick={() => setSelectedCategory(cat)}
             className={`px-4 py-1.5 rounded-full text-sm font-bold whitespace-nowrap transition-all border ${selectedCategory === cat ? 'bg-[#1877F2] text-white border-[#1877F2] shadow-md' : 'bg-white dark:bg-black text-gray-600 dark:text-gray-300 border-gray-200 dark:border-gray-800 hover:bg-gray-50 dark:hover:bg-gray-900'}`}
@@ -623,14 +570,14 @@ const Feed: React.FC = () => {
                     <video src={previewUrl} className="h-full w-full object-cover" />
                   )}
                   <div className="absolute top-2 right-2 flex gap-2">
-                    <button 
+                    <button type="button" 
                       onClick={() => setShowEditor(true)}
                       className="bg-black/60 backdrop-blur-md text-white p-2 rounded-full hover:bg-black/80 transition-all shadow-sm"
                       title="Edit Media"
                     >
                       <Pencil size={14} />
                     </button>
-                    <button onClick={() => { setSelectedFile(null); setPreviewUrl(null); }} className="bg-black/60 backdrop-blur-md text-white p-2 rounded-full hover:bg-black/80 transition-all shadow-sm">
+                    <button type="button" onClick={() => { setSelectedFile(null); setPreviewUrl(null); }} className="bg-black/60 backdrop-blur-md text-white p-2 rounded-full hover:bg-black/80 transition-all shadow-sm">
                       <X size={14} />
                     </button>
                   </div>
@@ -639,13 +586,13 @@ const Feed: React.FC = () => {
                 {fileType === 'video' && (
                   <div className="flex gap-3 items-center bg-gray-50 dark:bg-gray-800/50 p-2 rounded-lg border border-gray-100 dark:border-gray-800 mt-1">
                     <input type="file" ref={thumbnailInputRef} hidden onChange={handleThumbnailSelect} accept="image/*" />
-                    <button onClick={() => thumbnailInputRef.current?.click()} className="text-xs font-bold text-[#1877F2] hover:bg-blue-50 dark:hover:bg-blue-900/30 px-3 py-1.5 rounded-md transition-colors flex items-center gap-1.5">
+                    <button type="button" onClick={() => thumbnailInputRef.current?.click()} className="text-xs font-bold text-[#1877F2] hover:bg-blue-50 dark:hover:bg-blue-900/30 px-3 py-1.5 rounded-md transition-colors flex items-center gap-1.5">
                       <LucideImage size={14} /> {thumbnailPreview ? 'Change Cover' : 'Add Cover Image'}
                     </button>
                     {thumbnailPreview && (
                       <div className="relative w-8 h-8 rounded shrink-0 shadow-sm border border-gray-200 dark:border-gray-700">
                         <img src={thumbnailPreview} className="w-full h-full object-cover rounded" />
-                        <button onClick={() => { setSelectedThumbnail(null); setThumbnailPreview(null); }} className="absolute -top-1.5 -right-1.5 bg-black text-white rounded-full shadow-md p-0.5">
+                        <button type="button" onClick={() => { setSelectedThumbnail(null); setThumbnailPreview(null); }} className="absolute -top-1.5 -right-1.5 bg-black text-white rounded-full shadow-md p-0.5">
                           <X size={10} />
                         </button>
                       </div>
@@ -665,7 +612,7 @@ const Feed: React.FC = () => {
                   className="w-full h-full border-none"
                   allowFullScreen
                 />
-                <button 
+                <button type="button" 
                   onClick={() => { setYtLink(''); }} 
                   className="absolute top-2 right-2 bg-black/60 backdrop-blur-md text-white p-2 rounded-full hover:bg-black/80 transition-all shadow-sm"
                 >
@@ -680,23 +627,23 @@ const Feed: React.FC = () => {
         <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center border-t border-gray-100 dark:border-gray-800/60 px-4 py-3 bg-gray-50/50 dark:bg-gray-900/30 gap-3">
           <div className="flex items-center gap-1 flex-wrap">
             <input type="file" ref={fileInputRef} hidden onChange={(e) => handleFileSelect(e)} accept="*/*" />
-            <button onClick={() => fileInputRef.current?.click()} className="flex items-center gap-1.5 px-3 py-1.5 hover:bg-green-50 dark:hover:bg-green-900/20 rounded-full text-green-500 transition-colors group" title="Photo/Video">
+            <button type="button" onClick={() => fileInputRef.current?.click()} className="flex items-center gap-1.5 px-3 py-1.5 hover:bg-green-50 dark:hover:bg-green-900/20 rounded-full text-green-500 transition-colors group" title="Photo/Video">
               <LucideImage size={20} className="group-hover:scale-110 transition-transform" />
               <span className="text-sm font-bold text-gray-600 dark:text-gray-400 hidden sm:inline">Media</span>
             </button>
-            <button onClick={() => setShowCamera(true)} className="flex items-center gap-1.5 px-3 py-1.5 hover:bg-blue-50 dark:hover:bg-blue-900/20 rounded-full text-blue-500 transition-colors group" title="Camera">
+            <button type="button" onClick={() => setShowCamera(true)} className="flex items-center gap-1.5 px-3 py-1.5 hover:bg-blue-50 dark:hover:bg-blue-900/20 rounded-full text-blue-500 transition-colors group" title="Camera">
               <Camera size={20} className="group-hover:scale-110 transition-transform" />
             </button>
-            <button onClick={() => setShowYoutube(!showYoutube)} className="flex items-center gap-1.5 px-3 py-1.5 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-full text-red-500 transition-colors group" title="Embed Video">
+            <button type="button" onClick={() => setShowYoutube(!showYoutube)} className="flex items-center gap-1.5 px-3 py-1.5 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-full text-red-500 transition-colors group" title="Embed Video">
               <LinkIcon size={20} className="group-hover:scale-110 transition-transform" />
             </button>
-            <button onClick={() => setShowCategoryInput(!showCategoryInput)} className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full transition-colors group ${showCategoryInput || postCategory !== 'Entertainment' ? 'bg-orange-50 dark:bg-orange-900/20 text-orange-500' : 'hover:bg-orange-50 dark:hover:bg-orange-900/20 text-orange-400'}`}>
+            <button type="button" onClick={() => setShowCategoryInput(!showCategoryInput)} className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full transition-colors group ${showCategoryInput || postCategory !== 'Entertainment' ? 'bg-orange-50 dark:bg-orange-900/20 text-orange-500' : 'hover:bg-orange-50 dark:hover:bg-orange-900/20 text-orange-400'}`}>
               <CheckCircle size={20} className="group-hover:scale-110 transition-transform" />
               <span className="text-xs font-bold whitespace-nowrap hidden sm:inline">{postCategory === 'Entertainment' && !showCategoryInput ? 'Category' : postCategory}</span>
             </button>
           </div>
           <div className="flex items-center gap-3 w-full sm:w-auto justify-between sm:justify-end">
-            <button 
+            <button type="button" 
               onClick={handleCreatePost} 
               disabled={(!newPostContent.trim() && !selectedFile && !ytLink) || isUploading} 
               className="bg-[#1877F2] text-white px-6 py-2 rounded-full font-bold text-sm tracking-wide disabled:bg-gray-300 disabled:text-gray-500 dark:disabled:bg-gray-700 dark:disabled:text-gray-400 transition-all shadow-md hover:shadow-lg disabled:shadow-none hover:scale-[1.02] active:scale-[0.98] shrink-0 ml-auto"
@@ -723,7 +670,7 @@ const Feed: React.FC = () => {
           {!showCategoryInput && (newPostContent.trim() || selectedFile || ytLink) && (
             <div className="px-4 py-2.5 border-t border-gray-100 dark:border-gray-800 bg-white dark:bg-black flex gap-2 overflow-x-auto scrollbar-hide">
               {categories.filter(c => c !== 'All').map(cat => (
-                <button 
+                <button type="button" 
                   key={cat} 
                   onClick={() => setPostCategory(cat)}
                   className={`px-3 py-1.5 rounded-full text-xs font-bold whitespace-nowrap transition-all border ${postCategory === cat ? 'bg-black dark:bg-white text-white dark:text-black border-transparent shadow-sm' : 'bg-white dark:bg-black text-gray-600 dark:text-gray-300 border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-800'}`}
@@ -757,7 +704,7 @@ const Feed: React.FC = () => {
             <Link to="/reels" className="text-[#1877F2] text-xs font-bold hover:underline">View All</Link>
           </div>
           <div className="flex gap-3 overflow-x-auto pb-2 scrollbar-hide">
-            {reels.filter(r => showAllReels || (r.source_type === 'local' || (r.media_url && !r.media_url.includes('youtube.com') && !r.media_url.includes('facebook.com') && !r.media_url.includes('/embed/')))).map(reel => {
+            {reels.slice(0, 5).map(reel => {
               const ytId = reel.source_type === 'youtube' ? reel.youtube_id : (reel.media_url?.match(/(?:youtu\.be\/|youtube\.com\/(?:embed\/|v\/|watch\?v=|watch\?.+&v=))([\w-]{11})/) || [])[1];
               const isYoutube = !!ytId;
 
@@ -791,7 +738,7 @@ const Feed: React.FC = () => {
       {postsError ? (
         <div className="flex flex-col items-center justify-center p-20 gap-4">
           <p className="font-bold text-red-500">Error loading posts: {postsError.message}</p>
-          <button onClick={() => window.location.reload()} className="bg-[#1877F2] text-white px-4 py-2 rounded-lg font-bold">Retry</button>
+          <button type="button" onClick={() => window.location.reload()} className="bg-[#1877F2] text-white px-4 py-2 rounded-lg font-bold">Retry</button>
         </div>
       ) : postsLoading && posts.length === 0 ? (
         <div className="flex flex-col gap-4">
@@ -851,12 +798,12 @@ const Feed: React.FC = () => {
               </motion.div>
             ))}
           </AnimatePresence>
-          {hasNextPage && (
+          {hasMorePosts && (
             <div ref={loadMoreRef} className="py-4 text-center font-bold text-gray-500">
-              {isFetchingNextPage ? 'Loading more...' : 'Loading...'}
+              {postsLoading ? 'Loading more...' : 'Loading...'}
             </div>
           )}
-          {!hasNextPage && posts.length > 0 && (
+          {!hasMorePosts && posts.length > 0 && (
             <p className="text-center text-gray-400 font-bold py-4">You're all caught up!</p>
           )}
           {!postsLoading && posts.length === 0 && uploads.filter(u => u.type === 'post').length === 0 && (

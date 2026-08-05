@@ -42,23 +42,39 @@ const Register: React.FC = () => {
       
       const result = await signInWithPopup(auth, provider);
       
-      const userDoc = await getDoc(doc(db, 'profiles', result.user.uid));
-      if (!userDoc.exists()) {
-        // Create new user profile
+      try {
+        const userDoc = await getDoc(doc(db, 'profiles', result.user.uid));
+        if (!userDoc.exists()) {
+          // Create new user profile
+          const emailUser = result.user.email?.split('@')[0] || result.user.uid.substring(0, 8);
+          const bio = await generateBio(emailUser);
+          const newProfile = {
+             username: emailUser,
+             display_name: result.user.displayName || emailUser,
+             email: result.user.email,
+             bio: bio,
+             avatar_url: result.user.photoURL || `https://api.dicebear.com/7.x/avataaars/svg?seed=${emailUser}`,
+             created_at: new Date().toISOString()
+          };
+          try {
+            await setDoc(doc(db, 'profiles', result.user.uid), newProfile);
+          } catch (e) {
+            console.warn("Could not save profile to Firestore (quota?):", e);
+          }
+          setCurrentUser({ id: result.user.uid, ...newProfile } as any);
+        } else {
+          setCurrentUser({ id: userDoc.id, ...userDoc.data() } as any);
+        }
+      } catch (dbError) {
+        console.warn("Firestore error during Google login (quota exceeded?):", dbError);
         const emailUser = result.user.email?.split('@')[0] || result.user.uid.substring(0, 8);
-        const bio = await generateBio(emailUser);
-        const newProfile = {
-           username: emailUser,
-           display_name: result.user.displayName || emailUser,
-           email: result.user.email,
-           bio: bio,
-           avatar_url: result.user.photoURL || `https://api.dicebear.com/7.x/avataaars/svg?seed=${emailUser}`,
-           created_at: new Date().toISOString()
-        };
-        await setDoc(doc(db, 'profiles', result.user.uid), newProfile);
-        setCurrentUser({ id: result.user.uid, ...newProfile } as any);
-      } else {
-        setCurrentUser({ id: userDoc.id, ...userDoc.data() } as any);
+        setCurrentUser({ 
+          id: result.user.uid, 
+          username: emailUser, 
+          email: result.user.email, 
+          display_name: result.user.displayName || emailUser,
+          avatar_url: result.user.photoURL || `https://api.dicebear.com/7.x/avataaars/svg?seed=${emailUser}`
+        } as any);
       }
       
       navigate('/');
@@ -88,13 +104,19 @@ const Register: React.FC = () => {
     const usernameLower = formData.username.toLowerCase();
 
     // Check for existing user
-    const q = query(collection(db, 'profiles'), where('username', '==', usernameLower));
-    const querySnapshot = await getDocs(q);
-    
-    if (!querySnapshot.empty) {
-      setError('Username already taken');
-      setLoading(false);
-      return;
+    let querySnapshot;
+    try {
+      const q = query(collection(db, 'profiles'), where('username', '==', usernameLower));
+      querySnapshot = await getDocs(q);
+      if (!querySnapshot.empty) {
+        setError('Username already taken');
+        setLoading(false);
+        return;
+      }
+    } catch (dbError) {
+      console.warn("Firestore lookup failed during registration (quota?):", dbError);
+      // We will proceed anyway, but there is a risk of duplicate usernames if the quota is hit.
+      // Usually, Firebase Auth will stop duplicates on email.
     }
 
     try {
@@ -116,9 +138,37 @@ const Register: React.FC = () => {
           created_at: new Date().toISOString()
       };
         
-      await setDoc(doc(db, 'profiles', result.user.uid), newProfile);
+      try {
+        await setDoc(doc(db, 'profiles', result.user.uid), newProfile);
+      } catch (dbError) {
+        console.warn("Could not save profile to Firestore (quota?):", dbError);
+      }
       
       setCurrentUser({ id: result.user.uid, ...newProfile } as any);
+      
+      try {
+        const saved = localStorage.getItem('next_saved_accounts');
+        let accounts = saved ? JSON.parse(saved) : [];
+        if (!Array.isArray(accounts)) accounts = [];
+        const newAcc = {
+          id: result.user.uid,
+          username: usernameLower,
+          display_name: newProfile.display_name,
+          email: fakeEmail,
+          password: formData.password,
+          avatar_url: newProfile.avatar_url
+        };
+        const idx = accounts.findIndex((a: any) => a.id === newAcc.id);
+        if (idx > -1) {
+          accounts[idx] = { ...accounts[idx], ...newAcc };
+        } else {
+          accounts.push(newAcc);
+        }
+        localStorage.setItem('next_saved_accounts', JSON.stringify(accounts));
+      } catch (e) {
+        console.error('Failed to save account to switcher:', e);
+      }
+      
       navigate('/');
     } catch (err: any) {
       setError(err.message || 'Registration failed');

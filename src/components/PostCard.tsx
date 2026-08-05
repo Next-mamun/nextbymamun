@@ -39,6 +39,34 @@ const PostCard = React.memo(({ post, onObserve, isProfileView = false }: PostCar
   
   const cardRef = useRef<HTMLDivElement>(null);
 
+    useEffect(() => {
+    let unmounted = false;
+    const fetchStats = async () => {
+      try {
+        if (!post.likes || post.likes.length === 0) {
+          const lSnap = await getDocs(query(collection(db, 'likes'), where('post_id', '==', post.id)));
+          if (!unmounted) {
+            const likesData = lSnap.docs.map(d => d.data());
+            setIsLiked(likesData.some(l => l.user_id === currentUser?.id));
+            setLikesCount(likesData.length);
+          }
+        }
+        if (!post.comments || post.comments.length === 0) {
+          const cSnap = await getDocs(query(collection(db, 'comments'), where('post_id', '==', post.id)));
+          if (!unmounted) {
+            setLocalComments(await Promise.all(cSnap.docs.map(async cd => {
+              const cdData = cd.data();
+              const uDoc = await getDoc(doc(db, 'profiles', cdData.user_id));
+              return { id: cd.id, ...cdData, profiles: uDoc.exists() ? uDoc.data() : null };
+            })));
+          }
+        }
+      } catch(e) {}
+    };
+    fetchStats();
+    return () => { unmounted = true; };
+  }, [post.id, currentUser?.id]);
+
   useEffect(() => {
     if (cardRef.current && onObserve) {
       onObserve(cardRef.current);
@@ -60,8 +88,17 @@ const PostCard = React.memo(({ post, onObserve, isProfileView = false }: PostCar
     // Optimistic update
     const newIsLiked = !isLiked;
     setIsLiked(newIsLiked);
-    setLikesCount(prev => newIsLiked ? prev + 1 : prev - 1);
+    const newLikesCount = newIsLiked ? likesCount + 1 : likesCount - 1;
+    setLikesCount(newLikesCount);
     
+    // Update global store
+    const { updatePostOptimistic } = (await import('@/store/useGlobalStore')).useGlobalStore.getState();
+    updatePostOptimistic(post.id, { 
+      likes: newIsLiked 
+        ? [...(post.likes || []), { user_id: currentUser.id }] 
+        : (post.likes || []).filter((l: any) => l.user_id !== currentUser.id)
+    });
+
     if (newIsLiked) {
        playInteractionSound(soundEffects);
        triggerHaptic(hapticFeedback);

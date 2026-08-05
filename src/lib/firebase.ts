@@ -1,6 +1,6 @@
 import { initializeApp } from 'firebase/app';
 import { getAuth } from 'firebase/auth';
-import { getFirestore, enableMultiTabIndexedDbPersistence } from 'firebase/firestore';
+import { initializeFirestore, enableMultiTabIndexedDbPersistence } from 'firebase/firestore';
 import { getStorage } from 'firebase/storage';
 import { getMessaging, isSupported } from 'firebase/messaging';
 
@@ -18,7 +18,9 @@ const firebaseConfig = {
 const databaseId = (firebaseConfig as any).firestoreDatabaseId || '(default)';
 
 export const app = initializeApp(firebaseConfig);
-export const db = getFirestore(app, databaseId);
+export const db = initializeFirestore(app, {
+  experimentalAutoDetectLongPolling: true,
+}, databaseId);
 
 // Enable offline persistence
 if (typeof window !== 'undefined') {

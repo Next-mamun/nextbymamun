@@ -1,13 +1,12 @@
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { Link, useNavigate, useLocation } from 'react-router-dom';
 import { Home, Users, MessageCircle, Bell, User, LogOut, Menu, BookOpen } from 'lucide-react';
 import { useAuth } from '@/contexts/AuthContext';
-import { collection, query, where, orderBy, limit, getDocs, doc, getDoc, updateDoc, deleteDoc, onSnapshot } from 'firebase/firestore';
+import { doc, getDoc, updateDoc, deleteDoc } from 'firebase/firestore';
 import { db } from '../lib/firebase';
 import { VerifiedBadge } from './VerifiedBadge';
-
-import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useGlobalStore } from '@/store/useGlobalStore';
 
 const Navbar: React.FC = () => {
   const { currentUser, logout } = useAuth();
@@ -15,136 +14,104 @@ const Navbar: React.FC = () => {
   const [showNotifications, setShowNotifications] = useState(false);
   const navigate = useNavigate();
   const location = useLocation();
-  const queryClient = useQueryClient();
 
-  const { data: notifications = [] } = useQuery({
-    queryKey: ['notifications_firestore', currentUser?.id],
-    queryFn: async () => {
-      if (!currentUser?.id) return [];
-      
-      // Fetch regular notifications
-      const qNotifs = query(
-        collection(db, 'notifications'), 
-        where('user_id', '==', currentUser.id),
-        orderBy('created_at', 'desc'),
-        limit(10)
-      );
-      const notifsSnap = await getDocs(qNotifs);
-      const validNotifs = notifsSnap.docs.map(d => ({ id: d.id, ...d.data() } as any));
-        
-      // Fetch unread messages
-      const qMsgs = query(
-        collection(db, 'messages'),
-        where('receiver_id', '==', currentUser.id),
-        where('is_read', '==', false),
-        orderBy('created_at', 'desc'),
-        limit(15)
-      );
-      const msgsSnap = await getDocs(qMsgs);
-      const validMsgs = msgsSnap.docs
-        .map(d => ({ id: d.id, ...d.data() } as any))
-        .filter(msg => !msg.deleted_for_everyone && !(msg.deleted_for || []).includes(currentUser.id));
-      
-      const msgSenders = new Set();
-      const msgNotifs: any[] = [];
-      
-      validMsgs.forEach(msg => {
-        const clearedAt = parseInt(localStorage.getItem('inbox_cleared_at') || '0', 10);
-        const msgTime = typeof msg.created_at === 'string' ? new Date(msg.created_at).getTime() : msg.created_at?.toMillis ? msg.created_at.toMillis() : Date.now();
-        if (msgTime <= clearedAt) return;
+  const storeNotifications = useGlobalStore((state) => state.notifications);
+  const storeMessages = useGlobalStore((state) => state.messages);
+  const [profilesCache, setProfilesCache] = useState<Record<string, any>>({});
 
-        if (!msgSenders.has(msg.sender_id)) {
-          msgSenders.add(msg.sender_id);
-          msgNotifs.push({
-            id: `msg-${msg.id}`,
-            type: 'message',
-            sender_id: msg.sender_id,
-            created_at: msg.created_at,
-            is_read: false,
-            real_msg_id: msg.id
-          });
-        }
-      });
- 
-      const combined = [...validNotifs, ...msgNotifs]
-        .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
-        .slice(0, 15);
- 
-      const senderIds = [...new Set(combined.map(n => n.sender_id).filter(Boolean))];
-      let profileMap: any = {};
-      
-      if (senderIds.length > 0) {
-        const profiles = await Promise.all(senderIds.map(async id => {
-           const d = await getDoc(doc(db, 'profiles', id));
-           return d.exists() ? { id: d.id, ...d.data() } : null;
-        })).then(res => res.filter(Boolean));
-          
-        profileMap = profiles.reduce((acc: any, p: any) => {
-          acc[p.id] = p;
-          return acc;
-        }, {});
+  const notifications = useMemo(() => {
+    if (!currentUser?.id) return [];
+    
+    const clearedAt = parseInt(localStorage.getItem('inbox_cleared_at') || '0', 10);
+    const validMsgs = storeMessages.filter(msg => {
+      if (msg.is_read !== false) return false;
+      if (msg.deleted_for_everyone || (msg.deleted_for || []).includes(currentUser.id)) return false;
+      const msgTime = typeof msg.created_at === 'string' ? new Date(msg.created_at).getTime() : msg.created_at?.toMillis ? msg.created_at.toMillis() : Date.now();
+      return msgTime > clearedAt;
+    });
+
+    const msgSenders = new Set();
+    const msgNotifs: any[] = [];
+    
+    validMsgs.forEach(msg => {
+      if (!msgSenders.has(msg.sender_id)) {
+        msgSenders.add(msg.sender_id);
+        msgNotifs.push({
+          id: `msg-${msg.id}`,
+          type: 'message',
+          sender_id: msg.sender_id,
+          created_at: msg.created_at,
+          is_read: false,
+          real_msg_id: msg.id
+        });
       }
+    });
+
+    const combined = [...storeNotifications, ...msgNotifs]
+      .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
+      .slice(0, 15);
+
+    const seenIds = JSON.parse(localStorage.getItem('seen_notifications') || '[]');
+
+    return combined.map(n => {
+      const sender = profilesCache[n.sender_id] || null;
+      let text = `${sender?.display_name || 'Someone'} interacted with you.`;
+      let link = `/profile/${currentUser.username}`;
       
-      const seenIds = JSON.parse(localStorage.getItem('seen_notifications') || '[]');
-      return combined.map(n => {
-        const sender = profileMap[n.sender_id] || null;
-        let text = `${sender?.display_name || 'Someone'} interacted with you.`;
-        let link = `/profile/${currentUser.username}`;
-        
-        if (n.type === 'friend_request') {
-          text = `${sender?.display_name || 'Someone'} sent you a friend request.`;
-          link = '/friends';
-        } else if (n.type === 'friend_accept') {
-          text = `${sender?.display_name || 'Someone'} accepted your friend request.`;
-          link = '/friends';
-        } else if (n.type === 'message') {
-          text = `${sender?.display_name || 'Someone'} sent you a message.`;
-          link = '/messages';
-        } else if (n.type === 'like') {
-          text = `${sender?.display_name || 'Someone'} liked your post.`;
-        } else if (n.type === 'comment') {
-          text = `${sender?.display_name || 'Someone'} commented on your post.`;
-        }
- 
-        return {
-          id: n.id,
-          type: n.type,
-          text,
-          avatar: sender?.avatar_url,
-          link,
-          state: n.type === 'message' ? { userId: n.sender_id } : undefined,
-          created_at: n.created_at,
-          is_seen: seenIds.includes(n.id) || !!n.is_read
-        };
-      });
-    },
-    enabled: !!currentUser?.id,
-    staleTime: 1000 * 60, // 1 minute
-  });
- 
+      if (n.type === 'friend_request') {
+        text = `${sender?.display_name || 'Someone'} sent you a friend request.`;
+        link = '/friends';
+      } else if (n.type === 'friend_accept') {
+        text = `${sender?.display_name || 'Someone'} accepted your friend request.`;
+        link = '/friends';
+      } else if (n.type === 'message') {
+        text = `${sender?.display_name || 'Someone'} sent you a message.`;
+        link = '/messages';
+      } else if (n.type === 'like') {
+        text = `${sender?.display_name || 'Someone'} liked your post.`;
+      } else if (n.type === 'comment') {
+        text = `${sender?.display_name || 'Someone'} commented on your post.`;
+      }
+
+      return {
+        id: n.id,
+        type: n.type,
+        text,
+        avatar: sender?.avatar_url,
+        link,
+        state: n.type === 'message' ? { userId: n.sender_id } : undefined,
+        created_at: n.created_at,
+        is_seen: seenIds.includes(n.id) || !!n.is_read
+      };
+    });
+  }, [currentUser, storeNotifications, storeMessages, profilesCache]);
+
+  // Fetch unknown profiles
   useEffect(() => {
     if (!currentUser) return;
- 
-    const qNotifs = query(collection(db, 'notifications'), where('user_id', '==', currentUser.id));
-    const unsubNotifs = onSnapshot(qNotifs, () => {
-      queryClient.invalidateQueries({ queryKey: ['notifications_firestore', currentUser.id] });
-    }, (error) => {
-      console.warn("notifications onSnapshot in Navbar error:", error);
-    });
- 
-    const qMsgs = query(collection(db, 'messages'), where('receiver_id', '==', currentUser.id), where('is_read', '==', false));
-    const unsubMsgs = onSnapshot(qMsgs, () => {
-      queryClient.invalidateQueries({ queryKey: ['notifications_firestore', currentUser.id] });
-    }, (error) => {
-      console.warn("messages onSnapshot in Navbar error:", error);
-    });
- 
-    return () => { 
-      unsubNotifs();
-      unsubMsgs();
+    const fetchMissingProfiles = async () => {
+      const combined = [...storeNotifications, ...storeMessages.filter(m => m.is_read === false)];
+      const senderIds = [...new Set(combined.map(n => n.sender_id).filter(Boolean))];
+      
+      const missingIds = senderIds.filter(id => !profilesCache[id]);
+      if (missingIds.length === 0) return;
+
+      const newProfiles = await Promise.all(missingIds.map(async id => {
+         const d = await getDoc(doc(db, 'profiles', id));
+         return d.exists() ? { id: d.id, ...d.data() } : null;
+      })).then(res => res.filter(Boolean));
+        
+      if (newProfiles.length > 0) {
+        setProfilesCache(prev => {
+          const next = { ...prev };
+          newProfiles.forEach((p: any) => { next[p.id] = p; });
+          return next;
+        });
+      }
     };
-  }, [currentUser, queryClient]);
- 
+    fetchMissingProfiles();
+  }, [storeNotifications, storeMessages, currentUser, profilesCache]);
+
   const handleNotificationsClick = async () => {
     const opening = !showNotifications;
     setShowNotifications(opening);
@@ -155,19 +122,12 @@ const Navbar: React.FC = () => {
       const newSeenIds = Array.from(new Set([...seenIds, ...notifications.map((n: any) => n.id)]));
       localStorage.setItem('seen_notifications', JSON.stringify(newSeenIds));
       localStorage.setItem('inbox_cleared_at', Date.now().toString());
- 
-      if (currentUser?.id) {
-         queryClient.setQueryData(['notifications_firestore', currentUser.id], (oldData: any) => {
-            if (!oldData) return oldData;
-            return oldData.map((n: any) => ({ ...n, is_seen: true }));
-         });
-         queryClient.setQueryData(['totalUnread'], 0);
-      }
-      
+
       try {
-        const qUnread = query(collection(db, 'notifications'), where('user_id', '==', currentUser?.id), where('is_read', '==', false));
-        const snap = await getDocs(qUnread);
-        snap.docs.forEach(d => updateDoc(doc(db, 'notifications', d.id), { is_read: true }).catch(() => {}));
+        const unreadIds = storeNotifications.filter(n => !n.is_read).map(n => n.id);
+        unreadIds.forEach(id => {
+          updateDoc(doc(db, 'notifications', id), { is_read: true }).catch(() => {});
+        });
       } catch (e) {
         console.error(e);
       }
@@ -179,7 +139,6 @@ const Navbar: React.FC = () => {
     if (!notif.id.toString().startsWith('msg-')) {
       try { await deleteDoc(doc(db, 'notifications', notif.id)); } catch(e) {}
     }
-    queryClient.invalidateQueries({ queryKey: ['notifications_firestore', currentUser?.id] });
   };
 
   return (

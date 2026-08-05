@@ -2,42 +2,29 @@ import React, { useMemo } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import { Home, PlusSquare, MessageCircle, User, Users, BookOpen } from 'lucide-react';
 import { useAuth, useTheme } from '@/contexts/AuthContext';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { db } from '../lib/firebase';
-import { collection, query, where, getDocs } from 'firebase/firestore';
+import { useGlobalStore } from '@/store/useGlobalStore';
 
 const BottomNav: React.FC = () => {
   const location = useLocation();
   const { currentUser } = useAuth();
   const { bottomBarSize, iconColor, darkMode } = useTheme();
-  const queryClient = useQueryClient();
   const isActive = (path: string) => location.pathname === path;
+  
+  const messages = useGlobalStore((state) => state.messages);
 
-  const { data: totalUnread = 0 } = useQuery({
-    queryKey: ['totalUnread'],
-    queryFn: async () => {
-      if (!currentUser) return 0;
-      const q = query(
-        collection(db, 'messages'), 
-        where('receiver_id', '==', currentUser.id),
-        where('is_read', '==', false)
-      );
-      const snap = await getDocs(q);
-      
-      const clearedAt = parseInt(localStorage.getItem('inbox_cleared_at') || '0', 10);
-      const validDocs = snap.docs.filter(doc => {
-        const data = doc.data();
-        if (data.deleted_for_everyone || (data.deleted_for || []).includes(currentUser.id)) return false;
-        if (!data.created_at) return true; // optimistic
-        const msgTime = typeof data.created_at === 'string' ? new Date(data.created_at).getTime() : data.created_at.toMillis ? data.created_at.toMillis() : Date.now();
-        return msgTime > clearedAt;
-      });
-      
-      const uniqueSenders = new Set(validDocs.map(doc => doc.data().sender_id));
-      return uniqueSenders.size;
-    },
-    enabled: !!currentUser,
-  });
+  const totalUnread = useMemo(() => {
+    if (!currentUser) return 0;
+    const clearedAt = parseInt(localStorage.getItem('inbox_cleared_at') || '0', 10);
+    const validMsgs = messages.filter(msg => {
+      if (msg.is_read !== false) return false;
+      if (msg.deleted_for_everyone || (msg.deleted_for || []).includes(currentUser.id)) return false;
+      const msgTime = typeof msg.created_at === 'string' ? new Date(msg.created_at).getTime() : msg.created_at?.toMillis ? msg.created_at.toMillis() : Date.now();
+      return msgTime > clearedAt;
+    });
+    
+    const uniqueSenders = new Set(validMsgs.map(msg => msg.sender_id));
+    return uniqueSenders.size;
+  }, [messages, currentUser]);
 
   const barHeightClass = useMemo(() => {
     switch(bottomBarSize) {
@@ -87,7 +74,6 @@ const BottomNav: React.FC = () => {
         style={{ color: isActive('/messages') ? activeColor : inactiveColor }}
         onClick={() => {
           localStorage.setItem('inbox_cleared_at', Date.now().toString());
-          queryClient.setQueryData(['totalUnread'], 0);
         }}
       >
         <div className="relative">

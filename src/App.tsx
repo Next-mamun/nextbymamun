@@ -41,6 +41,7 @@ const Login = lazy(() => import('@/pages/Login'));
 const Register = lazy(() => import('@/pages/Register'));
 const Settings = lazy(() => import('@/pages/Settings'));
 
+import { useGlobalStore } from '@/store/useGlobalStore';
 import { AuthContext, AuthContextType, ThemeContext, ThemeContextType, useAuth, useTheme } from '@/contexts/AuthContext';
 
 const AppLayout: React.FC = () => {
@@ -464,14 +465,52 @@ const App: React.FC = () => {
   };
 
   const logout = async () => {
-    await signOut(auth);
-    localStorage.removeItem('next_media_user');
+    try {
+      await signOut(auth);
+    } catch (e) {
+      console.error(e);
+    }
+    
+    // Clear React Query cache
+    const qc = (window as any).queryClient;
+    if (qc) {
+      qc.clear();
+    }
+
+    // Clear IndexedDB completely to remove all cached query data
+    try {
+      const idb = await import('idb-keyval');
+      await idb.clear();
+    } catch (err) {
+      console.error("Error clearing idb:", err);
+    }
+
+    // Preserve critical settings and saved accounts
+    const savedAccounts = localStorage.getItem('next_saved_accounts');
+    const theme = localStorage.getItem('next_media_theme');
+    const desktop = localStorage.getItem('next_media_desktop');
+    const nexto = localStorage.getItem('next_media_nexto');
+    const keyboardHeight = localStorage.getItem('saved_keyboard_height');
+
+    // Clear local storage and session storage
+    localStorage.clear();
+    sessionStorage.clear();
+
+    // Restore preserved values
+    if (savedAccounts) localStorage.setItem('next_saved_accounts', savedAccounts);
+    if (theme) localStorage.setItem('next_media_theme', theme);
+    if (desktop) localStorage.setItem('next_media_desktop', desktop);
+    if (nexto) localStorage.setItem('next_media_nexto', nexto);
+    if (keyboardHeight) localStorage.setItem('saved_keyboard_height', keyboardHeight);
+
     setCurrentUser(null);
+    window.location.href = '/login';
   };
 
   useEffect(() => {
     if (currentUser) {
       localStorage.setItem('next_media_user', JSON.stringify(currentUser));
+      useGlobalStore.getState().setCurrentUser(currentUser);
       
       // Request notification on explicit user gesture
       if (typeof window !== 'undefined' && 'Notification' in window) {
@@ -494,78 +533,15 @@ const App: React.FC = () => {
         }
       }
 
-      // Firebase Real-time Listeners for Notifications
-      if (!auth.currentUser) return;
-
-      const qMessages = query(collection(db, 'messages'), where('receiver_id', '==', currentUser.id), where('is_read', '==', false));
-      const unsubMessages = onSnapshot(qMessages, (snapshot) => {
-          // Handle message notifications
-          const queryClient = (window as any).queryClient;
-          if (queryClient) {
-            queryClient.invalidateQueries({ queryKey: ['totalUnread'] });
-            queryClient.invalidateQueries({ queryKey: ['unreadCounts'] });
-            queryClient.invalidateQueries({ queryKey: ['contacts'] });
-            queryClient.invalidateQueries({ queryKey: ['notifications', currentUser.id] });
-          }
-          
-          snapshot.docChanges().forEach(async (change) => {
-             if (change.type === 'added') {
-               const data = change.doc.data();
-               if (data.deleted_for_everyone || (data.deleted_for || []).includes(currentUser?.id)) return;
-               const isAtMessages = window.location.pathname.startsWith('/messages');
-               if (isAtMessages) return;
-               
-               const senderDoc = await getDoc(doc(db, 'profiles', data.sender_id));
-               const sender = senderDoc.data();
-               
-               let messageContent = data.content;
-               if (typeof data.content === 'string') {
-                 if (data.content.includes('"JSON_PAYLOAD"')) {
-                   try {
-                     const obj = JSON.parse(data.content);
-                     messageContent = obj.text || (data.media_url ? 'Sent an attachment' : 'New message');
-                   } catch(e) {}
-                 } else if (data.content.startsWith('{')) {
-                   try {
-                     const obj = JSON.parse(data.content);
-                     if (obj.text) messageContent = obj.text;
-                   } catch(e) {}
-                 }
-               }
-
-               const isMuted = localStorage.getItem(`muted_${data.sender_id}`) === 'true';
-
-               if (localStorage.getItem('next_media_sound') === 'true' && !isMuted) {
-                 try {
-                   const AudioContext = window.AudioContext || (window as any).webkitAudioContext;
-                   const ctx = new AudioContext();
-                   const osc = ctx.createOscillator();
-                   const gain = ctx.createGain();
-                   osc.connect(gain);
-                   gain.connect(ctx.destination);
-                   osc.type = 'sine';
-                   osc.frequency.setValueAtTime(800, ctx.currentTime);
-                   gain.gain.setValueAtTime(0.1, ctx.currentTime);
-                   osc.start();
-                   gain.gain.exponentialRampToValueAtTime(0.00001, ctx.currentTime + 0.3);
-                   osc.stop(ctx.currentTime + 0.3);
-                 } catch(e) { console.warn('Audio play blocked', e); }
-               }
-
-               if (!isMuted) {
-                 toast(`New message from ${sender?.display_name || 'Someone'}`, {
-                   description: messageContent,
-                   id: 'message-' + data.sender_id
-                 });
-               }
-             }
-          });
-      }, (error) => {
-         console.warn("unread messages onSnapshot in App error:", error);
-      });
+      // Initialize global listeners via Zustand Store
+      const unsubMessages = useGlobalStore.getState().initMessageListener(currentUser.id);
+      const unsubNotifs = useGlobalStore.getState().initNotificationListener(currentUser.id);
 
       return () => {
-        unsubMessages();
+        // We usually don't unsubscribe on unmount of App unless the user logs out, 
+        // but here we can clean up if needed.
+        // unsubMessages();
+        // unsubNotifs();
       };
     }
   }, [currentUser]);
@@ -627,10 +603,16 @@ const App: React.FC = () => {
       let attempts = 0;
       
       while (attempts < 10) {
-        const userDoc = await getDoc(doc(db, 'profiles', userId));
-        if (userDoc.exists()) {
-           data = { id: userDoc.id, ...userDoc.data() };
-           break;
+        try {
+          const userDoc = await getDoc(doc(db, 'profiles', userId));
+          if (userDoc.exists()) {
+             data = { id: userDoc.id, ...userDoc.data() };
+             break;
+          }
+        } catch (dbErr) {
+          console.warn("Firestore error during profile fetch (quota exceeded?):", dbErr);
+          // If we hit a quota error or network error, break the retry loop and fall back
+          break;
         }
         await new Promise(resolve => setTimeout(resolve, 1000));
         attempts++;
@@ -640,10 +622,33 @@ const App: React.FC = () => {
         setCurrentUser(data as User);
         localStorage.setItem('next_media_user', JSON.stringify(data));
       } else {
-        console.warn("Profile not found after retries. This is expected during registration.");
+        console.warn("Profile not found or DB unreachable. Falling back to local/auth data.");
+        const saved = localStorage.getItem('next_media_user');
+        if (saved) {
+          const parsedSaved = JSON.parse(saved);
+          if (parsedSaved.id === userId) {
+            setCurrentUser(parsedSaved);
+            return;
+          }
+        }
+        // If no local storage matches, create a mock user from Firebase Auth
+        if (auth.currentUser) {
+          const emailUser = auth.currentUser.email?.split('@')[0] || userId.substring(0, 8);
+          setCurrentUser({
+            id: userId,
+            username: emailUser,
+            email: auth.currentUser.email,
+            display_name: auth.currentUser.displayName || emailUser,
+            avatar_url: auth.currentUser.photoURL || `https://api.dicebear.com/7.x/avataaars/svg?seed=${emailUser}`,
+            created_at: new Date().toISOString()
+          } as User);
+        }
       }
     } catch (err) {
       console.error("Failed to fetch user profile:", err);
+      // Ensure we don't block them out
+      const saved = localStorage.getItem('next_media_user');
+      if (saved) setCurrentUser(JSON.parse(saved));
     } finally {
       setLoadingAuth(false);
     }

@@ -53,32 +53,42 @@ const Reels: React.FC = () => {
     return () => window.removeEventListener('message', handleMessage);
   }, []);
 
+  const profileCache = new Map();
   const getProfile = async (userId: string) => {
      if (!userId) return null;
+     if (profileCache.has(userId)) return profileCache.get(userId);
      const userDoc = await getDoc(doc(db, 'profiles', userId));
-     return userDoc.exists() ? userDoc.data() : null;
+     const data = userDoc.exists() ? userDoc.data() : null;
+     profileCache.set(userId, data);
+     return data;
   };
 
   const getPopulatedReel = async (d: any) => {
-    const data = d.data ? d.data() : d;
-    const id = d.id;
-    const profiles = await getProfile(data.user_id);
-    
-    // Fetch comments
-    const commentsQuery = query(collection(db, 'comments'), where('post_id', '==', id));
-    const commentsSnap = await getDocs(commentsQuery);
-    const comments = await Promise.all(commentsSnap.docs.map(async cd => {
-       const cdData = cd.data();
-       const commentProfile = await getProfile(cdData.user_id);
-       return { id: cd.id, ...cdData, profiles: commentProfile };
-    }));
+    try {
+      const data = d.data ? d.data() : d;
+      const id = d.id;
+      const profiles = await getProfile(data.user_id);
+      
+      // Fetch comments
+      const commentsQuery = query(collection(db, 'comments'), where('post_id', '==', id));
+      const commentsSnap = await getDocs(commentsQuery).catch(() => ({ docs: [] }));
+      const comments = await Promise.all((commentsSnap as any).docs.map(async (cd: any) => {
+         const cdData = cd.data();
+         const commentProfile = await getProfile(cdData.user_id);
+         return { id: cd.id, ...cdData, profiles: commentProfile };
+      }));
 
-    // Fetch likes
-    const likesQuery = query(collection(db, 'likes'), where('post_id', '==', id));
-    const likesSnap = await getDocs(likesQuery);
-    const likes = likesSnap.docs.map(ld => ({ id: ld.id, ...ld.data() }));
+      // Fetch likes
+      const likesQuery = query(collection(db, 'likes'), where('post_id', '==', id));
+      const likesSnap = await getDocs(likesQuery).catch(() => ({ docs: [] }));
+      const likes = (likesSnap as any).docs.map((ld: any) => ({ id: ld.id, ...ld.data() }));
 
-    return { id, ...data, profiles, comments, likes };
+      return { id, ...data, profiles, comments, likes };
+    } catch (err) {
+      console.error("Error populating reel:", err);
+      const data = d.data ? d.data() : d;
+      return { id: d.id, ...data, profiles: null, comments: [], likes: [] };
+    }
   };
 
   const { data: sharedReel } = useQuery({
@@ -102,9 +112,9 @@ const Reels: React.FC = () => {
     isFetchingNextPage,
     isLoading: reelsLoading,
   } = useInfiniteQuery({
-    queryKey: ['reels_infinite_firestore_v2'],
+    queryKey: ['reels_infinite_firestore_v3'],
     queryFn: async ({ pageParam = undefined }: { pageParam: any }) => {
-      const cacheKey = `reels_page_firestore_v2_${pageParam ? pageParam.id : 0}`;
+      const cacheKey = `reels_page_firestore_v3_${pageParam ? (pageParam.id || pageParam.doc?.id) : 0}`;
       
       // Attempt to load from localStorage first in case of offline
       if (!navigator.onLine) {
@@ -119,42 +129,68 @@ const Reels: React.FC = () => {
         if (cached) {
           const data = typeof cached === 'string' ? JSON.parse(cached) : cached;
           try { localStorage.setItem(cacheKey, JSON.stringify(data)); } catch(e) {}
-          return { data, lastVisible: null };
+          // Do not return early from cache if we want accurate pagination, 
+          // or at least we need to be careful with lastVisible.
+          // For now, let's bypass cache to ensure we fetch fresh data and cursors.
         }
       } catch (e) {
         console.warn('Redis cache error', e);
       }
 
-      let q = query(
-        collection(db, 'posts'), 
-        where('media_type', '==', 'video'),
-        orderBy('created_at', 'desc'), 
-        limit(REELS_PER_PAGE)
-      );
-      
-      if (pageParam) {
-        q = query(q, startAfter(pageParam));
+      let data: any[] = [];
+      let lastVisible: any = null;
+      let isLegacy = pageParam?.isLegacy || false;
+      let actualDoc = pageParam?.doc || pageParam;
+
+      if (!isLegacy) {
+        try {
+          let q = query(
+            collection(db, 'posts'), 
+            where('media_type', '==', 'video'),
+            orderBy('created_at', 'desc'), 
+            limit(REELS_PER_PAGE)
+          );
+          if (actualDoc) {
+            q = query(q, startAfter(actualDoc));
+          }
+          const snapshot = await getDocs(q);
+          data = await Promise.all(snapshot.docs.map(getPopulatedReel));
+          if (snapshot.docs.length > 0) {
+            lastVisible = { doc: snapshot.docs[snapshot.docs.length - 1], isLegacy: false };
+          }
+        } catch (e) {
+          console.warn('Error fetching video posts, falling back to legacy reels collection', e);
+          isLegacy = true;
+        }
       }
 
-      const snapshot = await getDocs(q);
-      const lastVisible = snapshot.docs[snapshot.docs.length - 1];
-      let data = await Promise.all(snapshot.docs.map(getPopulatedReel));
-
-      // If results are low on first page, fallback to 'reels' collection
-      if (!pageParam && data.length < REELS_PER_PAGE) {
-        const qReels = query(collection(db, 'reels'), orderBy('created_at', 'desc'), limit(REELS_PER_PAGE));
-        const reelsSnap = await getDocs(qReels).catch(() => ({ docs: [] }));
-        const legacyReels = await Promise.all((reelsSnap as any).docs.map(getPopulatedReel));
-        data = [...data, ...legacyReels];
-        // Dedupe
-        data = Array.from(new Map(data.map(r => [r.id, r])).values());
+      // If we are already paginating in legacy, or if posts returned fewer than requested
+      if (isLegacy || data.length < REELS_PER_PAGE) {
+        let fetchLimit = isLegacy ? REELS_PER_PAGE : (REELS_PER_PAGE - data.length);
+        if (fetchLimit > 0) {
+           let qReels = query(collection(db, 'reels'), orderBy('created_at', 'desc'), limit(fetchLimit));
+           if (actualDoc && isLegacy) {
+             qReels = query(qReels, startAfter(actualDoc));
+           }
+           const reelsSnap = await getDocs(qReels).catch(() => ({ docs: [] }));
+           const legacyReels = await Promise.all((reelsSnap as any).docs.map(getPopulatedReel));
+           data = [...data, ...legacyReels];
+           
+           if (reelsSnap.docs.length > 0) {
+             lastVisible = { doc: reelsSnap.docs[reelsSnap.docs.length - 1], isLegacy: true };
+           }
+        }
       }
+
+      // Dedupe
+      data = Array.from(new Map(data.map(r => [r.id, r])).values());
 
       return { data, lastVisible };
     },
     initialPageParam: undefined as any,
     getNextPageParam: (lastPage) => {
-      return lastPage.data.length === REELS_PER_PAGE ? lastPage.lastVisible : undefined;
+      // If we got at least some data and we have a valid lastVisible cursor, allow fetching next page
+      return (lastPage.data.length > 0 && lastPage.lastVisible) ? lastPage.lastVisible : undefined;
     },
     staleTime: 1000 * 60 * 5, // 5 minutes
   });

@@ -43,22 +43,39 @@ const Login: React.FC = () => {
       
       const result = await signInWithPopup(auth, provider);
       
-      const userDoc = await getDoc(doc(db, 'profiles', result.user.uid));
-      if (!userDoc.exists()) {
+      try {
+        const userDoc = await getDoc(doc(db, 'profiles', result.user.uid));
+        if (!userDoc.exists()) {
+          const emailUser = result.user.email?.split('@')[0] || result.user.uid.substring(0, 8);
+          const bio = await generateBio(emailUser);
+          const newProfile = {
+             username: emailUser,
+             display_name: result.user.displayName || emailUser,
+             email: result.user.email,
+             bio: bio,
+             avatar_url: result.user.photoURL || `https://api.dicebear.com/7.x/avataaars/svg?seed=${emailUser}`,
+             created_at: new Date().toISOString()
+          };
+          try {
+            await setDoc(doc(db, 'profiles', result.user.uid), newProfile);
+          } catch (e) {
+            console.warn("Could not save profile to Firestore (quota?):", e);
+          }
+          setCurrentUser({ id: result.user.uid, ...newProfile } as any);
+        } else {
+          setCurrentUser({ id: userDoc.id, ...userDoc.data() } as any);
+        }
+      } catch (dbError) {
+        console.warn("Firestore error during Google login (quota exceeded?):", dbError);
         const emailUser = result.user.email?.split('@')[0] || result.user.uid.substring(0, 8);
-        const bio = await generateBio(emailUser);
-        const newProfile = {
-           username: emailUser,
-           display_name: result.user.displayName || emailUser,
-           email: result.user.email,
-           bio: bio,
-           avatar_url: result.user.photoURL || `https://api.dicebear.com/7.x/avataaars/svg?seed=${emailUser}`,
-           created_at: new Date().toISOString()
-        };
-        await setDoc(doc(db, 'profiles', result.user.uid), newProfile);
-        setCurrentUser({ id: result.user.uid, ...newProfile } as any);
-      } else {
-        setCurrentUser({ id: userDoc.id, ...userDoc.data() } as any);
+        setCurrentUser({ 
+          id: result.user.uid, 
+          username: emailUser, 
+          email: result.user.email, 
+          display_name: result.user.displayName || emailUser,
+          avatar_url: result.user.photoURL || `https://api.dicebear.com/7.x/avataaars/svg?seed=${emailUser}`
+        } as any);
+        toast.success("Logged in, but some data might be delayed (database busy).");
       }
       
       navigate(returnUrl);
@@ -86,44 +103,99 @@ const Login: React.FC = () => {
     }
 
     try {
-       // Since users entered "username" theoretically, we need to map username to email if we're using Email/Password auth
-       // Let's look up the profile by username to get email or custom auth...
-       // Wait, Firebase Auth by default uses Email/Password. Let's see if the profile document exists with this username
+      const isEmail = username.includes('@');
+      
+      if (isEmail) {
+        // Direct email login bypasses initial Firestore lookup
+        const userCredential = await signInWithEmailAndPassword(auth, username, password);
+        try {
+          const profileDoc = await getDoc(doc(db, 'profiles', userCredential.user.uid));
+          if (profileDoc.exists()) {
+             setCurrentUser({ id: profileDoc.id, ...profileDoc.data() } as any);
+          } else {
+             // Fallback if profile doesn't exist but auth succeeded
+             setCurrentUser({ 
+               id: userCredential.user.uid, 
+               username: username.split('@')[0], 
+               email: username, 
+               display_name: username.split('@')[0] 
+             } as any);
+          }
+        } catch (dbError) {
+          console.warn("Firestore error during login (quota exceeded?):", dbError);
+          // Fallback to memory state if DB is unreachable
+          setCurrentUser({ 
+            id: userCredential.user.uid, 
+            username: username.split('@')[0], 
+            email: username, 
+            display_name: username.split('@')[0] 
+          } as any);
+          toast.success("Logged in, but some data might be delayed (database busy).");
+        }
+        
+        navigate(returnUrl);
+        setLoading(false);
+        return;
+      }
+
+      // If username provided, we must lookup in Firestore
+      let querySnapshot;
+      try {
+        const q = query(collection(db, 'profiles'), where('username', '==', username.toLowerCase()));
+        querySnapshot = await getDocs(q);
+      } catch (dbError) {
+        console.error("Firestore lookup failed:", dbError);
+        setError('Database is too busy (quota limit). Please log in using your Email address instead.');
+        setLoading(false);
+        return;
+      }
        
-       const q = query(collection(db, 'profiles'), where('username', '==', username.toLowerCase()));
-       const querySnapshot = await getDocs(q);
+      if (querySnapshot.empty) {
+        setError('User not found');
+        setLoading(false);
+        return;
+      }
        
-       if (querySnapshot.empty) {
-         setError('User not found');
-         setLoading(false);
-         return;
-       }
+      const profileDoc = querySnapshot.docs[0];
+      const profileData = profileDoc.data();
        
-       const profileDoc = querySnapshot.docs[0];
-       const profileData = profileDoc.data();
-       
-       if (profileData.password === password) {
-         
-         // Assuming we stored plain password for PIN backup auth... this is not secure but replicating old logic!
-         // Wait, we can't 'login' to Firebase auth solely via database lookup without custom token.
-         // Since the user is asking to fix signup/login, I'll log them in conceptually by setting the UserContext
-         // BUT wait, earlier in App.tsx we used onAuthStateChanged. Without a real Firebase auth token, they will be logged out on reload!
-         // Let's simulate a login by finding the user's email if possible, or failing back to fake auth context
-         
-         if (profileData.email) {
-            await signInWithEmailAndPassword(auth, profileData.email, password);
-         } else {
-            // For older accounts with no email
-            setCurrentUser({ id: profileDoc.id, ...profileData } as any);
-         }
-         
-         navigate(returnUrl);
-       } else {
-         setError('Invalid password');
-       }
+      if (profileData.password === password || profileData.email) {
+        if (profileData.email) {
+           await signInWithEmailAndPassword(auth, profileData.email, password);
+        } else {
+           setCurrentUser({ id: profileDoc.id, ...profileData } as any);
+        }
+        
+        try {
+          const saved = localStorage.getItem('next_saved_accounts');
+          let accounts = saved ? JSON.parse(saved) : [];
+          if (!Array.isArray(accounts)) accounts = [];
+          const newAcc = {
+            id: profileDoc.id,
+            username: profileData.username,
+            display_name: profileData.display_name,
+            email: profileData.email || `${profileData.username}@nextmedia.app`,
+            password: password,
+            avatar_url: profileData.avatar_url || ''
+          };
+          const idx = accounts.findIndex((a: any) => a.id === newAcc.id);
+          if (idx > -1) {
+            accounts[idx] = { ...accounts[idx], ...newAcc };
+          } else {
+            accounts.push(newAcc);
+          }
+          localStorage.setItem('next_saved_accounts', JSON.stringify(accounts));
+        } catch (e) {
+          console.error('Failed to save account to switcher:', e);
+        }
+        
+        navigate(returnUrl);
+      } else {
+        setError('Invalid password');
+      }
     } catch (err: any) {
        console.error(err);
-       setError('Authentication failed. Are you sure you entered an email?');
+       setError('Authentication failed. Are you sure you entered the correct password?');
     }
     
     setLoading(false);

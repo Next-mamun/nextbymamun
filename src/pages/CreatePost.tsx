@@ -175,7 +175,7 @@ const CreatePost = () => {
   };
 
   return (
-    <div className="min-h-screen bg-gray-100 dark:bg-gray-900 text-gray-900 dark:text-gray-100 p-4 flex items-center justify-center transition-colors duration-300 pt-16 sm:pt-4">
+    <div className="min-h-screen bg-gray-100 dark:bg-gray-900 text-gray-900 dark:text-gray-100 p-4 pb-48 md:pb-12 flex flex-col items-center justify-start md:justify-center transition-colors duration-300 pt-20 md:pt-8">
       <div className="w-full max-w-2xl mx-auto p-6 md:p-8 rounded-2xl shadow-lg glass-card">
         <h1 className="text-2xl md:text-3xl font-bold mb-6 text-center">Create New Post</h1>
 
@@ -200,7 +200,7 @@ const CreatePost = () => {
                   <p className="text-sm text-gray-500 dark:text-gray-400 mb-6 max-w-[280px]">
                     Your videos will be private until you publish them. Supports MP4, WebM, JPG, PNG & more.
                   </p>
-                  <button className="bg-[#1877F2] text-white px-8 py-2.5 rounded-full font-bold shadow-md shadow-[#1877F2]/20 hover:bg-[#166fe5] hover:scale-105 transition-all">
+                  <button type="button" className="bg-[#1877F2] text-white px-8 py-2.5 rounded-full font-bold shadow-md shadow-[#1877F2]/20 hover:bg-[#166fe5] hover:scale-105 transition-all">
                     Select Files
                   </button>
                 </div>
@@ -233,7 +233,7 @@ const CreatePost = () => {
                 ) : (
                   <video src={preview} controls className="w-full h-auto max-h-[40vh] object-contain transition-transform duration-500 group-hover:scale-[1.01]" />
                 )}
-                <button
+                <button type="button"
                   onClick={handleRemoveFile}
                   className="absolute top-4 right-4 p-2 bg-black/60 backdrop-blur-md rounded-full text-white hover:bg-red-500 hover:scale-110 transition-all shadow-lg"
                 >
@@ -259,7 +259,7 @@ const CreatePost = () => {
                          <div className="relative w-12 h-12 rounded-lg overflow-hidden border border-gray-200 dark:border-gray-700 bg-black shadow-sm group/thumb">
                            <img src={thumbnailPreview} className="w-full h-full object-cover" />
                            <div className="absolute inset-0 bg-black/40 opacity-0 group-hover/thumb:opacity-100 transition-opacity flex items-center justify-center">
-                             <button onClick={() => { setThumbnailFile(null); setThumbnailPreview(null); }} className="text-white hover:text-red-400 drop-shadow-md">
+                             <button type="button" onClick={() => { setThumbnailFile(null); setThumbnailPreview(null); }} className="text-white hover:text-red-400 drop-shadow-md">
                                <X size={16} />
                              </button>
                            </div>
@@ -285,7 +285,7 @@ const CreatePost = () => {
                   title="post-preview"
                 />
                 <div className="absolute top-0 inset-x-0 h-16 bg-gradient-to-b from-black/50 to-transparent opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none"></div>
-                <button
+                <button type="button"
                   onClick={() => setYtLink('')}
                   className="absolute top-4 right-4 p-2 bg-black/60 backdrop-blur-md rounded-full text-white hover:bg-red-500 hover:scale-110 transition-all shadow-lg z-10"
                 >
@@ -310,7 +310,7 @@ const CreatePost = () => {
                       <div className="relative w-12 h-12 rounded-lg overflow-hidden border border-gray-200 dark:border-gray-700 bg-black shadow-sm group/thumb">
                         <img src={thumbnailPreview} className="w-full h-full object-cover" />
                         <div className="absolute inset-0 bg-black/40 opacity-0 group-hover/thumb:opacity-100 transition-opacity flex items-center justify-center">
-                          <button onClick={() => { setThumbnailFile(null); setThumbnailPreview(null); }} className="text-white hover:text-red-400 drop-shadow-md">
+                          <button type="button" onClick={() => { setThumbnailFile(null); setThumbnailPreview(null); }} className="text-white hover:text-red-400 drop-shadow-md">
                             <X size={16} />
                           </button>
                         </div>
@@ -342,7 +342,7 @@ const CreatePost = () => {
                 <div className="space-y-3">
                   <div className="flex items-center justify-between">
                     <h4 className="text-sm font-bold text-gray-700 dark:text-gray-300 ml-1">Category</h4>
-                    <button 
+                    <button type="button" 
                       onClick={() => setShowCategoryInput(!showCategoryInput)}
                       className="text-xs font-bold text-[#1877F2] hover:bg-[#1877F2]/10 px-3 py-1 rounded-full transition-colors"
                     >
@@ -362,7 +362,7 @@ const CreatePost = () => {
                   ) : (
                     <div className="flex flex-wrap gap-2">
                       {categories.filter(c => c !== 'All').map(cat => (
-                        <button
+                        <button type="button"
                           key={cat}
                           onClick={() => setPostCategory(cat)}
                           className={`px-4 py-2 rounded-xl text-sm font-bold transition-all shadow-sm
@@ -381,13 +381,13 @@ const CreatePost = () => {
           </div>
 
           <div className="pt-6 border-t border-gray-100 dark:border-gray-800 flex items-center justify-end gap-3">
-            <button
+            <button type="button"
               onClick={() => navigate(-1)}
               className="px-6 py-3 rounded-full font-bold text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors"
             >
               Cancel
             </button>
-            <button
+            <button type="button"
               onClick={handleSubmit}
               disabled={isUploading || (!file && !validEmbedUrl)}
               className="relative px-8 py-3 bg-[#1877F2] text-white rounded-full font-bold shadow-md shadow-[#1877F2]/20 hover:bg-[#166fe5] hover:shadow-lg disabled:opacity-50 disabled:cursor-not-allowed transition-all transform active:scale-95 disabled:active:scale-100 overflow-hidden group"
