@@ -1,11 +1,11 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useEffect } from 'react';
 import { UploadCloud, X, RefreshCw, Link as LinkIcon, Clapperboard, Image } from 'lucide-react';
 import { useDropzone } from 'react-dropzone';
 import { db } from '../lib/firebase';
 import { collection, addDoc } from 'firebase/firestore';
 import { dualWritePost } from '@/lib/dbHelper';
 import { useAuth } from '@/contexts/AuthContext';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useLocation } from 'react-router-dom';
 import { useUpload } from '@/contexts/UploadContext';
 import { invalidatePostsCache } from '@/lib/redis';
 
@@ -13,6 +13,7 @@ const CreatePost = () => {
   const { currentUser } = useAuth();
   const { addUpload } = useUpload();
   const navigate = useNavigate();
+  const location = useLocation();
   const [file, setFile] = useState<File | null>(null);
   const [preview, setPreview] = useState<string | null>(null);
   const [caption, setCaption] = useState('');
@@ -23,9 +24,26 @@ const CreatePost = () => {
   const [postCategory, setPostCategory] = useState('Entertainment');
   const [showCategoryInput, setShowCategoryInput] = useState(false);
   const [customCategory, setCustomCategory] = useState('');
-
   const [thumbnailFile, setThumbnailFile] = useState<File | null>(null);
   const [thumbnailPreview, setThumbnailPreview] = useState<string | null>(null);
+
+  useEffect(() => {
+    const params = new URLSearchParams(location.search);
+    const sharedTitle = params.get('title');
+    const sharedText = params.get('text');
+    const sharedUrl = params.get('url');
+
+    if (sharedTitle || sharedText || sharedUrl) {
+      const fullText = [sharedTitle, sharedText].filter(Boolean).join(' - ');
+      if (sharedUrl) {
+        setYtLink(sharedUrl);
+        setShowYoutube(true);
+        if (fullText) setCaption(fullText);
+      } else {
+        setCaption(fullText);
+      }
+    }
+  }, [location.search]);
 
   const categories = ['Entertainment', 'Learning', 'AI', 'Technology', 'Music', 'Gaming', 'News', 'Lifestyle', 'Sports', 'Art'];
 

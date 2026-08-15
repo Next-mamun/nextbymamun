@@ -219,9 +219,7 @@ const Messages: React.FC = () => {
   const lastTapRef = useRef(0);
 
   useEffect(() => {
-    if (isInputFocused && inputOffset === 0) {
-      setInputOffset(savedInputOffset);
-    } else if (!isInputFocused && !isDraggingInput) {
+    if (!isInputFocused && !isDraggingInput) {
       setInputOffset(0);
     }
   }, [isInputFocused]);

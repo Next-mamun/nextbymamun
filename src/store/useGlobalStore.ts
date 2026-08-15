@@ -1,5 +1,6 @@
 import { create } from 'zustand';
-import { persist } from 'zustand/middleware';
+import { persist, createJSONStorage } from 'zustand/middleware';
+import { idbStorage } from './idbStorage';
 import { db } from '@/lib/firebase';
 import { collection, query, where, onSnapshot, orderBy, limit, getDocs, getDoc, doc, startAfter } from 'firebase/firestore';
 import { toast } from 'sonner';
@@ -285,7 +286,16 @@ export const useGlobalStore = create<GlobalState>()(
     }),
     {
       name: 'next_media_global_store',
-      partialize: (state) => ({ currentUser: state.currentUser, feedPosts: state.feedPosts, lastFeedFetch: state.lastFeedFetch }),
+      storage: createJSONStorage(() => idbStorage),
+      partialize: (state) => ({ 
+        currentUser: state.currentUser, 
+        feedPosts: state.feedPosts, 
+        lastFeedFetch: state.lastFeedFetch,
+        messages: state.messages,
+        notifications: state.notifications,
+        unreadMessagesCount: state.unreadMessagesCount,
+        unreadNotificationsCount: state.unreadNotificationsCount
+      }),
     }
   )
 );

@@ -65,8 +65,10 @@ export const dualWritePost = async (postData: any) => {
       ...supabaseData
     };
 
-    if (postRef?.id && postRef.id.length === 36) {
+    if (postRef?.id) {
       payload.id = postRef.id;
+    } else {
+      payload.id = crypto.randomUUID();
     }
 
     delete payload.views;
@@ -109,8 +111,10 @@ export const dualWriteMessage = async (messageData: any) => {
       ...supabaseData
     };
 
-    if (msgRef?.id && msgRef.id.length === 36) {
+    if (msgRef?.id) {
       payload.id = msgRef.id;
+    } else {
+      payload.id = crypto.randomUUID();
     }
     delete payload.firebase_id;
 

@@ -49,7 +49,7 @@ const BottomNav: React.FC = () => {
 
   return (
     <div 
-      className={`fixed left-0 right-0 ${barHeightClass} bg-white/80 dark:bg-black/80 backdrop-blur-md border-t border-gray-200 dark:border-gray-800 flex items-center justify-around z-50 transition-all px-1`}
+      className={`w-full ${barHeightClass} bg-white/80 dark:bg-black/80 backdrop-blur-md border-t border-gray-200 dark:border-gray-800 flex items-center justify-around z-50 transition-all px-1`}
       style={{ bottom: 'var(--keyboard-offset, 0px)', paddingBottom: 'env(safe-area-inset-bottom)' }}
     >
       <Link to="/" className="flex flex-col items-center justify-center w-full h-full" style={{ color: isActive('/') ? activeColor : inactiveColor }}>

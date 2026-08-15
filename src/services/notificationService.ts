@@ -80,21 +80,58 @@ export const sendPushNotification = async (token: string, title: string, body: s
   }
 };
 
+const tokenCache = new Map<string, { token: string, expiry: number }>();
+let notificationQueue: Array<() => Promise<void>> = [];
+let isProcessingQueue = false;
+
+const processQueue = async () => {
+  if (isProcessingQueue || notificationQueue.length === 0) return;
+  isProcessingQueue = true;
+  
+  while (notificationQueue.length > 0) {
+    const task = notificationQueue.shift();
+    if (task) {
+      await task();
+      await new Promise(resolve => setTimeout(resolve, 300)); // Rate limit buffer
+    }
+  }
+  
+  isProcessingQueue = false;
+};
+
 export const triggerNotification = async (receiverId: string, title: string, body: string, data?: any) => {
-  try {
-    const userDoc = await getDoc(doc(db, 'profiles', receiverId));
-    if (userDoc.exists()) {
-      const userData = userDoc.data();
-      if (userData.fcm_token) {
-        console.log(`Triggering notification for ${receiverId} using token ${userData.fcm_token.substring(0, 10)}...`);
-        return await sendPushNotification(userData.fcm_token, title, body, data);
+  const task = async () => {
+    try {
+      let token = '';
+      const cached = tokenCache.get(receiverId);
+      if (cached && Date.now() < cached.expiry) {
+        token = cached.token;
+      } else {
+        const userDoc = await getDoc(doc(db, 'profiles', receiverId));
+        if (userDoc.exists()) {
+          const userData = userDoc.data();
+          if (userData.fcm_token) {
+            token = userData.fcm_token;
+            // Cache token for 1 hour to reduce DB reads when chatting
+            tokenCache.set(receiverId, { token, expiry: Date.now() + 60 * 60 * 1000 });
+          }
+        }
+      }
+
+      if (token) {
+        console.log(`Triggering notification for ${receiverId}...`);
+        await sendPushNotification(token, title, body, data);
       } else {
         console.log(`No FCM token found for user ${receiverId}`);
       }
+    } catch (err) {
+      console.error('Failed to trigger notification:', err);
     }
-  } catch (err) {
-    console.error('Failed to trigger notification:', err);
-  }
+  };
+
+  notificationQueue.push(task);
+  processQueue();
+  
   return null;
 };
 
@@ -106,7 +143,6 @@ export const showNotification = (title: string, options?: NotificationOptions) =
       badge: '/favicon.ico',
       ...options
     });
-
     notification.onclick = () => {
       window.focus();
       notification.close();

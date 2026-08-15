@@ -102,6 +102,12 @@ const AppLayout: React.FC = () => {
 
   const queryClient = useQueryClient();
   const mainRef = useRef<HTMLElement>(null);
+  
+  useEffect(() => {
+    // Force refresh data on browser reload (app mount)
+    queryClient.invalidateQueries();
+    useGlobalStore.getState().fetchHomeFeed(false, true);
+  }, []);
   const [pullProgress, setPullProgress] = useState(0);
   const [isRefreshing, setIsRefreshing] = useState(false);
 
@@ -203,7 +209,7 @@ const AppLayout: React.FC = () => {
       style={{ height: typeof viewportHeight === 'number' ? `${viewportHeight}px` : viewportHeight, paddingBottom: '0px' }}
     >
       <div 
-        className="flex w-full h-full max-w-[1920px] mx-auto overflow-hidden relative"
+        className="flex w-full flex-1 min-h-0 max-w-[1920px] mx-auto overflow-hidden relative"
         onTouchStart={onTouchStart}
         onTouchMove={onTouchMove}
         onTouchEnd={onTouchEnd}
@@ -212,7 +218,7 @@ const AppLayout: React.FC = () => {
         {currentUser && <div className="hidden md:block xl:min-w-[300px] shrink-0 sticky top-14 h-[calc(100vh-3.5rem)] overflow-y-auto"><Sidebar /></div>}
         <main 
           ref={mainRef}
-          className={`w-full flex-1 flex flex-col min-w-0 pt-14 ${isMessages ? (isKeyboardOpen ? 'pb-0' : 'pb-[60px]') : (isKeyboardOpen ? 'pb-0' : 'pb-[60px]')} md:pb-0 ${isMessages ? 'overflow-hidden bg-white dark:bg-black' : 'overflow-x-hidden overflow-y-auto px-0 md:p-4'} relative`}
+          className={`w-full flex-1 flex flex-col min-w-0 pt-14 md:pb-0 ${isMessages ? 'overflow-hidden bg-white dark:bg-black' : 'overflow-x-hidden overflow-y-auto px-0 md:p-4'} relative`}
         >
           {/* Pull to Refresh Indicator */}
           {(pullProgress > 0 || isRefreshing) && (
@@ -259,7 +265,7 @@ const AppLayout: React.FC = () => {
         </main>
       </div>
       {currentUser && !isKeyboardOpen && (
-        <div className="z-[100] relative bottom-nav-container">
+        <div className="z-[100] relative w-full shrink-0 md:hidden">
           <BottomNav />
         </div>
       )}
