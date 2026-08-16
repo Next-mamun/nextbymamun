@@ -97,3 +97,11 @@ body.no-animations *, body.no-animations *::before, body.no-animations *::after 
     display: none !important;
   }
 }
+
+@keyframes float-up {
+  0% { transform: translateY(0) scale(1); opacity: 1; }
+  100% { transform: translateY(-150px) scale(1.5); opacity: 0; }
+}
+.animate-float-up {
+  animation: float-up 2s ease-out forwards;
+}

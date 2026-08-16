@@ -72,6 +72,13 @@ service cloud.firestore {
       allow read, write: if isSignedIn();
     }
 
+    match /calls/{callId} {
+      allow read, write: if isSignedIn();
+      match /{document=**} {
+        allow read, write: if isSignedIn();
+      }
+    }
+
     match /{document=**} {
       allow read, write: if false; 
     }

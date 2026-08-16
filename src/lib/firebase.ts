@@ -19,7 +19,7 @@ const databaseId = (firebaseConfig as any).firestoreDatabaseId || '(default)';
 
 export const app = initializeApp(firebaseConfig);
 export const db = initializeFirestore(app, {
-  experimentalAutoDetectLongPolling: true,
+  experimentalForceLongPolling: true,
 }, databaseId);
 
 // Enable offline persistence

@@ -1,7 +1,7 @@
 
 import React, { useState, useEffect, useMemo } from 'react';
 import { Link, useNavigate, useLocation } from 'react-router-dom';
-import { Home, Users, MessageCircle, Bell, User, LogOut, Menu, BookOpen } from 'lucide-react';
+import { Home, Users, MessageCircle, Bell, User, LogOut, Menu, BookOpen, Tv } from 'lucide-react';
 import { useAuth } from '@/contexts/AuthContext';
 import { doc, getDoc, updateDoc, deleteDoc } from 'firebase/firestore';
 import { db } from '../lib/firebase';
@@ -157,6 +157,13 @@ const Navbar: React.FC = () => {
           title="Lab (E-Books)"
         >
           <BookOpen size={24} />
+        </Link>
+        <Link 
+          to="/theatre"
+          className="p-2 rounded-full hover:bg-black/5 dark:hover:bg-white/5 transition-colors text-black dark:text-white"
+          title="Cinema Hall"
+        >
+          <Tv size={24} />
         </Link>
         <button 
           onClick={handleNotificationsClick}
