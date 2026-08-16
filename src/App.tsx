@@ -43,6 +43,8 @@ const Settings = lazy(() => import('@/pages/Settings'));
 
 import { useGlobalStore } from '@/store/useGlobalStore';
 import { AuthContext, AuthContextType, ThemeContext, ThemeContextType, useAuth, useTheme } from '@/contexts/AuthContext';
+import { CallProvider } from '@/contexts/CallContext';
+import CallOverlay from '@/components/CallOverlay';
 
 const AppLayout: React.FC = () => {
   const { currentUser } = useAuth();
@@ -208,6 +210,7 @@ const AppLayout: React.FC = () => {
       className="w-full bg-[#f0f2f5] dark:bg-[#000000] flex flex-col transition-colors duration-300 overflow-hidden" 
       style={{ height: typeof viewportHeight === 'number' ? `${viewportHeight}px` : viewportHeight, paddingBottom: '0px' }}
     >
+      <CallOverlay />
       <div 
         className="flex w-full flex-1 min-h-0 max-w-[1920px] mx-auto overflow-hidden relative"
         onTouchStart={onTouchStart}
@@ -690,10 +693,12 @@ const App: React.FC = () => {
         compactFeed, setCompactFeed,
         showAllReels, setShowAllReels
       }}>
-        <BrowserRouter>
-          <AppLayout />
-          {nextoEnabled && <NextoRobot />}
-        </BrowserRouter>
+        <CallProvider>
+          <BrowserRouter>
+            <AppLayout />
+            {nextoEnabled && <NextoRobot />}
+          </BrowserRouter>
+        </CallProvider>
       </ThemeContext.Provider>
     </AuthContext.Provider>
   );

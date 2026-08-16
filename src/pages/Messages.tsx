@@ -1,9 +1,10 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { motion } from 'motion/react';
-import { Search, Trash2, Send, Smile, Paperclip, MessageSquare, ArrowLeft, Check, CheckCheck, Ban, RefreshCw, X, CornerUpLeft, EyeOff, Mic, Eye, Play, Pause, BellOff, Bell } from 'lucide-react';
+import { Search, Trash2, Send, Smile, Paperclip, MessageSquare, ArrowLeft, Check, CheckCheck, Ban, RefreshCw, X, CornerUpLeft, EyeOff, Mic, Eye, Play, Pause, BellOff, Bell, Phone, Video } from 'lucide-react';
 import EmojiPicker, { Theme } from 'emoji-picker-react';
 import { useAuth } from '@/contexts/AuthContext';
+import { useCall } from '@/contexts/CallContext';
 import { VerifiedBadge } from '@/components/VerifiedBadge';
 import ZoomableImage from '@/components/ZoomableImage';
 import VideoPlayer from '@/components/VideoPlayer';
@@ -372,6 +373,8 @@ const Messages: React.FC = () => {
   const [isVoiceViewOnce, setIsVoiceViewOnce] = useState(false);
   const [activeViewOnceMedia, setActiveViewOnceMedia] = useState<any>(null);
   
+  const { startCall } = useCall();
+  const [showCallMenu, setShowCallMenu] = useState(false);
   const [isTyping, setIsTyping] = useState(false);
   const [otherUserTyping, setOtherUserTyping] = useState(false);
 
@@ -1544,6 +1547,31 @@ const Messages: React.FC = () => {
                     >
                       <RefreshCw size={20} />
                     </button>
+                    <div className="relative">
+                      <button 
+                        onClick={() => setShowCallMenu(!showCallMenu)}
+                        className="p-2 rounded-full transition-all text-gray-400 hover:text-green-500 hover:bg-green-50 dark:hover:bg-green-900/20"
+                        title="Free Call"
+                      >
+                        <Phone size={20} />
+                      </button>
+                      {showCallMenu && (
+                        <div className="absolute right-0 top-full mt-2 w-48 bg-white dark:bg-gray-800 rounded-xl shadow-xl border border-gray-100 dark:border-gray-700 py-2 z-50 animate-in fade-in zoom-in duration-200">
+                          <button 
+                            onClick={() => { setShowCallMenu(false); startCall(selectedChat.id, selectedChat.display_name, selectedChat.avatar_url, 'audio'); }}
+                            className="w-full text-left px-4 py-3 flex items-center gap-3 hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors text-sm font-medium"
+                          >
+                            <Phone size={18} className="text-green-500" /> Audio Call
+                          </button>
+                          <button 
+                            onClick={() => { setShowCallMenu(false); startCall(selectedChat.id, selectedChat.display_name, selectedChat.avatar_url, 'video'); }}
+                            className="w-full text-left px-4 py-3 flex items-center gap-3 hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors text-sm font-medium border-t border-gray-50 dark:border-gray-700"
+                          >
+                            <Video size={18} className="text-blue-500" /> Video Call
+                          </button>
+                        </div>
+                      )}
+                    </div>
                     <button 
                       onClick={handleBlockUser} 
                       className={`p-2 rounded-full transition-all ${isBlockedByMe ? 'bg-red-500 text-white shadow-lg' : 'hover:bg-red-50 dark:hover:bg-red-900/20 text-gray-400 hover:text-red-500'}`} 
