@@ -34,12 +34,21 @@ try {
   messaging.onBackgroundMessage((payload: any) => {
     console.log('[sw.ts] Received background message ', payload);
     const notificationTitle = payload.notification?.title || 'New Message';
-    const notificationOptions = {
+    
+    const notificationOptions: any = {
       body: payload.notification?.body || 'You have a new notification',
       icon: '/favicon.ico',
       badge: '/favicon.ico',
-      data: payload.data
+      data: payload.data,
+      requireInteraction: true, // Keep it on screen for calls
     };
+
+    if (payload.data?.type === 'call') {
+      notificationOptions.actions = [
+        { action: 'answer', title: 'Accept' },
+        { action: 'reject', title: 'Reject' }
+      ];
+    }
 
     self.registration.showNotification(notificationTitle, notificationOptions);
   });
@@ -52,10 +61,19 @@ self.addEventListener('notificationclick', (event: any) => {
   
   let urlToOpen = '/';
   const data = event.notification.data;
+  const action = event.action; // 'answer' or 'reject'
   
   if (data) {
     if (data.type === 'message' && data.sender_id) {
        urlToOpen = `/messages?user=${data.sender_id}`;
+    } else if (data.type === 'call') {
+       if (action === 'reject') {
+         // Maybe just open the app with reject action, or ideally ping API to reject. 
+         // But opening app to process reject is safest with current architecture.
+         urlToOpen = `/?call_id=${data.callId}&action=reject`;
+       } else {
+         urlToOpen = `/?call_id=${data.callId}&action=answer`;
+       }
     } else if (data.url) {
       urlToOpen = data.url;
     }

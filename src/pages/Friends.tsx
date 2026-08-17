@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { UserMinus, MessageSquare, Check, X, UserPlus, Search, Users, Ban, UserCheck } from 'lucide-react';
 import { useAuth } from '@/contexts/AuthContext';
 import { db } from '../lib/firebase';
+import { localDB } from '@/lib/db';
 import { collection, query, where, getDocs, updateDoc, doc, getDoc, deleteDoc, addDoc, onSnapshot, or, and, limit, orderBy } from 'firebase/firestore';
 import { useNavigate } from 'react-router-dom';
 import { VerifiedBadge } from '@/components/VerifiedBadge';
@@ -44,15 +45,15 @@ const Friends: React.FC = () => {
     queryFn: async () => {
       if (!currentUser?.id) return { requests: [], friends: [], discovery: [], blockedUsers: [] };
 
-      const cacheKey = `friends_cache_${currentUser.id}_${searchQuery.trim()}`;
+      // Try to read from IndexedDB as a fallback or cache
+      let cachedResult = null;
       try {
-        const cachedStr = await redis.get(cacheKey);
-        if (cachedStr) {
-          return typeof cachedStr === 'string' ? JSON.parse(cachedStr) : cachedStr;
-        }
-      } catch (e) {
-        console.warn('Redis read failed for friends cache', e);
-      }
+         const localFriends = await localDB.friends.toArray();
+         if (localFriends.length > 0 && !searchQuery.trim()) {
+           // Basic cache mapping (fallback if offline)
+           cachedResult = { requests: [], friends: localFriends, discovery: [], blockedUsers: [] };
+         }
+      } catch(e) {}
 
       // 1. Fetch relationships
       const qRel = query(
@@ -98,12 +99,26 @@ const Friends: React.FC = () => {
         .filter(id => !profMap.has(id));
 
       if (missingProfIds.length > 0) {
-        // Fetch missing profiles individually to avoid `in` limits.
-        const missingProfs = await Promise.all(missingProfIds.map(async (id: string) => {
-            const d = await getDoc(doc(db, 'profiles', id));
-            return d.exists() ? { id: d.id, ...d.data() } : null;
-        })).then(res => res.filter(Boolean));
-        
+        // Fetch missing profiles using batch requests
+        const missingProfs = [];
+        const uniqueIds = Array.from(new Set(missingProfIds));
+        const batches = [];
+        while (uniqueIds.length > 0) {
+          batches.push(uniqueIds.splice(0, 30));
+        }
+        for (const batch of batches) {
+          try {
+            const qBatch = query(collection(db, 'profiles'), where('__name__', 'in', batch));
+            const snap = await getDocs(qBatch);
+            snap.docs.forEach(d => missingProfs.push({ id: d.id, ...d.data() }));
+          } catch(e) {
+            console.warn('Batch fetch failed, reading from localDB fallback', e);
+            for (const id of batch) {
+               const localP = await localDB.profiles.get(id);
+               if (localP) missingProfs.push({ id: localP.id, display_name: localP.name, username: localP.name, avatar_url: localP.avatarBase64 });
+            }
+          }
+        }
         missingProfs.forEach((p: any) => profMap.set(p.id, p));
       }
 

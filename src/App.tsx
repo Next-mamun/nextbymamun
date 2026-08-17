@@ -45,7 +45,9 @@ const Settings = lazy(() => import('@/pages/Settings'));
 import { useGlobalStore } from '@/store/useGlobalStore';
 import { AuthContext, AuthContextType, ThemeContext, ThemeContextType, useAuth, useTheme } from '@/contexts/AuthContext';
 import { CallProvider } from '@/contexts/CallContext';
-import CallOverlay from '@/components/CallOverlay';
+import { P2PProvider } from '@/contexts/P2PContext';
+import CallOverlay from "@/components/CallOverlay";
+import { backgroundSync } from "@/lib/syncEngine";
 
 const AppLayout: React.FC = () => {
   const { currentUser } = useAuth();
@@ -56,7 +58,13 @@ const AppLayout: React.FC = () => {
   const [touchStart, setTouchStart] = useState<{ x: number, y: number } | null>(null);
 
   const [isKeyboardOpen, setIsKeyboardOpen] = useState(false);
-  const [viewportHeight, setViewportHeight] = useState<string | number>('100dvh');
+  const [viewportHeight, setViewportHeight] = useState<string | number>("100dvh");
+
+  useEffect(() => {
+    if (currentUser?.id) {
+      backgroundSync(currentUser.id);
+    }
+  }, [currentUser?.id]);
 
   useEffect(() => {
     const initialHeight = window.innerHeight;
@@ -695,12 +703,14 @@ const App: React.FC = () => {
         compactFeed, setCompactFeed,
         showAllReels, setShowAllReels
       }}>
-        <CallProvider>
-          <BrowserRouter>
-            <AppLayout />
-            {nextoEnabled && <NextoRobot />}
-          </BrowserRouter>
-        </CallProvider>
+        <P2PProvider>
+          <CallProvider>
+            <BrowserRouter>
+              <AppLayout />
+              {nextoEnabled && <NextoRobot />}
+            </BrowserRouter>
+          </CallProvider>
+        </P2PProvider>
       </ThemeContext.Provider>
     </AuthContext.Provider>
   );

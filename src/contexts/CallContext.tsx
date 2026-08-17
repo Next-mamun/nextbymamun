@@ -1,22 +1,21 @@
 import React, { createContext, useContext, useEffect, useState, useRef, ReactNode } from 'react';
-import { collection, doc, setDoc, onSnapshot, updateDoc, query, where, addDoc, getDocs, deleteDoc } from 'firebase/firestore';
-import { db } from '@/lib/firebase';
 import { useAuth } from './AuthContext';
+import { useP2P } from './P2PContext';
 import { toast } from 'sonner';
+import { triggerNotification } from '@/services/notificationService';
+import { MediaConnection, DataConnection } from 'peerjs';
 
 type CallStatus = 'idle' | 'calling' | 'ringing' | 'connected';
 type CallType = 'audio' | 'video';
 
 interface CallData {
-  id: string;
+  id: string; // we can use caller peer id
   callerId: string;
   callerName: string;
   callerAvatar: string;
   receiverId: string;
   type: CallType;
   status: 'calling' | 'answered' | 'rejected' | 'ended';
-  offer?: any;
-  answer?: any;
 }
 
 interface CallContextType {
@@ -38,14 +37,10 @@ interface CallContextType {
 
 const CallContext = createContext<CallContextType | null>(null);
 
-const servers = {
-  iceServers: [
-    { urls: ['stun:stun1.l.google.com:19302', 'stun:stun2.l.google.com:19302'] }
-  ]
-};
-
 export const CallProvider = ({ children }: { children: ReactNode }) => {
   const { currentUser } = useAuth();
+  const { peer } = useP2P();
+  
   const [status, setStatus] = useState<CallStatus>('idle');
   const [currentCall, setCurrentCall] = useState<CallData | null>(null);
   const [localStream, setLocalStream] = useState<MediaStream | null>(null);
@@ -54,287 +49,189 @@ export const CallProvider = ({ children }: { children: ReactNode }) => {
   const [isVideoOff, setIsVideoOff] = useState(false);
   const [receivedFiles, setReceivedFiles] = useState<{ name: string, url: string }[]>([]);
 
-  const pc = useRef<RTCPeerConnection | null>(null);
-  const dataChannel = useRef<RTCDataChannel | null>(null);
   const localStreamRef = useRef<MediaStream | null>(null);
+  const callConnectionRef = useRef<MediaConnection | null>(null);
+  const dataConnectionRef = useRef<DataConnection | null>(null);
 
-  // Stop media tracks
-  const stopMedia = () => {
-    if (localStreamRef.current) {
-      localStreamRef.current.getTracks().forEach(track => track.stop());
-      localStreamRef.current = null;
-      setLocalStream(null);
-    }
-  };
-
-  // Setup Peer Connection
-  const setupPeerConnection = () => {
-    if (pc.current) pc.current.close();
-    pc.current = new RTCPeerConnection(servers);
-
-    pc.current.ontrack = (event) => {
-      setRemoteStream(event.streams[0]);
-    };
-
-    if (localStreamRef.current) {
-      localStreamRef.current.getTracks().forEach(track => {
-        pc.current?.addTrack(track, localStreamRef.current!);
-      });
-    }
-
-    pc.current.ondatachannel = (event) => {
-      const receiveChannel = event.channel;
-      receiveChannel.onmessage = handleReceiveMessage;
-    };
-  };
-
-  let receiveBuffer: ArrayBuffer[] = [];
-  let receivedSize = 0;
-  let fileMeta: { name: string, size: number, type: string } | null = null;
-
-  const handleReceiveMessage = (event: MessageEvent) => {
-    if (typeof event.data === 'string') {
-      try {
-        const meta = JSON.parse(event.data);
-        if (meta.type === 'file-meta') {
-          fileMeta = meta;
-          receiveBuffer = [];
-          receivedSize = 0;
-          toast.success(`Receiving file: ${meta.name}`);
-        }
-      } catch (e) {
-        // Normal text message
-      }
-    } else {
-      receiveBuffer.push(event.data);
-      receivedSize += event.data.byteLength;
-      if (fileMeta && receivedSize === fileMeta.size) {
-        const blob = new Blob(receiveBuffer, { type: fileMeta.type });
-        const url = URL.createObjectURL(blob);
-        setReceivedFiles(prev => [...prev, { name: fileMeta!.name, url }]);
-        toast.success(`Received file: ${fileMeta.name}`);
-        fileMeta = null;
-      }
-    }
-  };
-
-  const sendFile = async (file: File) => {
-    if (!dataChannel.current || dataChannel.current.readyState !== 'open') {
-      toast.error('Data channel is not open. Cannot send file.');
-      return;
-    }
-
-    const meta = { type: 'file-meta', name: file.name, size: file.size, fileType: file.type };
-    dataChannel.current.send(JSON.stringify(meta));
-
-    const chunkSize = 16384;
-    let offset = 0;
-
-    return new Promise<void>((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onload = (e) => {
-        if (e.target?.result) {
-          dataChannel.current!.send(e.target.result as ArrayBuffer);
-          offset += (e.target.result as ArrayBuffer).byteLength;
-          if (offset < file.size) {
-            readSlice(offset);
-          } else {
-            toast.success(`Sent file: ${file.name}`);
-            resolve();
-          }
-        }
-      };
-      reader.onerror = reject;
-
-      const readSlice = (o: number) => {
-        const slice = file.slice(offset, o + chunkSize);
-        reader.readAsArrayBuffer(slice);
-      };
-      readSlice(0);
-    });
-  };
-
-  // Listen for incoming calls
+  // Auto-answer logic from Notification click
   useEffect(() => {
-    if (!currentUser) return;
+    if (status === 'ringing' && currentCall) {
+      const urlParams = new URLSearchParams(window.location.search);
+      const action = urlParams.get('action');
+      const callId = urlParams.get('call_id');
 
-    const q = query(
-      collection(db, 'calls'),
-      where('receiverId', '==', currentUser.id),
-      where('status', '==', 'calling')
-    );
-
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      snapshot.docChanges().forEach((change) => {
-        if (change.type === 'added') {
-          const callDoc = { id: change.doc.id, ...change.doc.data() } as CallData;
-          setCurrentCall(callDoc);
-          setStatus('ringing');
-          toast(`Incoming ${callDoc.type} call from ${callDoc.callerName}`, { duration: 10000 });
+      if (callId === currentCall.id) {
+        if (action === 'answer') {
+          console.log('Auto-accepting call from notification');
+          acceptCall();
+          window.history.replaceState({}, document.title, window.location.pathname);
+        } else if (action === 'reject') {
+          console.log('Auto-rejecting call from notification');
+          rejectCall();
+          window.history.replaceState({}, document.title, window.location.pathname);
         }
-      });
-    });
-
-    return () => unsubscribe();
-  }, [currentUser]);
-
-  // Handle Caller signaling changes
-  useEffect(() => {
-    if (status === 'calling' && currentCall) {
-      const unsub = onSnapshot(doc(db, 'calls', currentCall.id), async (snapshot) => {
-        const data = snapshot.data();
-        if (!data) return;
-
-        if (data.status === 'answered' && data.answer) {
-          const rtcSessionDescription = new RTCSessionDescription(data.answer);
-          if (pc.current && pc.current.signalingState !== 'stable') {
-            await pc.current.setRemoteDescription(rtcSessionDescription);
-            setStatus('connected');
-          }
-        } else if (data.status === 'rejected' || data.status === 'ended') {
-          cleanupCall();
-          toast.error(data.status === 'rejected' ? 'Call rejected' : 'Call ended');
-        }
-      });
-
-      // Listen for ICE candidates
-      const answerCandidatesUnsub = onSnapshot(collection(db, 'calls', currentCall.id, 'answerCandidates'), (snapshot) => {
-        snapshot.docChanges().forEach((change) => {
-          if (change.type === 'added') {
-            const candidate = new RTCIceCandidate(change.doc.data());
-            pc.current?.addIceCandidate(candidate);
-          }
-        });
-      });
-
-      return () => {
-        unsub();
-        answerCandidatesUnsub();
-      };
+      }
     }
   }, [status, currentCall]);
 
-  // Handle Callee signaling changes
   useEffect(() => {
-    if (status === 'connected' && currentCall && currentCall.receiverId === currentUser?.id) {
-      const unsub = onSnapshot(doc(db, 'calls', currentCall.id), (snapshot) => {
-        const data = snapshot.data();
-        if (!data) return;
-        if (data.status === 'ended') {
-          cleanupCall();
-          toast('Call ended by remote user');
-        }
-      });
-      return () => unsub();
-    }
-  }, [status, currentCall, currentUser]);
+    if (!peer || !currentUser) return;
 
-  const cleanupCall = async () => {
-    if (currentCall && status !== 'idle') {
-      try {
-        await updateDoc(doc(db, 'calls', currentCall.id), { status: 'ended' });
-      } catch (e) {}
+    peer.on('call', (call) => {
+      // Incoming call
+      callConnectionRef.current = call;
+      
+      // We parse caller metadata sent via options.metadata
+      const metadata = call.metadata || {};
+      
+      const incomingCall: CallData = {
+        id: metadata.callId || call.peer,
+        callerId: metadata.callerId || call.peer.replace('nxt-peer-', ''),
+        callerName: metadata.callerName || 'Unknown',
+        callerAvatar: metadata.callerAvatar || '',
+        receiverId: currentUser.id,
+        type: metadata.type || 'audio',
+        status: 'calling'
+      };
+      
+      setCurrentCall(incomingCall);
+      setStatus('ringing');
+      toast(`Incoming ${incomingCall.type} call from ${incomingCall.callerName}`, { duration: 10000 });
+      
+      call.on('stream', (remoteStream) => {
+        setRemoteStream(remoteStream);
+      });
+      
+      call.on('close', () => {
+        handleCallEnded();
+      });
+    });
+
+    peer.on('connection', (conn) => {
+      // Incoming file transfer connection
+      if (conn.label === 'fileTransfer') {
+        dataConnectionRef.current = conn;
+        conn.on('data', (data: any) => {
+          handleReceiveMessage({ data });
+        });
+      }
+    });
+
+  }, [peer, currentUser]);
+
+  const handleReceiveMessage = (event: any) => {
+    try {
+      const { type, fileName, fileData } = event.data;
+      if (type === 'file') {
+        const blob = new Blob([fileData]);
+        const url = URL.createObjectURL(blob);
+        setReceivedFiles(prev => [...prev, { name: fileName, url }]);
+        toast.success(`Received file: ${fileName}`);
+      } else if (type === 'call_rejected') {
+        toast.error('Call rejected');
+        handleCallEnded();
+      } else if (type === 'call_ended') {
+        toast('Call ended by remote user');
+        handleCallEnded();
+      }
+    } catch (err) {}
+  };
+
+  const handleCallEnded = () => {
+    if (localStreamRef.current) {
+      localStreamRef.current.getTracks().forEach(track => track.stop());
     }
-    pc.current?.close();
-    pc.current = null;
-    stopMedia();
-    setStatus('idle');
-    setCurrentCall(null);
+    callConnectionRef.current?.close();
+    dataConnectionRef.current?.close();
+    callConnectionRef.current = null;
+    dataConnectionRef.current = null;
+    localStreamRef.current = null;
+    setLocalStream(null);
     setRemoteStream(null);
-    setReceivedFiles([]);
+    setCurrentCall(null);
+    setStatus('idle');
     setIsMuted(false);
     setIsVideoOff(false);
   };
 
   const startCall = async (receiverId: string, receiverName: string, receiverAvatar: string, type: CallType) => {
-    if (!currentUser) return;
+    if (!currentUser || !peer) return;
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: type === 'video' });
       setLocalStream(stream);
       localStreamRef.current = stream;
 
-      setupPeerConnection();
-
-      // Create data channel
-      dataChannel.current = pc.current!.createDataChannel('fileTransfer');
-      dataChannel.current.onmessage = handleReceiveMessage;
-
-      const callDocRef = doc(collection(db, 'calls'));
-      const callData: any = {
+      const targetPeerId = `nxt-peer-${receiverId}`;
+      const callId = Date.now().toString();
+      
+      const callData: CallData = {
+        id: callId,
         callerId: currentUser.id,
         callerName: currentUser.display_name,
         callerAvatar: currentUser.avatar_url || '',
         receiverId,
         type,
-        status: 'calling',
-        createdAt: new Date().toISOString()
+        status: 'calling'
       };
       
-      setCurrentCall({ id: callDocRef.id, ...callData });
+      setCurrentCall(callData);
       setStatus('calling');
 
-      pc.current!.onicecandidate = (event) => {
-        if (event.candidate) {
-          addDoc(collection(callDocRef, 'offerCandidates'), event.candidate.toJSON());
+      // Setup data channel for signaling rejection/end and files
+      dataConnectionRef.current = peer.connect(targetPeerId, { label: 'fileTransfer', reliable: true });
+      dataConnectionRef.current.on('data', (data: any) => {
+        handleReceiveMessage({ data });
+      });
+
+      // Call
+      const call = peer.call(targetPeerId, stream, {
+        metadata: {
+          callId,
+          callerId: currentUser.id,
+          callerName: currentUser.display_name,
+          callerAvatar: currentUser.avatar_url || '',
+          type
         }
-      };
+      });
+      
+      callConnectionRef.current = call;
 
-      const offerDescription = await pc.current!.createOffer();
-      await pc.current!.setLocalDescription(offerDescription);
+      call.on('stream', (remoteStream) => {
+        setRemoteStream(remoteStream);
+        setStatus('connected');
+      });
 
-      const offer = {
-        sdp: offerDescription.sdp,
-        type: offerDescription.type,
-      };
+      call.on('close', () => {
+        handleCallEnded();
+      });
 
-      await setDoc(callDocRef, { ...callData, offer });
+      call.on('error', () => {
+        toast.error('Call failed');
+        handleCallEnded();
+      });
 
+      // FCM fallback if peer is offline / closed app
+      triggerNotification(
+        receiverId,
+        `Incoming ${type} call`,
+        `from ${currentUser.display_name}`,
+        { type: 'call', callId, callerId: currentUser.id, callerName: currentUser.display_name }
+      );
+      
     } catch (err: any) {
       toast.error('Failed to start call: ' + err.message);
-      cleanupCall();
+      handleCallEnded();
     }
   };
 
   const acceptCall = async () => {
-    if (!currentCall || !currentUser) return;
+    if (!currentCall || !currentUser || !callConnectionRef.current) return;
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: currentCall.type === 'video' });
       setLocalStream(stream);
       localStreamRef.current = stream;
 
-      setupPeerConnection();
-
-      pc.current!.onicecandidate = (event) => {
-        if (event.candidate) {
-          addDoc(collection(db, 'calls', currentCall.id, 'answerCandidates'), event.candidate.toJSON());
-        }
-      };
-
-      const callDocRef = doc(db, 'calls', currentCall.id);
-      
-      const offerDescription = currentCall.offer;
-      await pc.current!.setRemoteDescription(new RTCSessionDescription(offerDescription));
-
-      const answerDescription = await pc.current!.createAnswer();
-      await pc.current!.setLocalDescription(answerDescription);
-
-      const answer = {
-        type: answerDescription.type,
-        sdp: answerDescription.sdp,
-      };
-
-      await updateDoc(callDocRef, { answer, status: 'answered' });
-
-      // Listen for caller ICE candidates
-      onSnapshot(collection(callDocRef, 'offerCandidates'), (snapshot) => {
-        snapshot.docChanges().forEach((change) => {
-          if (change.type === 'added') {
-            const candidate = new RTCIceCandidate(change.doc.data());
-            pc.current?.addIceCandidate(candidate);
-          }
-        });
-      });
-
+      callConnectionRef.current.answer(stream);
       setStatus('connected');
     } catch (err: any) {
       toast.error('Failed to accept call: ' + err.message);
@@ -343,14 +240,31 @@ export const CallProvider = ({ children }: { children: ReactNode }) => {
   };
 
   const rejectCall = async () => {
-    if (currentCall) {
-      await updateDoc(doc(db, 'calls', currentCall.id), { status: 'rejected' });
+    if (currentCall && peer) {
+      const targetPeerId = `nxt-peer-${currentCall.callerId}`;
+      const conn = peer.connect(targetPeerId, { label: 'fileTransfer' });
+      conn.on('open', () => {
+        conn.send({ type: 'call_rejected' });
+        setTimeout(() => conn.close(), 1000);
+      });
     }
-    cleanupCall();
+    handleCallEnded();
   };
 
   const endCall = async () => {
-    cleanupCall();
+    if (currentCall && peer) {
+      const targetPeerId = `nxt-peer-${currentCall.callerId === currentUser?.id ? currentCall.receiverId : currentCall.callerId}`;
+      if (dataConnectionRef.current && dataConnectionRef.current.open) {
+        dataConnectionRef.current.send({ type: 'call_ended' });
+      } else {
+        const conn = peer.connect(targetPeerId, { label: 'fileTransfer' });
+        conn.on('open', () => {
+          conn.send({ type: 'call_ended' });
+          setTimeout(() => conn.close(), 1000);
+        });
+      }
+    }
+    handleCallEnded();
   };
 
   const toggleMute = () => {
@@ -371,6 +285,26 @@ export const CallProvider = ({ children }: { children: ReactNode }) => {
         setIsVideoOff(!videoTracks[0].enabled);
       }
     }
+  };
+
+  const sendFile = async (file: File) => {
+    if (!dataConnectionRef.current) {
+      toast.error('Data channel not open');
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => {
+      const arrayBuffer = reader.result as ArrayBuffer;
+      // Note: PeerJS handles ArrayBuffer directly, chunking might be needed for large files
+      // For simplicity in this demo, sending directly.
+      dataConnectionRef.current?.send({
+        type: 'file',
+        fileName: file.name,
+        fileData: arrayBuffer
+      });
+      toast.success(`Sent file: ${file.name}`);
+    };
+    reader.readAsArrayBuffer(file);
   };
 
   return (

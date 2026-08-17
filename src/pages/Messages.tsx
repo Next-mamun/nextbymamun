@@ -16,6 +16,9 @@ import { db } from '../lib/firebase';
 import { collection, query, where, getDocs, deleteDoc, doc, getDoc, updateDoc, setDoc, onSnapshot, orderBy, limit, addDoc, serverTimestamp, or, and, arrayUnion } from 'firebase/firestore';
 import { getActiveDB, switchDB, dualWriteMessage } from '@/lib/dbHelper';
 import { supabase } from '@/lib/supabase';
+import { localDB } from '@/lib/db';
+import { useLiveQuery } from 'dexie-react-hooks';
+import { useP2P } from '@/contexts/P2PContext';
 
 import { MediaEditor } from '../components/MediaTools';
 import { useUpload } from '@/contexts/UploadContext';
@@ -122,6 +125,7 @@ const CustomAudioPlayer = ({ src, isSender }: { src: string; isSender?: boolean 
 const Messages: React.FC = () => {
   const { currentUser } = useAuth();
   const { addUpload } = useUpload();
+  const { sendMessage, onlineFriends, typingUsers, sendTypingStatus } = useP2P();
   const navigate = useNavigate();
   const location = useLocation();
   const queryClient = useQueryClient();
@@ -399,302 +403,68 @@ const Messages: React.FC = () => {
     }
   }, [location.state, location.pathname, navigate]);
 
-  const { data: contacts = [], isLoading: loadingContacts } = useQuery({
-    queryKey: ['contacts'],
-    queryFn: async () => {
-      console.log("Fetching contacts for user:", currentUser?.id);
-      if (!currentUser) return [];
-
-      // 1. Fetch messages to find active conversations
-      const msgQuery = query(
-        collection(db, 'messages'),
-        or(where('sender_id', '==', currentUser.id), where('receiver_id', '==', currentUser.id)),
-        limit(500)
-      );
-      const msgSnap = await getDocs(msgQuery);
-      let messages = msgSnap.docs
-        .map(d => ({id: d.id, ...d.data()} as any))
-        .filter(m => !m.deleted_for_everyone && !(m.deleted_for || []).includes(currentUser.id));
-      
-      // Sort in memory to avoid composite index requirement
-      messages.sort((a, b) => {
-        const timeA = typeof a.created_at === 'string' ? new Date(a.created_at).getTime() : a.created_at?.toMillis ? a.created_at.toMillis() : Date.now();
-        const timeB = typeof b.created_at === 'string' ? new Date(b.created_at).getTime() : b.created_at?.toMillis ? b.created_at.toMillis() : Date.now();
-        return timeB - timeA;
-      });
-      
-      const partnerMap = new Map<string, any>();
-      messages.forEach(m => {
-        const partnerId = m.sender_id === currentUser.id ? m.receiver_id : m.sender_id;
-        let parsedM: any = { ...m };
-        if (typeof m.content === 'string') {
-          if (m.content.includes('"JSON_PAYLOAD"')) {
-            try {
-              const obj = JSON.parse(m.content);
-              parsedM.content = obj.text;
-              parsedM.is_view_once = obj.is_view_once;
-              parsedM.parent_message_id = obj.parent_message_id;
-            } catch(e) {}
-          } else if (m.content.startsWith('{')) {
-            try {
-              const obj = JSON.parse(m.content);
-              if (obj.text !== undefined) parsedM.content = obj.text;
-            } catch(e) {}
-          }
-        }
-        if (!partnerMap.has(partnerId)) {
-          partnerMap.set(partnerId, parsedM);
-        }
-      });
-      
-      // 2. Fetch all accepted or pending friends
-      const friendshipsSnap = await getDocs(query(
-        collection(db, 'friendships'),
-        or(where('sender_id', '==', currentUser.id), where('receiver_id', '==', currentUser.id))
-      ));
-      const friendships = friendshipsSnap.docs.map(d => ({id: d.id, ...d.data()} as any));
-      
-      const friendIds = friendships.map(f => f.sender_id === currentUser.id ? f.receiver_id : f.sender_id) || [];
-      
-      // 3. Combine partner IDs and friend IDs
-      const allContactIds = Array.from(new Set([...Array.from(partnerMap.keys()), ...friendIds])).filter(Boolean);
-      
-      if (allContactIds.length === 0) return [];
-
-      // Fetch profiles in chunks since Firestore 'in' query has a limit of 10-30 depending on structure.
-      // Better yet, just fetch 'em one by one or in small batches.
-      const profiles = await Promise.all(allContactIds.map(async (id) => {
-        const d = await getDoc(doc(db, 'profiles', id));
-        return d.exists() ? { id: d.id, ...d.data() } : null;
-      })).then(res => res.filter(Boolean));
-
-      const blocks = friendships.filter(f => f.status === 'blocked');
-
-      const contactsWithMessages = profiles.map((profile: any) => {
-        const block = blocks.find(b => 
-          (b.sender_id === currentUser.id && b.receiver_id === profile.id) ||
-          (b.sender_id === profile.id && b.receiver_id === currentUser.id)
-        );
-        const lastMsg = partnerMap.get(profile.id);
-        const friendship = friendships.find(f => 
-          (f.sender_id === currentUser.id && f.receiver_id === profile.id) ||
-          (f.sender_id === profile.id && f.receiver_id === currentUser.id)
-        );
-        
-        return {
-          ...profile,
-          lastMessage: lastMsg,
-          isNewFriend: !lastMsg && friendship?.status === 'pending',
-          isFriend: friendship?.status === 'accepted',
-          blockStatus: block ? {
-            iBlockedThem: block.sender_id === currentUser.id,
-            theyBlockedMe: block.sender_id === profile.id
-          } : null
-        };
-      });
-
-      const deletedIds = JSON.parse(localStorage.getItem('deleted_chats_' + currentUser?.id) || '[]');
-      const filteredForDeletion = contactsWithMessages.filter(c => !deletedIds.includes(c.id));
-      const sortedContacts = filteredForDeletion.sort((a, b) => {
-        if (a.lastMessage && b.lastMessage) {
-          const timeA = typeof a.lastMessage.created_at === 'string' ? new Date(a.lastMessage.created_at).getTime() : a.lastMessage.created_at?.toMillis ? a.lastMessage.created_at.toMillis() : Date.now();
-          const timeB = typeof b.lastMessage.created_at === 'string' ? new Date(b.lastMessage.created_at).getTime() : b.lastMessage.created_at?.toMillis ? b.lastMessage.created_at.toMillis() : Date.now();
-          return timeB - timeA;
-        }
-        if (a.lastMessage) return -1;
-        if (b.lastMessage) return 1;
-        return 0;
-      });
-
-      return sortedContacts;
-    },
-    enabled: !!currentUser,
-    staleTime: 60 * 1000, 
-    gcTime: Infinity,
-  });
-
-  const [messages, setMessages] = useState<any[]>([]);
-
-  useEffect(() => {
-    if (!selectedChat || !currentUser) {
-      setMessages([]);
-      setVisibleLimit(50);
-      setIsMuted(false);
-      return;
-    }
+  const loadingContacts = false;
+  const contacts = useLiveQuery(async () => {
+    if (!currentUser) return [];
     
-    setVisibleLimit(50);
-    setIsMuted(localStorage.getItem(`muted_${selectedChat.id}`) === 'true');
-
-    const q1 = query(
-      collection(db, 'messages'),
-      where('sender_id', '==', currentUser.id),
-      where('receiver_id', '==', selectedChat.id)
-    );
-
-    const q2 = query(
-      collection(db, 'messages'),
-      where('sender_id', '==', selectedChat.id),
-      where('receiver_id', '==', currentUser.id)
-    );
-
-    let messages1: any[] = [];
-    let messages2: any[] = [];
-
-    const handleMessagesUpdate = () => {
-      const combined = [...messages1, ...messages2];
-      
-      // Remove duplicate keys just in case
-      const uniqueMap = new Map<string, any>();
-      combined.forEach(m => {
-        uniqueMap.set(m.id, m);
-      });
-      const data = Array.from(uniqueMap.values());
-
-      // Sort chronologically
-      data.sort((a, b) => {
-        const timeA = new Date(a.created_at).getTime();
-        const timeB = new Date(b.created_at).getTime();
-        return timeA - timeB;
-      });
-
-      const finalData = data
-        .filter((m: any) => !m.deleted_for_everyone && !(m.deleted_for || []).includes(currentUser.id))
-        .map((m: any) => {
-        let parsed: any = { ...m };
-        if (typeof m.content === 'string') {
-          if (m.content.includes('"JSON_PAYLOAD"')) {
-            try {
-              const obj = JSON.parse(m.content);
-              parsed.content = obj.text;
-              parsed.is_view_once = obj.is_view_once;
-              parsed.parent_message_id = obj.parent_message_id;
-            } catch(e) {}
-          } else if (m.content.startsWith('{')) {
-            try {
-              const obj = JSON.parse(m.content);
-              if (obj.text !== undefined) parsed.content = obj.text;
-            } catch(e) {}
-          }
-        }
-        return parsed;
-      });
-
-      setMessages(finalData);
-
-      // Check for incoming unread messages and mark them as read
-      const unreadCount = finalData.filter(m => m.sender_id === selectedChat.id && !m.is_read).length;
-      if (unreadCount > 0) {
-        // Play notification sound and vibrate
-        const isLocallyMuted = localStorage.getItem(`muted_${selectedChat.id}`) === 'true';
-        if (!isLocallyMuted) {
-          try {
-            if ('vibrate' in navigator) navigator.vibrate(200);
-            const AudioContext = window.AudioContext || (window as any).webkitAudioContext;
-            if (AudioContext) {
-              const ctx = new AudioContext();
-              const osc = ctx.createOscillator();
-              const gain = ctx.createGain();
-              osc.connect(gain);
-              gain.connect(ctx.destination);
-              osc.type = 'sine';
-              osc.frequency.setValueAtTime(600, ctx.currentTime);
-              osc.frequency.exponentialRampToValueAtTime(1000, ctx.currentTime + 0.1);
-              gain.gain.setValueAtTime(0, ctx.currentTime);
-              gain.gain.linearRampToValueAtTime(0.5, ctx.currentTime + 0.05);
-              gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.5);
-              osc.start(ctx.currentTime);
-              osc.stop(ctx.currentTime + 0.5);
-            }
-          } catch(e) {}
-        }
-
-        queryClient.invalidateQueries({ queryKey: ['unreadCounts'] });
-        queryClient.invalidateQueries({ queryKey: ['totalUnread'] });
+    const allFriends = await localDB.friends.toArray();
+    const allMessages = await localDB.messages.toArray();
+    
+    const partnerMap = new Map();
+    allMessages.forEach(m => {
+      const partnerId = m.sender === currentUser.id ? m.receiver : m.sender;
+      const t = m.timestamp || 0;
+      if (!partnerMap.has(partnerId) || partnerMap.get(partnerId).timestamp < t) {
+        partnerMap.set(partnerId, m);
       }
+    });
+    
+    const contactsWithMessages = Array.from(partnerMap.keys()).map(partnerId => {
+      const lastMsg = partnerMap.get(partnerId);
+      const f = allFriends.find(fr => fr.id === partnerId) || { id: partnerId, fullName: 'Unknown User', avatarBlob: '' };
+      return {
+        id: f.id,
+        display_name: f.fullName,
+        username: f.id,
+        avatar_url: f.avatarBlob,
+        lastMessage: lastMsg || null,
+        lastMessageTime: lastMsg ? new Date(lastMsg.timestamp) : null,
+        isBlocked: false,
+        friendshipStatus: 'accepted'
+      };
+    });
+    
+    const deletedIds = JSON.parse(localStorage.getItem('deleted_chats_' + currentUser.id) || '[]');
+    const filteredForDeletion = contactsWithMessages.filter(c => !deletedIds.includes(c.id));
 
-      finalData.forEach(async (m) => {
-        if (m.sender_id === selectedChat.id && !m.is_read) {
-          try {
-            await updateDoc(doc(db, 'messages', m.id), { is_read: true });
-          } catch(e) {}
-        }
-      });
-    };
+    return filteredForDeletion.sort((a, b) => {
+      const timeA = a.lastMessageTime ? a.lastMessageTime.getTime() : 0;
+      const timeB = b.lastMessageTime ? b.lastMessageTime.getTime() : 0;
+      return timeB - timeA;
+    });
+  }, [currentUser]) || [];
 
-    const processSnapshot = (snapshot: any) => {
-      return snapshot.docs.map((d: any) => {
-        const item = d.data();
-        let createdAt = new Date().toISOString();
-        if (item.created_at && typeof item.created_at.toDate === 'function') {
-          createdAt = item.created_at.toDate().toISOString();
-        } else if (typeof item.created_at === 'string') {
-          createdAt = item.created_at;
-        } else if (item.local_created_at) {
-          createdAt = item.local_created_at;
-        }
-        return { id: d.id, ...item, created_at: createdAt } as any;
-      });
-    };
-
-    const fetchFromSupabase = async () => {
-      try {
-        console.log('Fetching messages from Supabase fallback...');
-        const { data: data1, error: err1 } = await supabase
-          .from('messages')
-          .select('*')
-          .eq('sender_id', currentUser.id)
-          .eq('receiver_id', selectedChat.id);
-          
-        const { data: data2, error: err2 } = await supabase
-          .from('messages')
-          .select('*')
-          .eq('sender_id', selectedChat.id)
-          .eq('receiver_id', currentUser.id);
-
-        if (!err1 && !err2) {
-          messages1 = data1 || [];
-          messages2 = data2 || [];
-          handleMessagesUpdate();
-        } else {
-          switchDB('supabase'); // If Supabase also fails, fall back to Firebase
-        }
-      } catch (e) {
-        console.error('Supabase fallback failed', e);
-        switchDB('supabase'); // If Supabase also fails, fall back to Firebase
-      }
-    };
-
-    let unsub1: any;
-    let unsub2: any;
-
-    if (getActiveDB() === 'firebase') {
-      unsub1 = onSnapshot(q1, { includeMetadataChanges: true }, (snapshot) => {
-        messages1 = processSnapshot(snapshot);
-        handleMessagesUpdate();
-      }, (error) => {
-        console.error("onSnapshot messages q1 error:", error);
-        switchDB('firebase');
-        fetchFromSupabase();
-      });
-
-      unsub2 = onSnapshot(q2, { includeMetadataChanges: true }, (snapshot) => {
-        messages2 = processSnapshot(snapshot);
-        handleMessagesUpdate();
-      }, (error) => {
-        console.error("onSnapshot messages q2 error:", error);
-        switchDB('firebase');
-        fetchFromSupabase();
-      });
-    } else {
-      fetchFromSupabase();
-    }
-
-    return () => {
-      if (unsub1) unsub1();
-      if (unsub2) unsub2();
-    };
+  const rawLiveMessages = useLiveQuery(async () => {
+    if (!selectedChat || !currentUser) return [];
+    const msgs = await localDB.messages
+      .where('conversationId')
+      .equals(selectedChat.id)
+      .toArray();
+    return msgs.sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0));
   }, [selectedChat?.id, currentUser?.id]);
+
+  const messages = React.useMemo(() => {
+    if (!rawLiveMessages) return [];
+    return rawLiveMessages.map(m => ({
+      id: m.id,
+      sender_id: m.sender,
+      receiver_id: m.receiver,
+      content: m.text,
+      is_read: m.status === 'READ',
+      created_at: new Date(m.timestamp),
+      status: m.status
+    }));
+  }, [rawLiveMessages]);
 
   const { data: blockData = null } = useQuery({
     queryKey: ['blockStatus', selectedChat?.id],
@@ -1067,27 +837,9 @@ const Messages: React.FC = () => {
 
     // Destroy
     try {
-        // Delete message document completely so it vanishes from both chats
-        await deleteDoc(doc(db, 'messages', msg.id));
-        if (currentUser && selectedChat) {
-          const cacheKey = `messages_cache_${[currentUser.id, selectedChat.id].sort().join('_')}`;
-          try { await redis.del(cacheKey); } catch (e) {}
-        }
-        queryClient.invalidateQueries({ queryKey: ['messages', selectedChat?.id] });
+        await localDB.messages.delete(msg.id);
     } catch(e) {
-        console.error("Error deleting view-once message, attempting update fallback:", e);
-        // Fallback: update content to Viewed and clear media_url
-        try {
-          const payloadExtra = { JSON_PAYLOAD: true, text: 'Viewed ' + (msg.media_type || 'media'), is_view_once: false, parent_message_id: msg.parent_message_id };
-          await updateDoc(doc(db, 'messages', msg.id), { media_url: '', content: JSON.stringify(payloadExtra) });
-          if (currentUser && selectedChat) {
-            const cacheKey = `messages_cache_${[currentUser.id, selectedChat.id].sort().join('_')}`;
-            try { await redis.del(cacheKey); } catch (e) {}
-          }
-          queryClient.invalidateQueries({ queryKey: ['messages', selectedChat?.id] });
-        } catch (err) {
-          console.error("Failed both delete and update for view once message:", err);
-        }
+        console.error("Error deleting view-once message:", e);
     }
   };
 
@@ -1130,7 +882,7 @@ const Messages: React.FC = () => {
         if (activeViewOnceMediaRef.current) {
            setActiveViewOnceMedia(null);
            if (activeViewOnceMediaRef.current.id) {
-               deleteDoc(doc(db, 'messages', activeViewOnceMediaRef.current.id)).catch(console.error);
+               localDB.messages.delete(activeViewOnceMediaRef.current.id).catch(console.error);
            }
         }
       }
@@ -1214,73 +966,13 @@ const Messages: React.FC = () => {
     e.preventDefault();
     if (!messageText.trim() || !selectedChat || isBlocked) return;
     
-    const payloadExtra = { JSON_PAYLOAD: true, text: messageText, is_view_once: false, parent_message_id: replyingTo?.id || null };
-    const newMessage: any = {
-       sender_id: currentUser!.id,
-       receiver_id: selectedChat.id,
-       content: JSON.stringify(payloadExtra),
-       created_at: serverTimestamp(),
-      local_created_at: new Date().toISOString(),
-       is_read: false
-    };
-
-    // Optimistic UI update
-    const tempId = `temp-${Date.now()}`;
-    queryClient.setQueryData(['messages', selectedChat.id], (old: any) => {
-      const optimisticMsg = {
-        ...newMessage,
-        id: tempId,
-        content: payloadExtra.text,
-        is_view_once: payloadExtra.is_view_once,
-        parent_message_id: payloadExtra.parent_message_id,
-        created_at: new Date().toISOString() // for UI only
-      };
-      return [...(old || []), optimisticMsg];
-    });
-
-    queryClient.setQueryData(['contacts'], (old: any) => {
-      if (!old) return old;
-      const newContacts = [...old];
-      const chatIdx = newContacts.findIndex((c: any) => c.id === selectedChat.id);
-      if (chatIdx > -1) {
-        const chat = newContacts[chatIdx];
-        chat.lastMessage = { ...newMessage, created_at: new Date() };
-        chat.lastMessageTime = new Date();
-        newContacts.splice(chatIdx, 1);
-        newContacts.unshift(chat);
-      }
-      return newContacts;
-    });
-
-    handleMessageTextChange('');
-    setReplyingTo(null);
-    setShowEmojiPicker(false);
+    // Instead of Firebase, use P2P engine
+    await sendMessage(selectedChat.id, messageText);
     
-    try {
-      await dualWriteMessage(newMessage);
-      
-      // Trigger Push Notification
-      try {
-        triggerNotification(
-          selectedChat.id,
-          currentUser?.display_name || 'New Message',
-          messageText,
-          { type: 'message', sender_id: currentUser?.id }
-        );
-      } catch (notifErr) {
-        console.error('Notification failed:', notifErr);
-      }
-
-      const cacheKey = `messages_cache_${[currentUser!.id, selectedChat.id].sort().join('_')}`;
-      try { await redis.del(cacheKey); } catch (e) {}
-      
-      queryClient.invalidateQueries({ queryKey: ['messages', selectedChat.id] });
-      queryClient.invalidateQueries({ queryKey: ['contacts'] });
-      queryClient.invalidateQueries({ queryKey: ['notifications', selectedChat.id] });
-    } catch(e: any) {
-      console.error(e);
-      toast.error('Failed to send message: ' + e.message);
-    }
+    // The useLiveQuery for messages will auto-update the UI!
+    setMessageText('');
+    setShowEmojiPicker(false);
+    setReplyingTo(null);
   };
 
   const triggerDeleteMessage = (id: string) => {
@@ -1291,40 +983,12 @@ const Messages: React.FC = () => {
     if (!deleteConfirmId) return;
     const id = deleteConfirmId;
     setDeleteConfirmId(null);
-
-    const msgObj = messages.find((m: any) => m.id === id);
-    const isMine = msgObj?.sender_id === currentUser?.id;
-
-    // Optimistic delete
-    if (selectedChat) {
-      queryClient.setQueryData(['messages', selectedChat.id], (oldData: any[]) => {
-        if (!oldData) return oldData;
-        return oldData.filter(msg => msg.id !== id);
-      });
-    }
-
+    
     try {
-      if (isMine) {
-        await updateDoc(doc(db, 'messages', id), {
-          deleted_for_everyone: true
-        });
-        toast.success("Message deleted for everyone!");
-      } else {
-        await updateDoc(doc(db, 'messages', id), {
-          deleted_for: arrayUnion(currentUser!.id)
-        });
-        toast.success("Message deleted for you!");
-      }
-
-      if (selectedChat && currentUser) {
-        const cacheKey = `messages_cache_${[currentUser.id, selectedChat.id].sort().join('_')}`;
-        try { await redis.del(cacheKey); } catch (e) {}
-        queryClient.invalidateQueries({ queryKey: ['messages', selectedChat.id] });
-      }
-    } catch(error: any) { 
+      await localDB.messages.delete(id);
+    } catch(error: any) {
        console.error(error);
        toast.error("Failed to delete message: " + error.message);
-       queryClient.invalidateQueries({ queryKey: ['messages', selectedChat?.id] });
     }
   };
 
@@ -1361,25 +1025,10 @@ const Messages: React.FC = () => {
     setDeleteConfirmId(null);
     if (!idsToDelete.length) return;
 
-    if (selectedChat) {
-      queryClient.setQueryData(['messages', selectedChat.id], (oldData: any[]) => {
-        if (!oldData) return oldData;
-        return oldData.filter(msg => !idsToDelete.includes(msg.id));
-      });
-    }
-
     try {
-      await Promise.all(idsToDelete.map(id => updateDoc(doc(db, 'messages', id), {
-        deleted_for_everyone: true
-      })));
-      if (selectedChat && currentUser) {
-        const cacheKey = `messages_cache_${[currentUser.id, selectedChat.id].sort().join('_')}`;
-        try { await redis.del(cacheKey); } catch (e) {}
-        queryClient.invalidateQueries({ queryKey: ['messages', selectedChat.id] });
-      }
+      await Promise.all(idsToDelete.map(id => localDB.messages.delete(id)));
     } catch(error) {
        console.error(error);
-       queryClient.invalidateQueries({ queryKey: ['messages', selectedChat?.id] });
     }
   };
 
