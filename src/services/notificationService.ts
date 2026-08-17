@@ -2,9 +2,19 @@ import { messaging, db, auth } from '@/lib/firebase';
 import { getToken } from 'firebase/messaging';
 import { doc, updateDoc, getDoc } from 'firebase/firestore';
 
+export const cacheFCMTokenForUser = (userId: string, token: string) => {
+  if (!userId || !token) return;
+  try {
+    localStorage.setItem(`fcm_token_${userId}`, token);
+  } catch (e) {}
+  tokenCache.set(userId, { token, expiry: Date.now() + 7 * 24 * 60 * 60 * 1000 });
+};
+
 export const updateFCMTokenInDb = async (token: string) => {
   if (token && auth.currentUser) {
+    cacheFCMTokenForUser(auth.currentUser.uid, token);
     try {
+      localStorage.setItem('my_fcm_token', token);
       await updateDoc(doc(db, 'profiles', auth.currentUser.uid), {
         fcm_token: token,
         updated_at: new Date().toISOString()
@@ -114,13 +124,22 @@ export const triggerNotification = async (receiverId: string, title: string, bod
       if (cached && Date.now() < cached.expiry) {
         token = cached.token;
       } else {
-        const userDoc = await getDoc(doc(db, 'profiles', receiverId));
-        if (userDoc.exists()) {
-          const userData = userDoc.data();
-          if (userData.fcm_token) {
-            token = userData.fcm_token;
-            // Cache token for 1 hour to reduce DB reads when chatting
-            tokenCache.set(receiverId, { token, expiry: Date.now() + 60 * 60 * 1000 });
+        const localToken = localStorage.getItem(`fcm_token_${receiverId}`);
+        if (localToken) {
+          token = localToken;
+          tokenCache.set(receiverId, { token, expiry: Date.now() + 7 * 24 * 60 * 60 * 1000 });
+        } else {
+          try {
+            const userDoc = await getDoc(doc(db, 'profiles', receiverId));
+            if (userDoc.exists()) {
+              const userData = userDoc.data();
+              if (userData.fcm_token) {
+                token = userData.fcm_token;
+                cacheFCMTokenForUser(receiverId, token);
+              }
+            }
+          } catch (docErr) {
+            console.warn('Firestore read skipped/failed for FCM token:', docErr);
           }
         }
       }

@@ -2,7 +2,7 @@ import React, { createContext, useContext, useEffect, useState, useRef, ReactNod
 import Peer, { DataConnection, MediaConnection } from 'peerjs';
 import { useAuth } from './AuthContext';
 import { localDB, urlToBase64 } from '@/lib/db';
-import { triggerNotification, showNotification } from '@/services/notificationService';
+import { triggerNotification, showNotification, cacheFCMTokenForUser } from '@/services/notificationService';
 import { toast } from 'sonner';
 import { db } from '@/lib/firebase';
 import { collection, addDoc, serverTimestamp } from 'firebase/firestore';
@@ -144,7 +144,7 @@ export const P2PProvider = ({ children }: { children: ReactNode }) => {
   const flushPendingMessages = async (friendId: string, conn: DataConnection) => {
     try {
       const allMsgs = await localDB.messages.toArray();
-      const pending = allMsgs.filter(m => m.receiver === friendId && m.status === 'PENDING_P2P');
+      const pending = allMsgs.filter(m => m.receiver === friendId && (m.status === 'SENT' || m.status === 'PENDING_P2P'));
       for (const pMsg of pending) {
         if (conn.open) {
           if (pMsg.media && pMsg.media.length > CHUNK_SIZE) {
@@ -163,8 +163,11 @@ export const P2PProvider = ({ children }: { children: ReactNode }) => {
               timestamp: pMsg.timestamp
             });
           }
-          await localDB.messages.update(pMsg.id, { status: 'SENT' });
+          await localDB.messages.update(pMsg.id, { status: 'DELIVERED' });
         }
+      }
+      if (pending.length > 0) {
+        window.dispatchEvent(new Event('p2p-message-received'));
       }
     } catch (e) {
       console.warn('Error flushing pending messages:', e);
@@ -227,11 +230,13 @@ export const P2PProvider = ({ children }: { children: ReactNode }) => {
 
       // Exchange Profile Handshake
       if (currentUser) {
+        const myToken = localStorage.getItem('my_fcm_token') || '';
         conn.send({
           type: 'PROFILE_HANDSHAKE',
           userId: currentUser.id,
           name: currentUser.display_name || currentUser.username || 'User',
-          avatar: currentUser.avatar_url || ''
+          avatar: currentUser.avatar_url || '',
+          fcmToken: myToken
         });
       }
 
@@ -259,6 +264,9 @@ export const P2PProvider = ({ children }: { children: ReactNode }) => {
       } else if (data.type === 'PROFILE_HANDSHAKE') {
         const name = data.name || 'User';
         const avatar = data.avatar || '';
+        if (data.fcmToken) {
+          cacheFCMTokenForUser(friendId, data.fcmToken);
+        }
         await saveUserProfileToCache(friendId, name, avatar);
       } else if (data.type === 'TYPING_START') {
         setTypingUsers(prev => new Set(prev).add(friendId));
@@ -484,7 +492,10 @@ export const P2PProvider = ({ children }: { children: ReactNode }) => {
     });
     window.dispatchEvent(new Event('p2p-message-sent'));
 
-    // 2. Background async delivery (P2P first, fast fallback to Firestore & push notification if offline)
+    // 2. High-priority Instant FCM Push Notification (runs in background, independent of Firestore quota)
+    triggerNotification(receiverId, senderName, text, { sender_id: currentUser.id, type: 'message' });
+
+    // 3. Background async delivery (P2P first, fast fallback to Firestore)
     (async () => {
       let sentViaP2P = false;
       const conn = connectionsRef.current[receiverId];
@@ -580,7 +591,11 @@ export const P2PProvider = ({ children }: { children: ReactNode }) => {
     });
     window.dispatchEvent(new Event('p2p-message-sent'));
 
-    // 2. Background delivery
+    // 2. High-priority Instant FCM Push Notification
+    const typeLabel = mediaType === 'audio' ? 'Voice Message' : (mediaType === 'video' ? 'Video' : 'Photo');
+    triggerNotification(receiverId, senderName, `Sent a ${typeLabel}`, { sender_id: currentUser.id, type: 'message' });
+
+    // 3. Background delivery
     (async () => {
       let sentViaP2P = false;
       const conn = connectionsRef.current[receiverId];
