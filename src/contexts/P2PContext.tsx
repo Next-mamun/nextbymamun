@@ -2,7 +2,7 @@ import React, { createContext, useContext, useEffect, useState, useRef, ReactNod
 import Peer, { DataConnection, MediaConnection } from 'peerjs';
 import { useAuth } from './AuthContext';
 import { localDB, urlToBase64 } from '@/lib/db';
-import { triggerNotification } from '@/services/notificationService';
+import { triggerNotification, showNotification } from '@/services/notificationService';
 import { toast } from 'sonner';
 import { db } from '@/lib/firebase';
 import { collection, addDoc, serverTimestamp } from 'firebase/firestore';
@@ -14,6 +14,7 @@ interface P2PContextType {
   sendMessage: (receiverId: string, text: string) => Promise<void>;
   sendMediaMessage: (receiverId: string, media: string, mediaType: 'image' | 'video' | 'audio', text?: string, isViewOnce?: boolean) => Promise<void>;
   sendTypingStatus: (receiverId: string, isTyping: boolean) => void;
+  sendReadReceipt: (receiverId: string, messageIds: string[]) => void;
   typingUsers: Set<string>;
 }
 
@@ -279,13 +280,22 @@ export const P2PProvider = ({ children }: { children: ReactNode }) => {
         if (data.id) {
           try {
             await localDB.messages.update(data.id, { status: 'DELIVERED' });
+            window.dispatchEvent(new Event('p2p-message-received'));
           } catch(e) {}
         }
       } else if (data.type === 'MESSAGE_READ') {
-        if (data.id) {
+        if (data.ids && Array.isArray(data.ids)) {
+          for (const mid of data.ids) {
+            try {
+              await localDB.messages.update(mid, { status: 'READ' });
+            } catch(e) {}
+          }
+          window.dispatchEvent(new Event('p2p-message-read'));
+        } else if (data.id) {
           try {
             await localDB.messages.update(data.id, { status: 'READ' });
           } catch(e) {}
+          window.dispatchEvent(new Event('p2p-message-read'));
         }
       } else if (data.type === 'TEXT_MESSAGE') {
         if (data.senderName) {
@@ -307,8 +317,11 @@ export const P2PProvider = ({ children }: { children: ReactNode }) => {
         } catch(e) {}
 
         try {
-          const senderName = data.senderName || (await localDB.friends.get(friendId))?.fullName || 'New Message';
-          triggerNotification(friendId, senderName, data.text || 'Sent you a message', { sender_id: friendId });
+          const isAtMessages = window.location.pathname.startsWith('/messages');
+          if (!isAtMessages || document.hidden) {
+            const senderName = data.senderName || (await localDB.friends.get(friendId))?.fullName || 'Someone';
+            showNotification(`New message from ${senderName}`, { body: data.text || 'Sent you a message' });
+          }
         } catch(e) {}
 
         window.dispatchEvent(new Event('p2p-message-received'));
@@ -335,9 +348,12 @@ export const P2PProvider = ({ children }: { children: ReactNode }) => {
         } catch(e) {}
 
         try {
-          const senderName = data.senderName || (await localDB.friends.get(friendId))?.fullName || 'New Message';
-          const typeLabel = data.mediaType === 'audio' ? 'Voice Message' : (data.mediaType === 'video' ? 'Video' : 'Photo');
-          triggerNotification(friendId, senderName, `Sent you a ${typeLabel}`, { sender_id: friendId });
+          const isAtMessages = window.location.pathname.startsWith('/messages');
+          if (!isAtMessages || document.hidden) {
+            const senderName = data.senderName || (await localDB.friends.get(friendId))?.fullName || 'Someone';
+            const typeLabel = data.mediaType === 'audio' ? 'Voice Message' : (data.mediaType === 'video' ? 'Video' : 'Photo');
+            showNotification(`New ${typeLabel} from ${senderName}`, { body: data.text || `Sent you a ${typeLabel}` });
+          }
         } catch(e) {}
 
         window.dispatchEvent(new Event('p2p-message-received'));
@@ -392,9 +408,12 @@ export const P2PProvider = ({ children }: { children: ReactNode }) => {
           } catch(e) {}
 
           try {
-            const senderName = transfer.senderName || (await localDB.friends.get(friendId))?.fullName || 'New Message';
-            const typeLabel = transfer.mediaType === 'audio' ? 'Voice Message' : (transfer.mediaType === 'video' ? 'Video' : 'Photo');
-            triggerNotification(friendId, senderName, `Sent you a ${typeLabel}`, { sender_id: friendId });
+            const isAtMessages = window.location.pathname.startsWith('/messages');
+            if (!isAtMessages || document.hidden) {
+              const senderName = transfer.senderName || (await localDB.friends.get(friendId))?.fullName || 'Someone';
+              const typeLabel = transfer.mediaType === 'audio' ? 'Voice Message' : (transfer.mediaType === 'video' ? 'Video' : 'Photo');
+              showNotification(`New ${typeLabel} from ${senderName}`, { body: transfer.text || `Sent you a ${typeLabel}` });
+            }
           } catch(e) {}
 
           window.dispatchEvent(new Event('p2p-message-received'));
@@ -412,7 +431,7 @@ export const P2PProvider = ({ children }: { children: ReactNode }) => {
       try {
         const friend = await localDB.friends.get(friendId);
         const name = friend?.fullName || 'User';
-        toast('Fast messaging system disconnected', { description: `from ${name}` });
+        toast.info(`Direct P2P disconnected with ${name}. Cloud messaging & notifications active.`, { icon: '☁️' });
       } catch (e) {}
     });
   };
@@ -435,14 +454,14 @@ export const P2PProvider = ({ children }: { children: ReactNode }) => {
         reject(err);
       });
 
-      // Timeout fallback
+      // Fast timeout fallback (1200ms) for instant cloud messaging if offline
       setTimeout(() => {
         if (conn && conn.open) {
           resolve(conn);
         } else {
           reject('Connection timeout');
         }
-      }, 3500);
+      }, 1200);
     });
   };
 
@@ -465,11 +484,12 @@ export const P2PProvider = ({ children }: { children: ReactNode }) => {
     });
     window.dispatchEvent(new Event('p2p-message-sent'));
 
-    // 2. Background async delivery (P2P first, fallback to Firestore if offline)
+    // 2. Background async delivery (P2P first, fast fallback to Firestore & push notification if offline)
     (async () => {
-      try {
-        const conn = await ensureConnection(receiverId);
-        if (conn && conn.open) {
+      let sentViaP2P = false;
+      const conn = connectionsRef.current[receiverId];
+      if (conn && conn.open) {
+        try {
           conn.send({
             type: 'TEXT_MESSAGE',
             id: msgId,
@@ -479,17 +499,58 @@ export const P2PProvider = ({ children }: { children: ReactNode }) => {
             text,
             timestamp
           });
+          sentViaP2P = true;
+        } catch(e) {
+          sentViaP2P = false;
         }
-      } catch (err) {
-        // Peer is offline or P2P timed out -> Fallback to Firestore so receiver gets it
+      }
+
+      if (!sentViaP2P) {
+        try {
+          const activeConn = await ensureConnection(receiverId);
+          if (activeConn && activeConn.open) {
+            activeConn.send({
+              type: 'TEXT_MESSAGE',
+              id: msgId,
+              sender: currentUser.id,
+              senderName,
+              senderAvatar,
+              text,
+              timestamp
+            });
+            sentViaP2P = true;
+          }
+        } catch (err) {
+          sentViaP2P = false;
+        }
+      }
+
+      if (!sentViaP2P) {
+        // Peer is offline or P2P timed out -> Fallback to Firestore & Send Push Notification
         try {
           await addDoc(collection(db, 'messages'), {
             sender_id: currentUser.id,
             receiver_id: receiverId,
             content: text,
+            is_read: false,
             created_at: serverTimestamp(),
             timestamp
           });
+
+          await addDoc(collection(db, 'notifications'), {
+            user_id: receiverId,
+            sender_id: currentUser.id,
+            type: 'message',
+            is_read: false,
+            created_at: serverTimestamp()
+          });
+
+          // Mark status as DELIVERED locally since message is in Cloud & notification dispatched
+          await localDB.messages.update(msgId, { status: 'DELIVERED' });
+          window.dispatchEvent(new Event('p2p-message-received'));
+
+          // Trigger high-priority FCM Push Notification
+          triggerNotification(receiverId, senderName, text, { sender_id: currentUser.id, type: 'message' });
         } catch (fbErr) {
           console.warn('Firestore fallback send deferred:', fbErr);
         }
@@ -521,9 +582,10 @@ export const P2PProvider = ({ children }: { children: ReactNode }) => {
 
     // 2. Background delivery
     (async () => {
-      try {
-        const conn = await ensureConnection(receiverId);
-        if (conn && conn.open) {
+      let sentViaP2P = false;
+      const conn = connectionsRef.current[receiverId];
+      if (conn && conn.open) {
+        try {
           if (media.length > CHUNK_SIZE) {
             await sendChunkedMediaOverConn(conn, receiverId, msgId, media, mediaType, text, isViewOnce, timestamp);
           } else {
@@ -540,8 +602,40 @@ export const P2PProvider = ({ children }: { children: ReactNode }) => {
               timestamp
             });
           }
+          sentViaP2P = true;
+        } catch(e) {
+          sentViaP2P = false;
         }
-      } catch (err) {
+      }
+
+      if (!sentViaP2P) {
+        try {
+          const activeConn = await ensureConnection(receiverId);
+          if (activeConn && activeConn.open) {
+            if (media.length > CHUNK_SIZE) {
+              await sendChunkedMediaOverConn(activeConn, receiverId, msgId, media, mediaType, text, isViewOnce, timestamp);
+            } else {
+              activeConn.send({
+                type: 'MEDIA_MESSAGE',
+                id: msgId,
+                sender: currentUser.id,
+                senderName,
+                senderAvatar,
+                media,
+                mediaType,
+                text,
+                isViewOnce,
+                timestamp
+              });
+            }
+            sentViaP2P = true;
+          }
+        } catch(err) {
+          sentViaP2P = false;
+        }
+      }
+
+      if (!sentViaP2P) {
         try {
           await addDoc(collection(db, 'messages'), {
             sender_id: currentUser.id,
@@ -550,9 +644,24 @@ export const P2PProvider = ({ children }: { children: ReactNode }) => {
             media_url: media,
             media_type: mediaType,
             is_view_once: isViewOnce,
+            is_read: false,
             created_at: serverTimestamp(),
             timestamp
           });
+
+          await addDoc(collection(db, 'notifications'), {
+            user_id: receiverId,
+            sender_id: currentUser.id,
+            type: 'message',
+            is_read: false,
+            created_at: serverTimestamp()
+          });
+
+          await localDB.messages.update(msgId, { status: 'DELIVERED' });
+          window.dispatchEvent(new Event('p2p-message-received'));
+
+          const typeLabel = mediaType === 'audio' ? 'Voice Message' : (mediaType === 'video' ? 'Video' : 'Photo');
+          triggerNotification(receiverId, senderName, `Sent a ${typeLabel}`, { sender_id: currentUser.id, type: 'message' });
         } catch (fbErr) {
           console.warn('Firestore fallback media send deferred:', fbErr);
         }
@@ -569,8 +678,18 @@ export const P2PProvider = ({ children }: { children: ReactNode }) => {
     } catch (e) {}
   };
 
+  const sendReadReceipt = async (receiverId: string, messageIds: string[]) => {
+    if (!messageIds || messageIds.length === 0) return;
+    try {
+      const conn = connectionsRef.current[receiverId];
+      if (conn && conn.open) {
+        conn.send({ type: 'MESSAGE_READ', ids: messageIds });
+      }
+    } catch (e) {}
+  };
+
   return (
-    <P2PContext.Provider value={{ peer, onlineFriends, sendMessage, sendMediaMessage, sendTypingStatus, typingUsers }}>
+    <P2PContext.Provider value={{ peer, onlineFriends, sendMessage, sendMediaMessage, sendTypingStatus, sendReadReceipt, typingUsers }}>
       {children}
     </P2PContext.Provider>
   );

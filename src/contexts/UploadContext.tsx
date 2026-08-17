@@ -9,6 +9,7 @@ import * as idb from 'idb-keyval';
 import * as tus from 'tus-js-client';
 import { invalidatePostsCache, redis } from '@/lib/redis';
 import { triggerNotification } from '@/services/notificationService';
+import { localDB } from '@/lib/db';
 import { toast } from 'sonner';
 
 import imageCompression from 'browser-image-compression';
@@ -354,6 +355,21 @@ export const UploadProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         postData.created_at = serverTimestamp();
         const postDoc = await dualWritePost(postData);
         await invalidatePostsCache();
+
+        // Local IndexedDB caching
+        try {
+          await localDB.cachedVideos.put({
+            id: postDoc?.id || id,
+            source_type: 'local',
+            media_url: mediaUrl,
+            caption: postData?.content || '',
+            user_id: metadata.userId,
+            created_at: new Date(),
+            cachedAt: Date.now(),
+            likes_count: 0,
+            comments_count: 0
+          });
+        } catch(e) {}
       } else if (type === 'story') {
         await addDoc(collection(db, 'stories'), {
           user_id: metadata.userId,
@@ -373,7 +389,22 @@ export const UploadProvider: React.FC<{ children: React.ReactNode }> = ({ childr
           youtube_id: metadata.payload.youtube_id || null,
           views: 0
         };
-        await dualWritePost(payload);
+        const reelDoc = await dualWritePost(payload);
+        
+        // Local IndexedDB caching
+        try {
+          await localDB.cachedVideos.put({
+            id: reelDoc?.id || id,
+            source_type: 'local',
+            media_url: mediaUrl,
+            caption: payload.content || '',
+            user_id: metadata.userId,
+            created_at: new Date(),
+            cachedAt: Date.now(),
+            likes_count: 0,
+            comments_count: 0
+          });
+        } catch(e) {}
       } else if (type === 'message') {
         const payload = { ...metadata.payload, created_at: serverTimestamp() };
         if (mediaUrl) payload.media_url = mediaUrl;

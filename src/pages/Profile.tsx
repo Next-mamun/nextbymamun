@@ -10,6 +10,8 @@ import { VerifiedBadge } from '@/components/VerifiedBadge';
 import ZoomableImage from '@/components/ZoomableImage';
 import { Link } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useLiveQuery } from 'dexie-react-hooks';
+import { localDB } from '@/lib/db';
 import { useUpload } from '@/contexts/UploadContext';
 import { toast } from 'sonner';
 
@@ -150,12 +152,60 @@ const Profile: React.FC = () => {
         const likesSnap = await getDocs(likesQuery);
         const likes = likesSnap.docs.map(ld => ({ id: ld.id, ...ld.data() }));
 
-        return { id: d.id, ...postData, profiles, comments, likes };
+        const finalPost = { id: d.id, ...postData, profiles, comments, likes };
+        
+        // Cache post in localDB
+        try {
+          localDB.cachedVideos.put({
+            id: d.id,
+            source_type: 'local',
+            media_url: postData.media_url || '',
+            caption: postData.content || '',
+            user_id: profile.id,
+            created_at: postData.created_at ? new Date(postData.created_at.seconds ? postData.created_at.seconds * 1000 : postData.created_at) : new Date(),
+            cachedAt: Date.now(),
+            likes_count: likes.length || 0,
+            comments_count: comments.length || 0
+          }).catch(() => {});
+        } catch(e) {}
+
+        return finalPost;
       }));
     },
     enabled: !!profile?.id,
     staleTime: 1000 * 60 * 5, // 5 minutes
   });
+
+  // Local IndexedDB live query for instant offline & zero-latency profile posts
+  const localCachedPosts = useLiveQuery(async () => {
+    if (!profile?.id) return [];
+    try {
+      const posts = await localDB.cachedVideos.where('user_id').equals(profile.id).toArray();
+      return posts.map(p => ({
+        id: p.id,
+        content: p.caption,
+        media_url: p.media_url,
+        media_type: (p.media_url?.includes('.mp4') || p.media_url?.includes('video')) ? 'video' : 'image',
+        created_at: p.created_at || new Date(p.cachedAt || Date.now()),
+        profiles: profile,
+        likes: [],
+        comments: []
+      }));
+    } catch(e) {
+      return [];
+    }
+  }, [profile?.id]) || [];
+
+  const displayPosts = React.useMemo(() => {
+    const map = new Map<string, any>();
+    localCachedPosts.forEach(p => map.set(p.id, p));
+    userPosts.forEach(p => map.set(p.id, p));
+    return Array.from(map.values()).sort((a: any, b: any) => {
+      const tA = new Date(a.created_at || 0).getTime();
+      const tB = new Date(b.created_at || 0).getTime();
+      return tB - tA;
+    });
+  }, [localCachedPosts, userPosts]);
 
   const { data: friendship } = useQuery({
     queryKey: ['friendship', currentUser?.id, profile?.id],
@@ -415,12 +465,12 @@ const Profile: React.FC = () => {
 
           <div className="flex-1 flex flex-col gap-4">
             <h2 className="text-2xl font-black text-gray-900 dark:text-white mb-2">Recent Posts</h2>
-            {userPosts.length === 0 ? (
+            {displayPosts.length === 0 ? (
               <div className="bg-white dark:bg-black p-20 rounded-2xl text-center border-2 border-dashed border-gray-200 dark:border-gray-800 text-gray-400 font-bold flex flex-col items-center gap-4">
                 <Plus size={48} className="opacity-20" />
                 <p>No posts published by {profile.display_name} yet.</p>
               </div>
-            ) : userPosts.map(post => (
+            ) : displayPosts.map(post => (
               <PostCard 
                 key={post.id} 
                 post={post} 

@@ -125,7 +125,7 @@ const CustomAudioPlayer = ({ src, isSender }: { src: string; isSender?: boolean 
 const Messages: React.FC = () => {
   const { currentUser } = useAuth();
   const { addUpload } = useUpload();
-  const { sendMessage, sendMediaMessage, onlineFriends, typingUsers, sendTypingStatus } = useP2P();
+  const { sendMessage, sendMediaMessage, onlineFriends, typingUsers, sendTypingStatus, sendReadReceipt } = useP2P();
   const navigate = useNavigate();
   const location = useLocation();
   const queryClient = useQueryClient();
@@ -571,6 +571,49 @@ const Messages: React.FC = () => {
     }));
   }, [rawLiveMessages]);
 
+  // Read Receipts: Automatically mark incoming messages as READ and send P2P read receipt
+  useEffect(() => {
+    if (!selectedChat || !currentUser || !rawLiveMessages || rawLiveMessages.length === 0) return;
+
+    const unreadIncoming = rawLiveMessages.filter(
+      (m: any) => (m.sender === selectedChat.id || m.sender === selectedChat.username) &&
+                  (m.receiver === currentUser.id || m.receiver === currentUser.username) &&
+                  m.status !== 'READ'
+    );
+
+    if (unreadIncoming.length > 0) {
+      const unreadIds = unreadIncoming.map((m: any) => m.id);
+      
+      // Update IndexedDB
+      (async () => {
+        for (const mid of unreadIds) {
+          try {
+            await localDB.messages.update(mid, { status: 'READ' });
+          } catch(e) {}
+        }
+      })();
+
+      // Send P2P read receipt to peer
+      sendReadReceipt(selectedChat.id, unreadIds);
+
+      // Also update Firestore
+      (async () => {
+        try {
+          const q = query(
+            collection(db, 'messages'),
+            where('sender_id', '==', selectedChat.id),
+            where('receiver_id', '==', currentUser.id),
+            where('is_read', '==', false)
+          );
+          const snap = await getDocs(q);
+          snap.docs.forEach(d => {
+            updateDoc(doc(db, 'messages', d.id), { is_read: true }).catch(() => {});
+          });
+        } catch(e) {}
+      })();
+    }
+  }, [selectedChat, currentUser, rawLiveMessages, sendReadReceipt]);
+
   const { data: blockData = null } = useQuery({
     queryKey: ['blockStatus', selectedChat?.id],
     queryFn: async () => {
@@ -633,14 +676,32 @@ const Messages: React.FC = () => {
             
             // Parse text content if JSON
             let parsedM = { ...newMsg };
+            let isViewOnce = !!newMsg.is_view_once;
             if (typeof newMsg.content === 'string') {
               if (newMsg.content.includes('"JSON_PAYLOAD"')) {
                 try {
                   const obj = JSON.parse(newMsg.content);
                   parsedM.content = obj.text;
+                  isViewOnce = !!obj.is_view_once;
                 } catch(e) {}
               }
             }
+
+            const partnerId = newMsg.sender_id === currentUser.id ? newMsg.receiver_id : newMsg.sender_id;
+            const msgTime = newMsg.created_at?.toDate ? newMsg.created_at.toDate().getTime() : (newMsg.timestamp || Date.now());
+
+            localDB.messages.put({
+              id: change.doc.id,
+              conversationId: partnerId,
+              sender: newMsg.sender_id,
+              receiver: newMsg.receiver_id,
+              text: parsedM.content || '',
+              media: newMsg.media_url || '',
+              mediaType: newMsg.media_type || undefined,
+              isViewOnce: isViewOnce,
+              status: newMsg.is_read ? 'READ' : 'DELIVERED',
+              timestamp: msgTime
+            }).catch(() => {});
 
             // Move contact to the top of the list in local query cache
             queryClient.setQueryData(['contacts'], (old: any) => {
@@ -1403,10 +1464,12 @@ const Messages: React.FC = () => {
                           {msg.sender_id === currentUser?.id && (
                             msg.status === 'PENDING_P2P' ? (
                               <span title="Waiting to connect" className="text-[10px] opacity-70">⏳</span>
-                            ) : msg.status === 'SENT' ? (
-                              <Check size={12} className="opacity-70 text-blue-100" />
+                            ) : (msg.status === 'READ' || msg.is_read) ? (
+                              <span title="Seen"><CheckCheck size={14} className="text-red-500 font-black drop-shadow-[0_0_5px_rgba(239,68,68,0.6)]" /></span>
+                            ) : msg.status === 'DELIVERED' ? (
+                              <span title="Delivered"><CheckCheck size={13} className="text-blue-100/90" /></span>
                             ) : (
-                              <CheckCheck size={12} className={msg.status === 'READ' ? "text-red-500" : "text-blue-200 opacity-90"} />
+                              <span title="Sent"><Check size={13} className="text-blue-200/80" /></span>
                             )
                           )}
                         </div>

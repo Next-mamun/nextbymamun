@@ -100,6 +100,13 @@ const processQueue = async () => {
 };
 
 export const triggerNotification = async (receiverId: string, title: string, body: string, data?: any) => {
+  if (!receiverId) return null;
+  // Guard: Never trigger a push notification to oneself
+  if (auth.currentUser && (receiverId === auth.currentUser.uid)) {
+    console.log('Skipping push notification: sender and receiver are identical.');
+    return null;
+  }
+
   const task = async () => {
     try {
       let token = '';

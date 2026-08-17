@@ -2,10 +2,11 @@ import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
 import { idbStorage } from './idbStorage';
 import { db } from '@/lib/firebase';
-import { collection, query, where, onSnapshot, orderBy, limit, getDocs, getDoc, doc, startAfter } from 'firebase/firestore';
+import { collection, query, where, or, onSnapshot, orderBy, limit, getDocs, getDoc, doc, startAfter } from 'firebase/firestore';
 import { toast } from 'sonner';
 import { getActiveDB, switchDB } from '@/lib/dbHelper';
 import { supabase } from '@/lib/supabase';
+import { localDB } from '@/lib/db';
 
 interface Post {
   id: string;
@@ -179,43 +180,64 @@ export const useGlobalStore = create<GlobalState>()(
         
         const qMessages = query(
           collection(db, 'messages'), 
-          where('receiver_id', '==', userId),
-          orderBy('created_at', 'desc')
+          or(where('receiver_id', '==', userId), where('sender_id', '==', userId))
         );
 
         messageUnsub = onSnapshot(qMessages, (snapshot) => {
           const msgs = snapshot.docs.map(document => ({ id: document.id, ...document.data() })) as Message[];
-          const unread = msgs.filter(m => m.is_read === false).length;
+          const unread = msgs.filter(m => m.receiver_id === userId && m.is_read === false).length;
           set({ messages: msgs, unreadMessagesCount: unread });
 
-          // Handle new message notifications
-          if (!initialMessageLoad) {
-            snapshot.docChanges().forEach(async (change) => {
-              if (change.type === 'added') {
-                const data = change.doc.data();
-                if (data.deleted_for_everyone || (data.deleted_for || []).includes(userId)) return;
-                
+          // Sync incoming & modified Firestore messages into localDB for seamless fallback & read receipts
+          snapshot.docChanges().forEach(async (change) => {
+            if (change.type === 'added' || change.type === 'modified') {
+              const data = change.doc.data();
+              if (data.deleted_for_everyone || (data.deleted_for || []).includes(userId)) return;
+
+              let messageContent = data.content || '';
+              let isViewOnce = !!data.is_view_once;
+              if (typeof data.content === 'string') {
+                if (data.content.includes('"JSON_PAYLOAD"')) {
+                  try {
+                    const obj = JSON.parse(data.content);
+                    messageContent = obj.text || (data.media_url ? 'Sent an attachment' : 'New message');
+                    isViewOnce = !!obj.is_view_once;
+                  } catch(e) {}
+                } else if (data.content.startsWith('{')) {
+                  try {
+                    const obj = JSON.parse(data.content);
+                    if (obj.text) messageContent = obj.text;
+                  } catch(e) {}
+                }
+              }
+
+              const partnerId = data.sender_id === userId ? data.receiver_id : data.sender_id;
+              const msgTime = data.created_at?.toDate ? data.created_at.toDate().getTime() : (data.timestamp || Date.now());
+
+              try {
+                await localDB.messages.put({
+                  id: change.doc.id,
+                  conversationId: partnerId,
+                  sender: data.sender_id,
+                  receiver: data.receiver_id,
+                  text: messageContent,
+                  media: data.media_url || '',
+                  mediaType: data.media_type || undefined,
+                  isViewOnce: isViewOnce,
+                  status: data.is_read ? 'READ' : 'DELIVERED',
+                  timestamp: msgTime
+                });
+                window.dispatchEvent(new Event('p2p-message-received'));
+                window.dispatchEvent(new Event('p2p-message-read'));
+              } catch(e) {}
+
+              // Handle notification toast only if newly added & not on initial load & not sender
+              if (!initialMessageLoad && change.type === 'added' && data.sender_id !== userId) {
                 const isAtMessages = window.location.pathname.startsWith('/messages');
                 if (isAtMessages) return;
                 
                 const senderDoc = await getDoc(doc(db, 'profiles', data.sender_id));
                 const sender = senderDoc.data();
-                
-                let messageContent = data.content;
-                if (typeof data.content === 'string') {
-                  if (data.content.includes('"JSON_PAYLOAD"')) {
-                    try {
-                      const obj = JSON.parse(data.content);
-                      messageContent = obj.text || (data.media_url ? 'Sent an attachment' : 'New message');
-                    } catch(e) {}
-                  } else if (data.content.startsWith('{')) {
-                    try {
-                      const obj = JSON.parse(data.content);
-                      if (obj.text) messageContent = obj.text;
-                    } catch(e) {}
-                  }
-                }
-
                 const isMuted = localStorage.getItem(`muted_${data.sender_id}`) === 'true';
 
                 if (localStorage.getItem('next_media_sound') === 'true' && !isMuted) {
@@ -242,9 +264,11 @@ export const useGlobalStore = create<GlobalState>()(
                   });
                 }
               }
-            });
-          }
+            }
+          });
           initialMessageLoad = false;
+        }, (error) => {
+          console.warn("qMessages onSnapshot error:", error);
         });
 
         return messageUnsub;
@@ -263,6 +287,8 @@ export const useGlobalStore = create<GlobalState>()(
           const notifs = snapshot.docs.map(document => ({ id: document.id, ...document.data() })) as Notification[];
           const unread = notifs.filter(n => n.is_read === false).length;
           set({ notifications: notifs, unreadNotificationsCount: unread });
+        }, (error) => {
+          console.warn("qNotifs onSnapshot error:", error);
         });
 
         return notifUnsub;

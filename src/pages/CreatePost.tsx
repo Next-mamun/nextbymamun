@@ -26,6 +26,7 @@ const CreatePost = () => {
   const [customCategory, setCustomCategory] = useState('');
   const [thumbnailFile, setThumbnailFile] = useState<File | null>(null);
   const [thumbnailPreview, setThumbnailPreview] = useState<string | null>(null);
+  const galleryInputRef = React.useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     const params = new URLSearchParams(location.search);
@@ -94,9 +95,25 @@ const CreatePost = () => {
     return data.secure_url;
   };
 
+  const openGallery = (e?: React.MouseEvent) => {
+    if (e) {
+      e.preventDefault();
+      e.stopPropagation();
+    }
+    if (galleryInputRef.current) {
+      galleryInputRef.current.value = '';
+      galleryInputRef.current.click();
+    }
+  };
+
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
     onDrop,
     multiple: false,
+    noClick: false,
+    accept: {
+      'image/*': ['.png', '.jpg', '.jpeg', '.webp', '.gif'],
+      'video/*': ['.mp4', '.webm', '.mov', '.ogg']
+    }
   });
 
   const handleRemoveFile = () => {
@@ -200,8 +217,21 @@ const CreatePost = () => {
         <div className="space-y-6">
           {!preview && !validEmbedUrl ? (
             <div className="flex flex-col gap-6">
+              <input
+                type="file"
+                ref={galleryInputRef}
+                accept="image/*,video/*"
+                className="hidden"
+                onChange={(e) => {
+                  const selected = e.target.files?.[0];
+                  if (selected) {
+                    onDrop([selected]);
+                  }
+                }}
+              />
               <div
                 {...getRootProps()}
+                onClick={openGallery}
                 className={`group relative flex flex-col items-center justify-center w-full min-h-[300px] border-2 border-dashed rounded-3xl cursor-pointer transition-all duration-500 overflow-hidden
                   ${isDragActive ? 'border-[#1877F2] bg-[#1877F2]/5 scale-105' : 'border-gray-300 dark:border-gray-700 hover:border-[#1877F2] dark:hover:border-[#1877F2] hover:bg-gray-50 dark:hover:bg-gray-800'}`}
               >
@@ -218,8 +248,12 @@ const CreatePost = () => {
                   <p className="text-sm text-gray-500 dark:text-gray-400 mb-6 max-w-[280px]">
                     Your videos will be private until you publish them. Supports MP4, WebM, JPG, PNG & more.
                   </p>
-                  <button type="button" className="bg-[#1877F2] text-white px-8 py-2.5 rounded-full font-bold shadow-md shadow-[#1877F2]/20 hover:bg-[#166fe5] hover:scale-105 transition-all">
-                    Select Files
+                  <button 
+                    type="button" 
+                    onClick={openGallery}
+                    className="bg-[#1877F2] text-white px-8 py-2.5 rounded-full font-bold shadow-md shadow-[#1877F2]/20 hover:bg-[#166fe5] hover:scale-105 transition-all cursor-pointer"
+                  >
+                    Select from Gallery / Files
                   </button>
                 </div>
               </div>

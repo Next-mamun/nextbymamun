@@ -110,6 +110,8 @@ export const CallProvider = ({ children }: { children: ReactNode }) => {
           }
         }
       }
+    }, (error) => {
+      console.warn("active_calls onSnapshot error:", error);
     });
 
     return () => unsub();

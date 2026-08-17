@@ -62,6 +62,13 @@ async function startServer() {
       return res.status(400).json({ error: 'FCM token is required' });
     }
 
+    const formattedData: Record<string, string> = {};
+    if (data && typeof data === 'object') {
+      for (const [k, v] of Object.entries(data)) {
+        formattedData[k] = String(v ?? '');
+      }
+    }
+
     try {
       const response = await admin.messaging().send({
         token,
@@ -69,7 +76,7 @@ async function startServer() {
           title,
           body,
         },
-        data: data || {},
+        data: formattedData,
         android: {
           priority: 'high',
           notification: {
