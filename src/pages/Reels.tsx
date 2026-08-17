@@ -15,6 +15,9 @@ import { redis } from '@/lib/redis';
 import { useUpload } from '@/contexts/UploadContext';
 import ConfirmDialog from '@/components/ConfirmDialog';
 import { toast } from 'sonner';
+import { useLiveQuery } from 'dexie-react-hooks';
+import { localDB } from '@/lib/db';
+import { fetchAndCacheVideos, incrementRefreshCount, silentlyRemoveCorruptedVideo, getRefreshCount } from '@/services/videoCacheService';
 
 const REELS_PER_PAGE = 5;
 
@@ -195,10 +198,25 @@ const Reels: React.FC = () => {
     staleTime: 1000 * 60 * 5, // 5 minutes
   });
 
+  const cachedVideosList = useLiveQuery(async () => {
+    return await localDB.cachedVideos.toArray();
+  }, []) || [];
+
+  useEffect(() => {
+    fetchAndCacheVideos(false);
+  }, []);
+
   const [reelsRandomSeed] = useState(() => globalReelsSeed);
 
   const reels = useMemo(() => {
-    let flatReels: any[] = Array.from(new Map((reelsData?.pages.flatMap(p => p.data) || []).map(r => [r.id, r])).values());
+    let rawList: any[] = [];
+    if (cachedVideosList.length > 0) {
+      rawList = cachedVideosList;
+    } else {
+      rawList = reelsData?.pages.flatMap(p => p.data) || [];
+    }
+
+    let flatReels: any[] = Array.from(new Map(rawList.map(r => [r.id, r])).values());
 
     if (!showAllReels) {
       flatReels = flatReels.filter(r => r.source_type === 'local' || (r.media_url && !r.media_url.includes('youtube.com') && !r.media_url.includes('facebook.com') && !r.media_url.includes('/embed/')));
@@ -231,7 +249,7 @@ const Reels: React.FC = () => {
     }
     
     return flatReels;
-  }, [reelsData?.pages, reelsRandomSeed, sharedReel]);
+  }, [cachedVideosList, reelsData?.pages, reelsRandomSeed, sharedReel, showAllReels]);
 
   useEffect(() => {
     if (reels.length > 0 && !activeReelId) {
@@ -738,6 +756,9 @@ const ReelItem: React.FC<{ reel: any, isActive: boolean, isNeighbor: boolean, on
               loop 
               muted={isMuted}
               playsInline
+              onError={() => {
+                silentlyRemoveCorruptedVideo(reel.id);
+              }}
               onPointerDown={handlePointerDown}
               onPointerUp={handlePointerUp}
               onPointerLeave={handlePointerUp}

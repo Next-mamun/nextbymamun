@@ -15,6 +15,8 @@ export interface Message {
   receiver: string;
   text: string;
   media?: string;
+  mediaType?: 'image' | 'video' | 'audio';
+  isViewOnce?: boolean;
   status: 'PENDING_P2P' | 'SENT' | 'DELIVERED' | 'READ';
   timestamp: number;
 }
@@ -25,17 +27,34 @@ export interface Profile {
   avatarBase64: string;
 }
 
+export interface CachedVideo {
+  id: string;
+  source_type?: string;
+  media_url: string;
+  caption?: string;
+  user_id?: string;
+  created_at?: any;
+  profiles?: any;
+  comments?: any[];
+  likes?: any[];
+  likes_count?: number;
+  comments_count?: number;
+  cachedAt: number;
+}
+
 export class NextMediaDB extends Dexie {
   friends!: Table<Friend, string>;
   messages!: Table<Message, string>;
   profiles!: Table<Profile, string>;
+  cachedVideos!: Table<CachedVideo, string>;
 
   constructor() {
     super('NextMediaDB');
-    this.version(2).stores({
+    this.version(3).stores({
       friends: 'id, fullName, peerId, lastSeen',
       messages: 'id, conversationId, sender, receiver, status, timestamp',
-      profiles: 'id, name'
+      profiles: 'id, name',
+      cachedVideos: 'id, cachedAt, user_id'
     });
   }
 }

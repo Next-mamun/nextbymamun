@@ -44,6 +44,7 @@ const Friends: React.FC = () => {
     queryKey: ['friends', searchQuery],
     queryFn: async () => {
       if (!currentUser?.id) return { requests: [], friends: [], discovery: [], blockedUsers: [] };
+      const cacheKey = `friends_${currentUser.id}_${searchQuery}`;
 
       // Try to read from IndexedDB as a fallback or cache
       let cachedResult = null;

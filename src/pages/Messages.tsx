@@ -125,7 +125,7 @@ const CustomAudioPlayer = ({ src, isSender }: { src: string; isSender?: boolean 
 const Messages: React.FC = () => {
   const { currentUser } = useAuth();
   const { addUpload } = useUpload();
-  const { sendMessage, onlineFriends, typingUsers, sendTypingStatus } = useP2P();
+  const { sendMessage, sendMediaMessage, onlineFriends, typingUsers, sendTypingStatus } = useP2P();
   const navigate = useNavigate();
   const location = useLocation();
   const queryClient = useQueryClient();
@@ -392,10 +392,44 @@ const Messages: React.FC = () => {
 
   useEffect(() => {
     if (location.state?.userId) {
+      const targetUserId = location.state.userId;
       const fetchUser = async () => {
-        const docSnap = await getDoc(doc(db, 'profiles', location.state.userId));
-        if (docSnap.exists()) {
-           setSelectedChat({ id: docSnap.id, ...docSnap.data() });
+        // 1. Immediately check localDB first
+        try {
+          const [localFriend, localProf] = await Promise.all([
+            localDB.friends.get(targetUserId),
+            localDB.profiles.get(targetUserId)
+          ]);
+          if (localFriend || localProf) {
+            setSelectedChat({
+              id: targetUserId,
+              display_name: localFriend?.fullName || localProf?.name || 'User',
+              username: targetUserId,
+              avatar_url: localFriend?.avatarBlob || localProf?.avatarBase64 || `https://api.dicebear.com/7.x/avataaars/svg?seed=${targetUserId}`,
+            });
+          }
+        } catch(e) {}
+
+        // 2. Try Firestore if available
+        try {
+          const docSnap = await getDoc(doc(db, 'profiles', targetUserId));
+          if (docSnap.exists()) {
+            const data = docSnap.data();
+            setSelectedChat({ id: docSnap.id, ...data });
+            localDB.profiles.put({
+              id: docSnap.id,
+              name: data.display_name || data.username || 'User',
+              avatarBase64: data.avatar_url || ''
+            }).catch(() => {});
+          }
+        } catch(e) {
+          // If firestore fails and we still don't have selectedChat, fallback gracefully
+          setSelectedChat((prev: any) => prev || {
+            id: targetUserId,
+            display_name: `User ${targetUserId.slice(0, 5)}`,
+            username: targetUserId,
+            avatar_url: `https://api.dicebear.com/7.x/avataaars/svg?seed=${targetUserId}`
+          });
         }
       };
       fetchUser();
@@ -407,51 +441,119 @@ const Messages: React.FC = () => {
   const contacts = useLiveQuery(async () => {
     if (!currentUser) return [];
     
-    const allFriends = await localDB.friends.toArray();
-    const allMessages = await localDB.messages.toArray();
-    
-    const partnerMap = new Map();
-    allMessages.forEach(m => {
-      const partnerId = m.sender === currentUser.id ? m.receiver : m.sender;
-      const t = m.timestamp || 0;
-      if (!partnerMap.has(partnerId) || partnerMap.get(partnerId).timestamp < t) {
-        partnerMap.set(partnerId, m);
-      }
-    });
-    
-    const contactsWithMessages = Array.from(partnerMap.keys()).map(partnerId => {
-      const lastMsg = partnerMap.get(partnerId);
-      const f = allFriends.find(fr => fr.id === partnerId) || { id: partnerId, fullName: 'Unknown User', avatarBlob: '' };
-      return {
-        id: f.id,
-        display_name: f.fullName,
-        username: f.id,
-        avatar_url: f.avatarBlob,
-        lastMessage: lastMsg || null,
-        lastMessageTime: lastMsg ? new Date(lastMsg.timestamp) : null,
-        isBlocked: false,
-        friendshipStatus: 'accepted'
-      };
-    });
-    
-    const deletedIds = JSON.parse(localStorage.getItem('deleted_chats_' + currentUser.id) || '[]');
-    const filteredForDeletion = contactsWithMessages.filter(c => !deletedIds.includes(c.id));
+    try {
+      const [allFriends, allMessages, allProfiles] = await Promise.all([
+        localDB.friends.toArray(),
+        localDB.messages.toArray(),
+        localDB.profiles.toArray()
+      ]);
+      
+      const profileMap = new Map<string, { id: string, name: string, avatar: string }>();
+      allProfiles.forEach(p => {
+        if (p.id) profileMap.set(p.id, { id: p.id, name: p.name || 'User', avatar: p.avatarBase64 || '' });
+      });
+      allFriends.forEach(f => {
+        if (f.id) profileMap.set(f.id, { id: f.id, name: f.fullName || 'User', avatar: f.avatarBlob || '' });
+      });
 
-    return filteredForDeletion.sort((a, b) => {
-      const timeA = a.lastMessageTime ? a.lastMessageTime.getTime() : 0;
-      const timeB = b.lastMessageTime ? b.lastMessageTime.getTime() : 0;
-      return timeB - timeA;
-    });
-  }, [currentUser]) || [];
+      const partnerMap = new Map<string, any>();
+      allMessages.forEach(m => {
+        const myId = currentUser.id;
+        const myUser = currentUser.username;
+        const partnerId = (m.sender === myId || m.sender === myUser) 
+          ? m.receiver 
+          : m.sender;
+        if (!partnerId || partnerId === myId || partnerId === myUser) return;
+        
+        const t = m.timestamp || 0;
+        if (!partnerMap.has(partnerId) || (partnerMap.get(partnerId).timestamp || 0) < t) {
+          partnerMap.set(partnerId, m);
+        }
+      });
+
+      const allPartnerIds = new Set<string>();
+      partnerMap.forEach((_, pid) => allPartnerIds.add(pid));
+      allFriends.forEach(f => {
+        if (f.id && f.id !== currentUser.id && f.id !== currentUser.username) allPartnerIds.add(f.id);
+      });
+      allProfiles.forEach(p => {
+        if (p.id && p.id !== currentUser.id && p.id !== currentUser.username) allPartnerIds.add(p.id);
+      });
+
+      const deletedIds = JSON.parse(localStorage.getItem('deleted_chats_' + currentUser.id) || '[]');
+
+      const contactList = Array.from(allPartnerIds)
+        .filter(id => !deletedIds.includes(id))
+        .map(partnerId => {
+          const lastMsg = partnerMap.get(partnerId);
+          const pInfo = profileMap.get(partnerId);
+          
+          const displayName = pInfo?.name || (partnerId.length > 8 ? `User ${partnerId.slice(0, 5)}` : partnerId);
+          const avatarUrl = pInfo?.avatar || `https://api.dicebear.com/7.x/avataaars/svg?seed=${partnerId}`;
+          
+          const hasMessages = !!lastMsg;
+          return {
+            id: partnerId,
+            display_name: displayName,
+            username: partnerId,
+            avatar_url: avatarUrl,
+            lastMessage: lastMsg ? {
+              id: lastMsg.id,
+              content: lastMsg.text,
+              sender_id: lastMsg.sender,
+              receiver_id: lastMsg.receiver,
+              created_at: new Date(lastMsg.timestamp),
+              media_url: lastMsg.media || '',
+              media_type: lastMsg.mediaType || undefined,
+              is_read: lastMsg.status === 'READ',
+              status: lastMsg.status
+            } : null,
+            lastMessageTime: lastMsg ? new Date(lastMsg.timestamp) : null,
+            isNewFriend: !hasMessages,
+            isBlocked: false,
+            friendshipStatus: 'accepted'
+          };
+        });
+
+      return contactList.sort((a, b) => {
+        const timeA = a.lastMessageTime ? a.lastMessageTime.getTime() : 0;
+        const timeB = b.lastMessageTime ? b.lastMessageTime.getTime() : 0;
+        if (timeA !== timeB) return timeB - timeA;
+        return a.display_name.localeCompare(b.display_name);
+      });
+    } catch(e) {
+      console.warn("Error querying contacts from localDB:", e);
+      return [];
+    }
+  }, [currentUser?.id, currentUser?.username]) || [];
 
   const rawLiveMessages = useLiveQuery(async () => {
     if (!selectedChat || !currentUser) return [];
-    const msgs = await localDB.messages
-      .where('conversationId')
-      .equals(selectedChat.id)
-      .toArray();
-    return msgs.sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0));
-  }, [selectedChat?.id, currentUser?.id]);
+    try {
+      const targetId = selectedChat.id;
+      const targetUser = selectedChat.username;
+      const myId = currentUser.id;
+      const myUser = currentUser.username;
+      
+      const allMsgs = await localDB.messages.toArray();
+      const relevant = allMsgs.filter(m => {
+        if (m.conversationId === targetId || m.conversationId === targetUser) return true;
+        const isFromMe = m.sender === myId || m.sender === myUser;
+        const isToTarget = m.receiver === targetId || m.receiver === targetUser;
+        if (isFromMe && isToTarget) return true;
+        
+        const isFromTarget = m.sender === targetId || m.sender === targetUser;
+        const isToMe = m.receiver === myId || m.receiver === myUser;
+        if (isFromTarget && isToMe) return true;
+        
+        return false;
+      });
+      return relevant.sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0));
+    } catch(e) {
+      console.warn("Error querying messages from localDB:", e);
+      return [];
+    }
+  }, [selectedChat?.id, selectedChat?.username, currentUser?.id, currentUser?.username]);
 
   const messages = React.useMemo(() => {
     if (!rawLiveMessages) return [];
@@ -460,6 +562,9 @@ const Messages: React.FC = () => {
       sender_id: m.sender,
       receiver_id: m.receiver,
       content: m.text,
+      media_url: m.media || '',
+      media_type: m.mediaType || undefined,
+      is_view_once: m.isViewOnce,
       is_read: m.status === 'READ',
       created_at: new Date(m.timestamp),
       status: m.status
@@ -637,43 +742,12 @@ const Messages: React.FC = () => {
     if (!selectedMedia || !selectedChat) return;
     setShowMediaEditor(false);
     
-    const payloadExtra = { JSON_PAYLOAD: true, text: '', is_view_once: isViewOnce, parent_message_id: replyingTo?.id || null };
-    const newMessage: any = {
-      sender_id: currentUser!.id,
-      receiver_id: selectedChat.id,
-      content: JSON.stringify(payloadExtra),
-      media_url: '', // Will be updated by UploadContext
-      media_type: selectedMedia.type,
-      created_at: serverTimestamp(),
-      local_created_at: new Date().toISOString()
-    };
+    const mediaType = selectedMedia.type as ('image' | 'video');
+    const mediaUrl = processedUrl;
     
-    const uploadData = selectedMedia.type === 'video' && selectedMedia.file ? selectedMedia.file : processedUrl;
-    
-    queryClient.setQueryData(['contacts'], (old: any) => {
-      if (!old) return old;
-      const newContacts = [...old];
-      const chatIdx = newContacts.findIndex((c: any) => c.id === selectedChat.id);
-      if (chatIdx > -1) {
-        const chat = newContacts[chatIdx];
-        chat.lastMessage = { ...newMessage, created_at: new Date() };
-        chat.lastMessageTime = new Date();
-        newContacts.splice(chatIdx, 1);
-        newContacts.unshift(chat);
-      }
-      return newContacts;
-    });
-
-    addUpload(uploadData, 'message', {
-      payload: newMessage,
-      receiver_id: selectedChat.id,
-      sender_id: currentUser!.id,
-      onSuccess: async () => {
-        queryClient.invalidateQueries({ queryKey: ['messages', selectedChat.id] });
-        queryClient.invalidateQueries({ queryKey: ['contacts'] });
-        queryClient.invalidateQueries({ queryKey: ['notifications', selectedChat.id] });
-      }
-    });
+    if (sendMediaMessage) {
+      await sendMediaMessage(selectedChat.id, mediaUrl, mediaType, '', isViewOnce);
+    }
 
     setSelectedMedia(null);
     setReplyingTo(null);
@@ -765,61 +839,21 @@ const Messages: React.FC = () => {
     setIsVoiceViewOnce(false);
   };
 
-  const handleSendAudio = () => {
+  const handleSendAudio = async () => {
     if (!recordedAudio || !selectedChat) return;
 
-    const uploadData = recordedAudio.file;
-    const payloadExtra = { JSON_PAYLOAD: true, text: '', is_view_once: isVoiceViewOnce, parent_message_id: replyingTo?.id || null };
-    const newMessage: any = {
-       sender_id: currentUser!.id,
-       receiver_id: selectedChat.id,
-       content: JSON.stringify(payloadExtra),
-       media_url: '',
-       media_type: 'audio',
-       created_at: serverTimestamp(),
-      local_created_at: new Date().toISOString()
-    };
-    
-    // Add optimistic UI to messages immediately
-    const tempId = `temp-${Date.now()}`;
-    queryClient.setQueryData(['messages', selectedChat.id], (old: any) => {
-      const optimisticMsg = {
-        ...newMessage,
-        id: tempId,
-        created_at: new Date().toISOString(),
-        is_read: false,
-        content: '',
-        media_url: recordedAudio.url,
-        is_view_once: payloadExtra.is_view_once,
-        parent_message_id: payloadExtra.parent_message_id
-      };
-      return [...(old || []), optimisticMsg];
-    });
-
-    queryClient.setQueryData(['contacts'], (old: any) => {
-      if (!old) return old;
-      const newContacts = [...old];
-      const chatIdx = newContacts.findIndex((c: any) => c.id === selectedChat.id);
-      if (chatIdx > -1) {
-        const chat = newContacts[chatIdx];
-        chat.lastMessage = { ...newMessage, created_at: new Date() };
-        chat.lastMessageTime = new Date();
-        newContacts.splice(chatIdx, 1);
-        newContacts.unshift(chat);
-      }
-      return newContacts;
-    });
-
-    addUpload(uploadData, 'message', {
-        payload: newMessage,
-        receiver_id: selectedChat.id,
-        sender_id: currentUser!.id,
-        onSuccess: async () => {
-            queryClient.invalidateQueries({ queryKey: ['messages', selectedChat.id] });
-            queryClient.invalidateQueries({ queryKey: ['contacts'] });
-            queryClient.invalidateQueries({ queryKey: ['notifications', selectedChat.id] });
+    try {
+      const reader = new FileReader();
+      reader.onloadend = async () => {
+        const base64Audio = reader.result as string;
+        if (sendMediaMessage) {
+          await sendMediaMessage(selectedChat.id, base64Audio, 'audio', '', isVoiceViewOnce);
         }
-    });
+      };
+      reader.readAsDataURL(recordedAudio.file);
+    } catch (e) {
+      console.warn("Error processing audio for P2P sending:", e);
+    }
     
     setReplyingTo(null);
     setRecordedAudio(null);
@@ -962,17 +996,38 @@ const Messages: React.FC = () => {
     };
   }, [selectedChat]);
 
+  const isSendingRef = useRef(false);
+
   const handleSendMessage = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!messageText.trim() || !selectedChat || isBlocked) return;
+    const textToSend = messageText.trim();
+    if (!textToSend || !selectedChat || isBlocked || isSendingRef.current) return;
     
-    // Instead of Firebase, use P2P engine
-    await sendMessage(selectedChat.id, messageText);
-    
-    // The useLiveQuery for messages will auto-update the UI!
+    // Lock against rapid double-clicks
+    isSendingRef.current = true;
+
+    // 1. Immediately clear input, emojis, replies & draft for instant 0ms responsiveness
     setMessageText('');
     setShowEmojiPicker(false);
     setReplyingTo(null);
+
+    if (currentUser && selectedChat) {
+      localStorage.removeItem(`message_draft_${currentUser.id}_${selectedChat.id}`);
+      if (isTyping) {
+        setIsTyping(false);
+        setDoc(doc(db, 'typing_status', `${currentUser.id}_${selectedChat.id}`), { is_typing: false, timestamp: serverTimestamp() }, { merge: true }).catch(() => {});
+      }
+    }
+
+    try {
+      await sendMessage(selectedChat.id, textToSend);
+    } catch (err) {
+      console.error("Error sending message:", err);
+    } finally {
+      setTimeout(() => {
+        isSendingRef.current = false;
+      }, 50);
+    }
   };
 
   const triggerDeleteMessage = (id: string) => {
@@ -1073,7 +1128,7 @@ const Messages: React.FC = () => {
               ))}
             </div>
           ) : (showNewFriends ? filteredContacts.filter((c: any) => c.isNewFriend) : filteredContacts.filter((c: any) => !c.isNewFriend)).map((c: any) => {
-            const isOnline = onlineUsers.has(c.id);
+            const isOnline = onlineFriends.has(c.id) || onlineUsers.has(c.id);
             const lastMsg = c.lastMessage;
             
             return (
@@ -1088,7 +1143,11 @@ const Messages: React.FC = () => {
                 className={`flex items-center gap-3 p-3 cursor-pointer select-none rounded-2xl transition-all ${selectedChat?.id === c.id ? 'bg-[#e7f3ff] dark:bg-gray-800 text-[#1877F2] dark:text-blue-400 shadow-sm' : 'hover:bg-white dark:hover:bg-gray-900 text-gray-700 dark:text-gray-300 hover:shadow-sm'}`}
               >
                 <div className="relative flex-shrink-0">
-                  <img src={c.avatar_url} className="w-14 h-14 rounded-full object-cover border-2 border-white dark:border-gray-700 shadow-sm" />
+                  <img 
+                    src={c.avatar_url || `https://api.dicebear.com/7.x/avataaars/svg?seed=${c.username || c.id}`} 
+                    onError={(e: any) => { e.target.src = `https://api.dicebear.com/7.x/avataaars/svg?seed=${c.username || c.id}`; }}
+                    className="w-14 h-14 rounded-full object-cover border-2 border-white dark:border-gray-700 shadow-sm" 
+                  />
                   {isOnline && <div className="absolute bottom-0.5 right-0.5 w-4 h-4 bg-green-500 border-2 border-white dark:border-black rounded-full"></div>}
                 </div>
                 <div className="flex-1 min-w-0">
@@ -1112,10 +1171,10 @@ const Messages: React.FC = () => {
                         </span>
                       ) : (
                         <>
-                          {c.isNewFriend ? <span className="text-blue-500 italic">Say hi to your new friend!</span> : (
+                          {c.isNewFriend ? <span className="text-blue-500 italic">Say hi to your friend!</span> : (
                             <>
-                              {lastMsg?.sender_id === currentUser?.id ? 'You: ' : ''}
-                              {lastMsg?.media_url ? (lastMsg.media_type === 'video' ? '🎥 Video' : '📷 Photo') : lastMsg?.content}
+                              {(lastMsg?.sender_id === currentUser?.id || lastMsg?.sender_id === currentUser?.username) ? 'You: ' : ''}
+                              {lastMsg?.media_url ? (lastMsg.media_type === 'audio' ? '🎤 Voice message' : (lastMsg.media_type === 'video' ? '🎥 Video' : '📷 Photo')) : (lastMsg?.content || 'Sent a message')}
                             </>
                           )}
                         </>
@@ -1167,14 +1226,18 @@ const Messages: React.FC = () => {
                   <div className="flex items-center gap-3">
                     <button onClick={handleBackToSidebar} className="md:hidden p-2 rounded-full hover:bg-gray-100 dark:hover:bg-gray-800"><ArrowLeft size={20} className="text-gray-600 dark:text-gray-300" /></button>
                     <div className="flex items-center gap-3 cursor-pointer hover:opacity-80 transition-opacity" onClick={() => navigate(`/profile/${selectedChat.username}`)}>
-                      <img src={selectedChat.avatar_url} className="w-10 h-10 rounded-full object-cover shadow-sm border border-gray-100 dark:border-gray-700" />
+                      <img 
+                        src={selectedChat.avatar_url || `https://api.dicebear.com/7.x/avataaars/svg?seed=${selectedChat.username || selectedChat.id}`} 
+                        onError={(e: any) => { e.target.src = `https://api.dicebear.com/7.x/avataaars/svg?seed=${selectedChat.username || selectedChat.id}`; }}
+                        className="w-10 h-10 rounded-full object-cover shadow-sm border border-gray-100 dark:border-gray-700" 
+                      />
                       <div>
                         <p className="font-bold leading-none text-gray-900 dark:text-white flex items-center gap-1">
                           {selectedChat.display_name}
                           {selectedChat.is_verified && <VerifiedBadge />}
                         </p>
-                        <p className={`text-[10px] mt-1 font-black tracking-widest ${onlineUsers.has(selectedChat.id) ? 'text-green-500' : 'text-gray-400'}`}>
-                          {onlineUsers.has(selectedChat.id) ? 'REALTIME ACTIVE' : 'OFFLINE'}
+                        <p className={`text-[10px] mt-1 font-black tracking-widest ${onlineFriends.has(selectedChat.id) || onlineUsers.has(selectedChat.id) ? 'text-green-500' : 'text-gray-400'}`}>
+                          {onlineFriends.has(selectedChat.id) || onlineUsers.has(selectedChat.id) ? 'REALTIME ACTIVE' : 'OFFLINE'}
                         </p>
                       </div>
                     </div>
@@ -1259,7 +1322,11 @@ const Messages: React.FC = () => {
               ) : (
                 <>
                   <div className="flex flex-col items-center my-10 animate-in fade-in zoom-in duration-300 cursor-pointer" onClick={() => navigate(`/profile/${selectedChat.username}`)}>
-                    <img src={selectedChat.avatar_url} className="w-24 h-24 rounded-full mb-3 shadow-2xl border-4 border-white dark:border-black object-cover hover:scale-105 transition-transform" />
+                    <img 
+                      src={selectedChat.avatar_url || `https://api.dicebear.com/7.x/avataaars/svg?seed=${selectedChat.username || selectedChat.id}`} 
+                      onError={(e: any) => { e.target.src = `https://api.dicebear.com/7.x/avataaars/svg?seed=${selectedChat.username || selectedChat.id}`; }}
+                      className="w-24 h-24 rounded-full mb-3 shadow-2xl border-4 border-white dark:border-black object-cover hover:scale-105 transition-transform" 
+                    />
                     <h2 className="text-xl font-black text-gray-900 dark:text-white hover:underline flex items-center gap-2">
                       {selectedChat.display_name}
                       {selectedChat.is_verified && <VerifiedBadge size={20} />}
@@ -1334,17 +1401,19 @@ const Messages: React.FC = () => {
                              {formatTime(msg.created_at)}
                           </p>
                           {msg.sender_id === currentUser?.id && (
-                            msg.id?.toString().startsWith('temp-') ? (
-                              <Check size={12} className="opacity-50 animate-pulse" />
+                            msg.status === 'PENDING_P2P' ? (
+                              <span title="Waiting to connect" className="text-[10px] opacity-70">⏳</span>
+                            ) : msg.status === 'SENT' ? (
+                              <Check size={12} className="opacity-70 text-blue-100" />
                             ) : (
-                              <CheckCheck size={12} className={msg.is_read ? "text-red-500" : "text-blue-200 opacity-60"} />
+                              <CheckCheck size={12} className={msg.status === 'READ' ? "text-red-500" : "text-blue-200 opacity-90"} />
                             )
                           )}
                         </div>
                       </div>
                     </motion.div>
                   )})}
-                  {otherUserTyping && (
+                  {(otherUserTyping || typingUsers.has(selectedChat?.id)) && (
                     <motion.div 
                       initial={{ opacity: 0, y: 10 }} 
                       animate={{ opacity: 1, y: 0 }} 

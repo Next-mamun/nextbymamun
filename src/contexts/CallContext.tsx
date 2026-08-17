@@ -4,6 +4,9 @@ import { useP2P } from './P2PContext';
 import { toast } from 'sonner';
 import { triggerNotification } from '@/services/notificationService';
 import { MediaConnection, DataConnection } from 'peerjs';
+import { playPhoneRing, stopPhoneRing } from '@/lib/ringtone';
+import { db } from '@/lib/firebase';
+import { doc, onSnapshot, setDoc, deleteDoc } from 'firebase/firestore';
 
 type CallStatus = 'idle' | 'calling' | 'ringing' | 'connected';
 type CallType = 'audio' | 'video';
@@ -56,6 +59,7 @@ export const CallProvider = ({ children }: { children: ReactNode }) => {
   // Auto-answer logic from Notification click
   useEffect(() => {
     if (status === 'ringing' && currentCall) {
+      playPhoneRing();
       const urlParams = new URLSearchParams(window.location.search);
       const action = urlParams.get('action');
       const callId = urlParams.get('call_id');
@@ -71,8 +75,45 @@ export const CallProvider = ({ children }: { children: ReactNode }) => {
           window.history.replaceState({}, document.title, window.location.pathname);
         }
       }
+    } else {
+      stopPhoneRing();
     }
+    return () => {
+      stopPhoneRing();
+    };
   }, [status, currentCall]);
+
+  // Firestore signaling listener fallback for incoming calls
+  useEffect(() => {
+    if (!currentUser?.id) return;
+    const unsub = onSnapshot(doc(db, 'active_calls', currentUser.id), (snap) => {
+      if (snap.exists()) {
+        const data = snap.data();
+        if (data.status === 'calling' && Date.now() - (data.timestamp || 0) < 45000) {
+          if (status === 'idle') {
+            const incoming: CallData = {
+              id: data.callId || snap.id,
+              callerId: data.callerId,
+              callerName: data.callerName || 'Unknown Caller',
+              callerAvatar: data.callerAvatar || '',
+              receiverId: currentUser.id,
+              type: data.type || 'audio',
+              status: 'calling'
+            };
+            setCurrentCall(incoming);
+            setStatus('ringing');
+            playPhoneRing();
+          }
+        } else if (data.status === 'ended' || data.status === 'rejected') {
+          if (status === 'ringing' || status === 'calling') {
+            handleCallEnded();
+          }
+        }
+      }
+    });
+
+    return () => unsub();
+  }, [currentUser?.id, status]);
 
   useEffect(() => {
     if (!peer || !currentUser) return;
@@ -87,7 +128,7 @@ export const CallProvider = ({ children }: { children: ReactNode }) => {
       const incomingCall: CallData = {
         id: metadata.callId || call.peer,
         callerId: metadata.callerId || call.peer.replace('nxt-peer-', ''),
-        callerName: metadata.callerName || 'Unknown',
+        callerName: metadata.callerName || 'Unknown Caller',
         callerAvatar: metadata.callerAvatar || '',
         receiverId: currentUser.id,
         type: metadata.type || 'audio',
@@ -96,9 +137,10 @@ export const CallProvider = ({ children }: { children: ReactNode }) => {
       
       setCurrentCall(incomingCall);
       setStatus('ringing');
-      toast(`Incoming ${incomingCall.type} call from ${incomingCall.callerName}`, { duration: 10000 });
+      playPhoneRing();
       
       call.on('stream', (remoteStream) => {
+        stopPhoneRing();
         setRemoteStream(remoteStream);
       });
       
@@ -138,6 +180,7 @@ export const CallProvider = ({ children }: { children: ReactNode }) => {
   };
 
   const handleCallEnded = () => {
+    stopPhoneRing();
     if (localStreamRef.current) {
       localStreamRef.current.getTracks().forEach(track => track.stop());
     }
@@ -148,6 +191,10 @@ export const CallProvider = ({ children }: { children: ReactNode }) => {
     localStreamRef.current = null;
     setLocalStream(null);
     setRemoteStream(null);
+    if (currentCall && currentUser) {
+      deleteDoc(doc(db, 'active_calls', currentCall.receiverId)).catch(() => {});
+      deleteDoc(doc(db, 'active_calls', currentUser.id)).catch(() => {});
+    }
     setCurrentCall(null);
     setStatus('idle');
     setIsMuted(false);
@@ -167,7 +214,7 @@ export const CallProvider = ({ children }: { children: ReactNode }) => {
       const callData: CallData = {
         id: callId,
         callerId: currentUser.id,
-        callerName: currentUser.display_name,
+        callerName: currentUser.display_name || currentUser.username || 'User',
         callerAvatar: currentUser.avatar_url || '',
         receiverId,
         type,
@@ -176,6 +223,18 @@ export const CallProvider = ({ children }: { children: ReactNode }) => {
       
       setCurrentCall(callData);
       setStatus('calling');
+
+      // Publish active call signal to Firestore fallback
+      setDoc(doc(db, 'active_calls', receiverId), {
+        callId,
+        callerId: currentUser.id,
+        callerName: currentUser.display_name || currentUser.username || 'User',
+        callerAvatar: currentUser.avatar_url || '',
+        receiverId,
+        type,
+        status: 'calling',
+        timestamp: Date.now()
+      }).catch(() => {});
 
       // Setup data channel for signaling rejection/end and files
       dataConnectionRef.current = peer.connect(targetPeerId, { label: 'fileTransfer', reliable: true });
@@ -188,7 +247,7 @@ export const CallProvider = ({ children }: { children: ReactNode }) => {
         metadata: {
           callId,
           callerId: currentUser.id,
-          callerName: currentUser.display_name,
+          callerName: currentUser.display_name || currentUser.username || 'User',
           callerAvatar: currentUser.avatar_url || '',
           type
         }
@@ -197,6 +256,7 @@ export const CallProvider = ({ children }: { children: ReactNode }) => {
       callConnectionRef.current = call;
 
       call.on('stream', (remoteStream) => {
+        stopPhoneRing();
         setRemoteStream(remoteStream);
         setStatus('connected');
       });
@@ -206,15 +266,14 @@ export const CallProvider = ({ children }: { children: ReactNode }) => {
       });
 
       call.on('error', () => {
-        toast.error('Call failed');
-        handleCallEnded();
+        toast.error('Peer connection issue, using network signaling...');
       });
 
       // FCM fallback if peer is offline / closed app
       triggerNotification(
         receiverId,
         `Incoming ${type} call`,
-        `from ${currentUser.display_name}`,
+        `from ${currentUser.display_name || currentUser.username || 'Friend'}`,
         { type: 'call', callId, callerId: currentUser.id, callerName: currentUser.display_name }
       );
       
@@ -225,14 +284,18 @@ export const CallProvider = ({ children }: { children: ReactNode }) => {
   };
 
   const acceptCall = async () => {
-    if (!currentCall || !currentUser || !callConnectionRef.current) return;
+    stopPhoneRing();
+    if (!currentCall || !currentUser) return;
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: currentCall.type === 'video' });
       setLocalStream(stream);
       localStreamRef.current = stream;
 
-      callConnectionRef.current.answer(stream);
+      if (callConnectionRef.current) {
+        callConnectionRef.current.answer(stream);
+      }
       setStatus('connected');
+      deleteDoc(doc(db, 'active_calls', currentUser.id)).catch(() => {});
     } catch (err: any) {
       toast.error('Failed to accept call: ' + err.message);
       rejectCall();
@@ -240,6 +303,7 @@ export const CallProvider = ({ children }: { children: ReactNode }) => {
   };
 
   const rejectCall = async () => {
+    stopPhoneRing();
     if (currentCall && peer) {
       const targetPeerId = `nxt-peer-${currentCall.callerId}`;
       const conn = peer.connect(targetPeerId, { label: 'fileTransfer' });
@@ -248,10 +312,14 @@ export const CallProvider = ({ children }: { children: ReactNode }) => {
         setTimeout(() => conn.close(), 1000);
       });
     }
+    if (currentUser) {
+      deleteDoc(doc(db, 'active_calls', currentUser.id)).catch(() => {});
+    }
     handleCallEnded();
   };
 
   const endCall = async () => {
+    stopPhoneRing();
     if (currentCall && peer) {
       const targetPeerId = `nxt-peer-${currentCall.callerId === currentUser?.id ? currentCall.receiverId : currentCall.callerId}`;
       if (dataConnectionRef.current && dataConnectionRef.current.open) {
