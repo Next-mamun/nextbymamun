@@ -62,13 +62,6 @@ async function startServer() {
       return res.status(400).json({ error: 'FCM token is required' });
     }
 
-    const formattedData: Record<string, string> = {};
-    if (data && typeof data === 'object') {
-      for (const [k, v] of Object.entries(data)) {
-        formattedData[k] = String(v ?? '');
-      }
-    }
-
     try {
       const response = await admin.messaging().send({
         token,
@@ -76,7 +69,7 @@ async function startServer() {
           title,
           body,
         },
-        data: formattedData,
+        data: data || {},
         android: {
           priority: 'high',
           notification: {
@@ -110,7 +103,7 @@ async function startServer() {
   } else {
     const distPath = path.join(process.cwd(), 'dist');
     app.use(express.static(distPath));
-    app.get('*all', (req, res) => {
+    app.get('*', (req, res) => {
       res.sendFile(path.join(distPath, 'index.html'));
     });
   }
